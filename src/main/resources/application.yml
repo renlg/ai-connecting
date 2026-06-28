@@ -1,0 +1,37 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ai-connecting
+  datasource:
+    url: jdbc:sqlite:./data/ai-connecting.db
+    driver-class-name: org.sqlite.JDBC
+  jpa:
+    database-platform: org.hibernate.community.dialect.SQLiteDialect
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: false
+  jackson:
+    default-property-inclusion: non_null
+  data:
+    redis:
+      host: r-bp1p6kzhgdqkv3td03pd.redis.rds.aliyuncs.com         # Redis 服务器地址
+      port: 8188            # Redis 服务器端口
+      username: renlg_redis            # Redis 用户名（无用户名认证留空）
+      password: uz2JnlFGQLtPue             # Redis 密码（无密码留空）
+      database: 0             # 使用的数据库索引
+      timeout: 5000ms         # 连接超时时间
+      lettuce:
+        pool:
+          max-active: 16      # 连接池最大连接数
+          max-idle: 8         # 连接池最大空闲连接数
+          min-idle: 2         # 连接池最小空闲连接数
+
+app:
+  jwt:
+    secret: ai-connecting-secret-key-change-this-in-production-2024
+    expiration: 86400000  # 24 hours in ms
+  admin:
+    default-password: admin123
