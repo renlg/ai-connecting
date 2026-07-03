@@ -22,7 +22,7 @@ export default function Channels() {
   const loadModels = () => {
     getEnabledModels().then(res => {
       if (res.code === 200) {
-        setModelOptions((res.data || []).map(m => ({ value: m.name, label: m.name })))
+        setModelOptions((res.data || []).map(m => ({ value: m.name, label: m.displayName ? `${m.name}（${m.displayName}）` : m.name })))
       }
     })
   }
