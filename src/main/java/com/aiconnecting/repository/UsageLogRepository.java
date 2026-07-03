@@ -73,10 +73,10 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
     @Query("SELECT COALESCE(COUNT(u), 0), COALESCE(SUM(u.totalTokens), 0), " +
            "COALESCE(SUM(u.promptTokens), 0), COALESCE(SUM(u.completionTokens), 0), COALESCE(SUM(u.creditCost), 0.0) " +
            "FROM UsageLog u WHERE u.tokenId IN :tokenIds")
-    Object[] sumAllMetricsByTokenIds(@Param("tokenIds") List<Long> tokenIds);
+    List<Object[]> sumAllMetricsByTokenIds(@Param("tokenIds") List<Long> tokenIds);
 
     @Query("SELECT COALESCE(COUNT(u), 0), COALESCE(SUM(u.totalTokens), 0), " +
            "COALESCE(SUM(u.promptTokens), 0), COALESCE(SUM(u.completionTokens), 0), COALESCE(SUM(u.creditCost), 0.0) " +
            "FROM UsageLog u WHERE u.tokenId IN :tokenIds AND u.createdAt >= :since")
-    Object[] sumAllMetricsByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
+    List<Object[]> sumAllMetricsByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 }

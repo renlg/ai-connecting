@@ -57,8 +57,8 @@ export default function Users() {
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },
     { title: '注册时间', dataIndex: 'createdAt', width: 170, render: v => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-' },
     {
-      title: '操作', width: 200, render: (_, r) => (
-        <Space>
+      title: '操作', width: 200, fixed: 'right', render: (_, r) => (
+        <Space size="small" wrap>
           <Button type="link" size="small" onClick={() => {
             setEditingUser(r)
             creditsForm.setFieldsValue({ credits: r.credits ?? 0 })

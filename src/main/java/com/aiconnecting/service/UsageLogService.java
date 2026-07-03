@@ -126,13 +126,15 @@ public class UsageLogService {
      * 按 Token ID 列表聚合查询全部指标
      */
     public Object[] sumAllMetricsByTokenIds(List<Long> tokenIds) {
-        return usageLogRepository.sumAllMetricsByTokenIds(tokenIds);
+        List<Object[]> result = usageLogRepository.sumAllMetricsByTokenIds(tokenIds);
+        return result.isEmpty() ? new Object[]{0L, 0L, 0L, 0L, 0.0} : result.get(0);
     }
 
     /**
      * 按 Token ID 列表聚合查询今日指标
      */
     public Object[] sumAllMetricsByTokenIdsSince(List<Long> tokenIds, LocalDateTime since) {
-        return usageLogRepository.sumAllMetricsByTokenIdsSince(tokenIds, since);
+        List<Object[]> result = usageLogRepository.sumAllMetricsByTokenIdsSince(tokenIds, since);
+        return result.isEmpty() ? new Object[]{0L, 0L, 0L, 0L, 0.0} : result.get(0);
     }
 }

@@ -68,8 +68,8 @@ export default function Channels() {
     { title: '模型', dataIndex: 'models', ellipsis: true, render: v => v ? v.split(',').map(m => <Tag key={m}>{m.trim()}</Tag>) : '-' },
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },
     {
-      title: '操作', width: 150, render: (_, record) => (
-        <Space>
+      title: '操作', width: 180, fixed: 'right', render: (_, record) => (
+        <Space size="small" wrap>
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
             const formValues = { ...record }
@@ -93,7 +93,7 @@ export default function Channels() {
         <h2>渠道管理</h2>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true) }}>新增渠道</Button>
       </div>
-      <Table columns={columns} dataSource={channels} rowKey="id" loading={loading} scroll={{ x: 1000 }} />
+      <Table columns={columns} dataSource={channels} rowKey="id" loading={loading} scroll={{ x: 1100 }} />
       <Modal title={editing ? '编辑渠道' : '新增渠道'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={600}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="渠道名称" /></Form.Item>

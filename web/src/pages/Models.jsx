@@ -72,7 +72,10 @@ export default function Models() {
 
   const handleUpdateRate = async () => {
     const values = await rateForm.validateFields()
-    await updateModel(rateModel.id, { ...rateModel, ...values })
+    await updateModel(rateModel.id, {
+      inputCreditRate: values.inputCreditRate,
+      outputCreditRate: values.outputCreditRate,
+    })
     message.success('积分比例已更新')
     setRateModalOpen(false)
     load()
@@ -103,8 +106,8 @@ export default function Models() {
       render: v => v ? new Date(v).toLocaleString('zh-CN') : '-'
     },
     {
-      title: '操作', width: 150, render: (_, record) => (
-        <Space>
+      title: '操作', width: 220, fixed: 'right', render: (_, record) => (
+        <Space size="small" wrap>
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
             form.setFieldsValue(record)
@@ -133,7 +136,7 @@ export default function Models() {
         </Space>
       </div>
 
-      <Table columns={columns} dataSource={models} rowKey="id" loading={loading} scroll={{ x: 1200 }} />
+      <Table columns={columns} dataSource={models} rowKey="id" loading={loading} scroll={{ x: 1300 }} />
 
       {/* 单个新增/编辑 */}
       <Modal title={editing ? '编辑模型' : '新增模型'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={500}>
@@ -170,7 +173,7 @@ export default function Models() {
       </Modal>
 
       {/* 修改积分比例 */}
-      <Modal title={`修改积分比例 - ${rateModel?.name || ''}`} open={rateModalOpen} onOk={handleUpdateRate} onCancel={() => setRateModalOpen(false)} width={400}>
+      <Modal title={`修改积分比例 - ${rateModel?.name || ''}`} open={rateModalOpen} onOk={handleUpdateRate} onCancel={() => setRateModalOpen(false)} width={500}>
         <Form form={rateForm} layout="vertical">
           <Form.Item name="inputCreditRate" label="输入积分比例（每1000 token）">
             <InputNumber min={0} style={{ width: '100%' }} placeholder="每 1000 输入 token 消耗的积分数" />

@@ -90,13 +90,14 @@ export default function Coupons() {
   ]
 
   const columns = [
-    { title: '兑换码', dataIndex: 'code', render: v => <span style={{ fontFamily: 'monospace', color: '#1890ff', fontSize: 18 }}>{v}</span> },
-    { title: '积分额度', dataIndex: 'credits', render: v => v != null ? Math.round(Number(v)) + ' 积分' : '0 积分' },
-    { title: '使用次数', render: (_, r) => `${r.usedCount || 0} / ${r.maxUses}` },
-    { title: '过期时间', dataIndex: 'expiryDate', render: v => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : <Tag color="green">永不过期</Tag> },
+    { title: '兑换码', dataIndex: 'code', width: 200, render: v => <span style={{ fontFamily: 'monospace', color: '#1890ff', fontSize: 18 }}>{v}</span> },
+    { title: '积分额度', dataIndex: 'credits', width: 120, render: v => v != null ? Math.round(Number(v)) + ' 积分' : '0 积分' },
+    { title: '使用次数', width: 100, render: (_, r) => `${r.usedCount || 0} / ${r.maxUses}` },
+    { title: '过期时间', dataIndex: 'expiryDate', width: 160, render: v => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : <Tag color="green">永不过期</Tag> },
     {
       title: '状态',
       dataIndex: 'status',
+      width: 100,
       render: (v, r) => (
         <Switch
           checked={v === 1}
@@ -106,9 +107,11 @@ export default function Coupons() {
         />
       ),
     },
-    { title: '创建时间', dataIndex: 'createdAt', render: v => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-' },
+    { title: '创建时间', dataIndex: 'createdAt', width: 160, render: v => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-' },
     {
       title: '操作',
+      width: 100,
+      fixed: 'right',
       render: (_, r) => (
         <Button type="link" icon={<EyeOutlined />} onClick={() => handleViewRedemptions(r)}>
           查看
@@ -125,7 +128,7 @@ export default function Coupons() {
           生成积分券
         </Button>
       </div>
-      <Table columns={columns} dataSource={coupons} rowKey="id" loading={loading} />
+      <Table columns={columns} dataSource={coupons} rowKey="id" loading={loading} scroll={{ x: 1000 }} />
 
       {/* 生成积分券弹窗 */}
       <Modal
