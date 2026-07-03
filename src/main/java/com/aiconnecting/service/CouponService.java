@@ -18,6 +18,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -76,8 +77,15 @@ public class CouponService {
             throw new BusinessException("今日兑换次数已达上限");
         }
 
-        coupon.setUsedCount(coupon.getUsedCount() + 1);
-        couponRepository.save(coupon);
+        // 原子递增使用次数（防止并发超限）
+        couponRepository.incrementUsedCount(coupon.getId());
+
+        // 检查是否实际更新成功（防止并发竞争）
+        Coupon updated = couponRepository.findById(coupon.getId())
+                .orElseThrow(() -> new BusinessException("积分券不存在"));
+        if (updated.getUsedCount() > updated.getMaxUses()) {
+            throw new BusinessException("该兑换码已达到使用次数上限");
+        }
 
         User freshUser = userRepository.findById(user.getId())
                 .orElseThrow(() -> new BusinessException("用户不存在"));
@@ -91,7 +99,7 @@ public class CouponService {
                 .build();
         redemptionLogRepository.save(log);
 
-        return coupon;
+        return updated;
     }
 
     public List<Coupon> listCoupons() {
@@ -104,9 +112,14 @@ public class CouponService {
         Coupon coupon = couponRepository.findById(couponId).orElse(null);
         Double credits = coupon != null ? coupon.getCredits() : 0.0;
 
+        // 批量查询用户，避免 N+1 查询
+        var userIds = logs.stream().map(CouponRedemptionLog::getUserId).distinct().toList();
+        var userMap = userRepository.findAllById(userIds).stream()
+                .collect(Collectors.toMap(User::getId, u -> u));
+
         List<CouponRedemptionDTO> result = new ArrayList<>();
         for (CouponRedemptionLog log : logs) {
-            User user = userRepository.findById(log.getUserId()).orElse(null);
+            User user = userMap.get(log.getUserId());
             result.add(CouponRedemptionDTO.builder()
                     .userId(log.getUserId())
                     .username(user != null ? user.getUsername() : "未知用户")

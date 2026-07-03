@@ -34,7 +34,7 @@ export default function Users() {
 
   const handleResetPassword = async (id) => {
     await resetUserPassword(id)
-    message.success('密码已重置为 88888888')
+    message.success('密码已重置')
   }
 
   const handleUpdateCredits = async () => {
@@ -64,7 +64,7 @@ export default function Users() {
             creditsForm.setFieldsValue({ credits: r.credits ?? 0 })
             setCreditsModalOpen(true)
           }}>修改积分</Button>
-          <Popconfirm title="确认重置密码？" description="密码将被重置为 88888888" onConfirm={() => handleResetPassword(r.id)} okText="确认" cancelText="取消">
+          <Popconfirm title="确认重置密码？" description="密码将被重置为默认密码" onConfirm={() => handleResetPassword(r.id)} okText="确认" cancelText="取消">
             <Button type="link" danger size="small">重置密码</Button>
           </Popconfirm>
         </Space>

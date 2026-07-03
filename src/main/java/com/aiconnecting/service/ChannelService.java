@@ -69,7 +69,8 @@ public class ChannelService {
      * 根据模型名获取可用的渠道列表 (按优先级排序)
      */
     public List<Channel> getActiveChannelsByModel(String model) {
-        return channelRepository.findActiveChannelsByModel(model);
+        String modelPattern = "%," + model + ",%";
+        return channelRepository.findActiveChannelsByModel(modelPattern);
     }
 
     /**

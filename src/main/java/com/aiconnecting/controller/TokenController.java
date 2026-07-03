@@ -59,18 +59,26 @@ public class TokenController {
     }
 
     @PutMapping("/{id}")
-    public ApiResponse<Token> update(@PathVariable Long id, @RequestBody TokenRequest request) {
+    public ApiResponse<Token> update(@AuthenticationPrincipal User user,
+                                     @PathVariable Long id, @RequestBody TokenRequest request) {
+        Token token = tokenService.getById(id);
+        checkTokenOwner(user, token);
         return ApiResponse.success(tokenService.update(id, request));
     }
 
     @DeleteMapping("/{id}")
-    public ApiResponse<Void> delete(@PathVariable Long id) {
+    public ApiResponse<Void> delete(@AuthenticationPrincipal User user, @PathVariable Long id) {
+        Token token = tokenService.getById(id);
+        checkTokenOwner(user, token);
         tokenService.delete(id);
         return ApiResponse.success();
     }
 
     @PutMapping("/{id}/status")
-    public ApiResponse<Void> updateStatus(@PathVariable Long id, @RequestBody Map<String, Integer> body) {
+    public ApiResponse<Void> updateStatus(@AuthenticationPrincipal User user,
+                                          @PathVariable Long id, @RequestBody Map<String, Integer> body) {
+        Token token = tokenService.getById(id);
+        checkTokenOwner(user, token);
         tokenService.updateStatus(id, body.get("status"));
         return ApiResponse.success();
     }
@@ -104,5 +112,14 @@ public class TokenController {
         var userMap = userRepository.findAllById(userIds).stream()
                 .collect(Collectors.toMap(User::getId, User::getUsername));
         tokens.forEach(t -> t.setOwnerName(userMap.getOrDefault(t.getUserId(), "unknown")));
+    }
+
+    /**
+     * 检查当前用户是否为 Token 所有者或管理员
+     */
+    private void checkTokenOwner(User user, Token token) {
+        if (!"admin".equals(user.getRole()) && !token.getUserId().equals(user.getId())) {
+            throw new BusinessException(403, "无权操作该 Token");
+        }
     }
 }

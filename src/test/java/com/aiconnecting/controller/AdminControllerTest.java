@@ -7,13 +7,11 @@ import com.aiconnecting.entity.Coupon;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.User;
-import com.aiconnecting.repository.ChannelRepository;
-import com.aiconnecting.repository.TokenRepository;
-import com.aiconnecting.repository.UsageLogRepository;
-import com.aiconnecting.repository.UserRepository;
 import com.aiconnecting.service.CouponService;
 import com.aiconnecting.service.UsageLogService;
 import com.aiconnecting.service.UserService;
+import com.aiconnecting.service.TokenService;
+import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,7 +28,6 @@ import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDateTime;
@@ -52,13 +49,10 @@ class AdminControllerTest {
     @Autowired
     private ObjectMapper objectMapper;
 
-    @MockBean private ChannelRepository channelRepository;
-    @MockBean private UserRepository userRepository;
-    @MockBean private TokenRepository tokenRepository;
+    @MockBean private ChannelService channelService;
     @MockBean private UserService userService;
     @MockBean private UsageLogService usageLogService;
-    @MockBean private UsageLogRepository usageLogRepository;
-    @MockBean private PasswordEncoder passwordEncoder;
+    @MockBean private TokenService tokenService;
     @MockBean private CouponService couponService;
     @MockBean private JwtUtils jwtUtils;
     @MockBean private JwtAuthenticationFilter jwtAuthenticationFilter;
@@ -93,9 +87,9 @@ class AdminControllerTest {
 
         Channel ch1 = Channel.builder().id(1L).status(1).usedQuota(100L).build();
         Channel ch2 = Channel.builder().id(2L).status(0).usedQuota(50L).build();
-        when(channelRepository.findAll()).thenReturn(List.of(ch1, ch2));
-        when(tokenRepository.count()).thenReturn(10L);
-        when(userRepository.count()).thenReturn(5L);
+        when(channelService.listAll()).thenReturn(List.of(ch1, ch2));
+        when(tokenService.count()).thenReturn(10L);
+        when(userService.count()).thenReturn(5L);
         when(usageLogService.getTotalRequests()).thenReturn(1000L);
         when(usageLogService.getRequestsToday()).thenReturn(50L);
         when(usageLogService.getTokensUsedToday()).thenReturn(5000L);
@@ -121,21 +115,13 @@ class AdminControllerTest {
         setAuthentication(regularUser);
 
         Token t = Token.builder().id(1L).usedQuota(200L).build();
-        when(tokenRepository.findByUserId(2L)).thenReturn(List.of(t));
-        when(usageLogRepository.countByTokenIdIn(List.of(1L))).thenReturn(50L);
-        when(usageLogRepository.countByTokenIdInSince(eq(List.of(1L)), any(LocalDateTime.class)))
-                .thenReturn(10L);
-        when(usageLogRepository.sumTokensByTokenIdInSince(eq(List.of(1L)), any(LocalDateTime.class)))
-                .thenReturn(1000L);
-        when(usageLogRepository.sumPromptTokensByTokenIdIn(List.of(1L))).thenReturn(3000L);
-        when(usageLogRepository.sumCompletionTokensByTokenIdIn(List.of(1L))).thenReturn(2000L);
-        when(usageLogRepository.sumPromptTokensByTokenIdInSince(eq(List.of(1L)), any(LocalDateTime.class)))
-                .thenReturn(500L);
-        when(usageLogRepository.sumCompletionTokensByTokenIdInSince(eq(List.of(1L)), any(LocalDateTime.class)))
-                .thenReturn(300L);
-        when(usageLogRepository.sumCreditCostByTokenIdIn(List.of(1L))).thenReturn(25.5);
-        when(usageLogRepository.sumCreditCostByTokenIdInSince(eq(List.of(1L)), any(LocalDateTime.class)))
-                .thenReturn(3.0);
+        when(tokenService.listByUser(2L)).thenReturn(List.of(t));
+        // 聚合查询：全部时间 [count, totalTokens, promptTokens, completionTokens, creditCost]
+        when(usageLogService.sumAllMetricsByTokenIds(List.of(1L)))
+                .thenReturn(new Object[]{50L, 1000L, 3000L, 2000L, 25.5});
+        // 聚合查询：今日
+        when(usageLogService.sumAllMetricsByTokenIdsSince(eq(List.of(1L)), any(LocalDateTime.class)))
+                .thenReturn(new Object[]{10L, 500L, 500L, 300L, 3.0});
 
         mockMvc.perform(get("/api/admin/dashboard"))
                 .andExpect(status().isOk())
@@ -151,7 +137,7 @@ class AdminControllerTest {
     @Test
     void listUsers() throws Exception {
         setAuthentication(adminUser);
-        when(userRepository.searchByKeyword(anyString())).thenReturn(List.of(regularUser));
+        when(userService.searchUsers(anyString())).thenReturn(List.of(regularUser));
 
         mockMvc.perform(get("/api/admin/users").param("search", "user"))
                 .andExpect(status().isOk())
@@ -162,7 +148,7 @@ class AdminControllerTest {
     @Test
     void listUsers_noSearch() throws Exception {
         setAuthentication(adminUser);
-        when(userRepository.findAll()).thenReturn(List.of(adminUser, regularUser));
+        when(userService.searchUsers(null)).thenReturn(List.of(adminUser, regularUser));
 
         mockMvc.perform(get("/api/admin/users"))
                 .andExpect(status().isOk())
@@ -173,8 +159,7 @@ class AdminControllerTest {
     @Test
     void updateUserStatus() throws Exception {
         setAuthentication(adminUser);
-        when(userRepository.findById(2L)).thenReturn(Optional.of(regularUser));
-        when(userRepository.save(any(User.class))).thenReturn(regularUser);
+        doNothing().when(userService).updateUserStatus(2L, 0);
 
         mockMvc.perform(put("/api/admin/users/2/status")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -186,7 +171,7 @@ class AdminControllerTest {
     @Test
     void updateUserStatus_notFound() throws Exception {
         setAuthentication(adminUser);
-        when(userRepository.findById(99L)).thenReturn(Optional.empty());
+        doThrow(new BusinessException("用户不存在")).when(userService).updateUserStatus(99L, 0);
 
         mockMvc.perform(put("/api/admin/users/99/status")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -198,9 +183,7 @@ class AdminControllerTest {
     @Test
     void resetUserPassword() throws Exception {
         setAuthentication(adminUser);
-        when(userRepository.findById(2L)).thenReturn(Optional.of(regularUser));
-        when(passwordEncoder.encode(anyString())).thenReturn("newEncoded");
-        when(userRepository.save(any(User.class))).thenReturn(regularUser);
+        doNothing().when(userService).resetPassword(eq(2L), anyString());
 
         mockMvc.perform(put("/api/admin/users/2/reset-password"))
                 .andExpect(status().isOk())
@@ -210,8 +193,7 @@ class AdminControllerTest {
     @Test
     void updateUserCredits() throws Exception {
         setAuthentication(adminUser);
-        when(userRepository.findById(2L)).thenReturn(Optional.of(regularUser));
-        when(userRepository.save(any(User.class))).thenReturn(regularUser);
+        doNothing().when(userService).updateCredits(2L, 200.0);
 
         mockMvc.perform(put("/api/admin/users/2/credits")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -227,7 +209,7 @@ class AdminControllerTest {
         setAuthentication(adminUser);
         UsageLog log = UsageLog.builder().id(1L).model("gpt-4").totalTokens(100).build();
         Page<UsageLog> page = new PageImpl<>(List.of(log));
-        when(usageLogRepository.findAll(any(Pageable.class))).thenReturn(page);
+        when(usageLogService.getLogs(0, 20)).thenReturn(page);
 
         mockMvc.perform(get("/api/admin/logs").param("page", "0").param("size", "20"))
                 .andExpect(status().isOk())

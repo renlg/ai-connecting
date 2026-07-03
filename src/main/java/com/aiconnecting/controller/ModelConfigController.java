@@ -2,6 +2,7 @@ package com.aiconnecting.controller;
 
 import com.aiconnecting.common.ApiResponse;
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.dto.ModelConfigRequest;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.repository.ModelConfigRepository;
@@ -49,18 +50,17 @@ public class ModelConfigController {
      * 创建模型配置
      */
     @PostMapping
-    public ApiResponse<ModelConfig> create(@RequestBody Map<String, Object> body) {
-        String name = (String) body.get("name");
-        if (name == null || name.isBlank()) {
+    public ApiResponse<ModelConfig> create(@RequestBody ModelConfigRequest request) {
+        if (request.getName() == null || request.getName().isBlank()) {
             throw new BusinessException("模型名称不能为空");
         }
         ModelConfig config = ModelConfig.builder()
-                .name(name)
-                .displayName((String) body.get("displayName"))
-                .description((String) body.get("description"))
-                .inputCreditRate(body.get("inputCreditRate") != null ? ((Number) body.get("inputCreditRate")).intValue() : 0)
-                .outputCreditRate(body.get("outputCreditRate") != null ? ((Number) body.get("outputCreditRate")).intValue() : 0)
-                .adminOnly(Boolean.TRUE.equals(body.get("adminOnly")))
+                .name(request.getName())
+                .displayName(request.getDisplayName())
+                .description(request.getDescription())
+                .inputCreditRate(request.getInputCreditRate() != null ? request.getInputCreditRate() : 0)
+                .outputCreditRate(request.getOutputCreditRate() != null ? request.getOutputCreditRate() : 0)
+                .adminOnly(Boolean.TRUE.equals(request.getAdminOnly()))
                 .status(1)
                 .build();
         return ApiResponse.success(modelConfigRepository.save(config));
@@ -70,27 +70,26 @@ public class ModelConfigController {
      * 更新模型配置
      */
     @PutMapping("/{id}")
-    public ApiResponse<ModelConfig> update(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+    public ApiResponse<ModelConfig> update(@PathVariable Long id, @RequestBody ModelConfigRequest request) {
         ModelConfig config = modelConfigRepository.findById(id)
                 .orElseThrow(() -> new BusinessException("模型不存在"));
-        if (body.containsKey("name") && body.get("name") != null) {
-            String newName = (String) body.get("name");
-            config.setName(newName);
+        if (request.getName() != null) {
+            config.setName(request.getName());
         }
-        if (body.containsKey("displayName")) {
-            config.setDisplayName((String) body.get("displayName"));
+        if (request.getDisplayName() != null) {
+            config.setDisplayName(request.getDisplayName());
         }
-        if (body.containsKey("description")) {
-            config.setDescription((String) body.get("description"));
+        if (request.getDescription() != null) {
+            config.setDescription(request.getDescription());
         }
-        if (body.containsKey("inputCreditRate") && body.get("inputCreditRate") != null) {
-            config.setInputCreditRate(((Number) body.get("inputCreditRate")).intValue());
+        if (request.getInputCreditRate() != null) {
+            config.setInputCreditRate(request.getInputCreditRate());
         }
-        if (body.containsKey("outputCreditRate") && body.get("outputCreditRate") != null) {
-            config.setOutputCreditRate(((Number) body.get("outputCreditRate")).intValue());
+        if (request.getOutputCreditRate() != null) {
+            config.setOutputCreditRate(request.getOutputCreditRate());
         }
-        if (body.containsKey("adminOnly")) {
-            config.setAdminOnly(Boolean.TRUE.equals(body.get("adminOnly")));
+        if (request.getAdminOnly() != null) {
+            config.setAdminOnly(request.getAdminOnly());
         }
         return ApiResponse.success(modelConfigRepository.save(config));
     }

@@ -91,14 +91,19 @@ public class TokenService {
     }
 
     /**
-     * 增加已用额度
+     * 增加已用额度（原子操作，避免并发丢失计数）
      */
     public void addUsedQuota(Long tokenId, long quota) {
-        Token token = tokenRepository.findById(tokenId).orElse(null);
-        if (token != null) {
-            token.setUsedQuota(token.getUsedQuota() + quota);
-            tokenRepository.save(token);
+        if (quota > 0) {
+            tokenRepository.addUsedQuota(tokenId, quota);
         }
+    }
+
+    /**
+     * 获取 Token 总数
+     */
+    public long count() {
+        return tokenRepository.count();
     }
 
 }

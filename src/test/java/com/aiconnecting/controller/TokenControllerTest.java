@@ -189,6 +189,8 @@ class TokenControllerTest {
     void update() throws Exception {
         setAuthentication(regularUser);
 
+        Token existing = Token.builder().id(1L).name("old-token").userId(2L).build();
+        when(tokenService.getById(1L)).thenReturn(existing);
         Token t = Token.builder().id(1L).name("updated-token").build();
         when(tokenService.update(eq(1L), any(TokenRequest.class))).thenReturn(t);
 
@@ -202,8 +204,7 @@ class TokenControllerTest {
     @Test
     void update_notFound() throws Exception {
         setAuthentication(regularUser);
-        when(tokenService.update(eq(99L), any(TokenRequest.class)))
-                .thenThrow(new BusinessException("Token 不存在"));
+        when(tokenService.getById(99L)).thenThrow(new BusinessException("Token 不存在"));
 
         mockMvc.perform(put("/api/tokens/99")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -217,6 +218,8 @@ class TokenControllerTest {
     @Test
     void deleteToken() throws Exception {
         setAuthentication(regularUser);
+        Token existing = Token.builder().id(1L).name("test-token").userId(2L).build();
+        when(tokenService.getById(1L)).thenReturn(existing);
         doNothing().when(tokenService).delete(1L);
 
         mockMvc.perform(delete("/api/tokens/1"))
@@ -227,7 +230,7 @@ class TokenControllerTest {
     @Test
     void deleteToken_notFound() throws Exception {
         setAuthentication(regularUser);
-        doThrow(new BusinessException("Token 不存在")).when(tokenService).delete(99L);
+        when(tokenService.getById(99L)).thenThrow(new BusinessException("Token 不存在"));
 
         mockMvc.perform(delete("/api/tokens/99"))
                 .andExpect(status().isBadRequest())
@@ -239,6 +242,8 @@ class TokenControllerTest {
     @Test
     void updateStatus() throws Exception {
         setAuthentication(regularUser);
+        Token existing = Token.builder().id(1L).name("test-token").userId(2L).build();
+        when(tokenService.getById(1L)).thenReturn(existing);
         doNothing().when(tokenService).updateStatus(eq(1L), eq(0));
 
         mockMvc.perform(put("/api/tokens/1/status")

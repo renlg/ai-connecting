@@ -3,6 +3,7 @@ package com.aiconnecting.repository;
 import com.aiconnecting.entity.UsageLog;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -67,4 +68,15 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
             "FROM usage_logs WHERE token_id = ?1 AND created_at >= ?2 " +
             "GROUP BY DATE(created_at) ORDER BY DATE(created_at) ASC", nativeQuery = true)
     List<Object[]> findDailyCreditCostByTokenIdSince(Long tokenId, LocalDateTime since);
+
+    // Dashboard 聚合查询：一次查询获取所有指标
+    @Query("SELECT COALESCE(COUNT(u), 0), COALESCE(SUM(u.totalTokens), 0), " +
+           "COALESCE(SUM(u.promptTokens), 0), COALESCE(SUM(u.completionTokens), 0), COALESCE(SUM(u.creditCost), 0.0) " +
+           "FROM UsageLog u WHERE u.tokenId IN :tokenIds")
+    Object[] sumAllMetricsByTokenIds(@Param("tokenIds") List<Long> tokenIds);
+
+    @Query("SELECT COALESCE(COUNT(u), 0), COALESCE(SUM(u.totalTokens), 0), " +
+           "COALESCE(SUM(u.promptTokens), 0), COALESCE(SUM(u.completionTokens), 0), COALESCE(SUM(u.creditCost), 0.0) " +
+           "FROM UsageLog u WHERE u.tokenId IN :tokenIds AND u.createdAt >= :since")
+    Object[] sumAllMetricsByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 }

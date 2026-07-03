@@ -124,8 +124,8 @@ export default function Tokens() {
     { title: '允许模型', dataIndex: 'allowedModels', ellipsis: true, render: v => v ? v.split(',').map(m => <Tag key={m}>{m.trim()}</Tag>) : '全部' },
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },
     {
-      title: '操作', width: 180, render: (_, record) => (
-        <Space>
+      title: '操作', width: 220, fixed: 'right', render: (_, record) => (
+        <Space size="small" wrap>
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
             const formValues = { ...record }
@@ -161,7 +161,7 @@ export default function Tokens() {
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true) }}>新增 Token</Button>
         </Space>
       </div>
-      <Table columns={columns} dataSource={tokens} rowKey="id" loading={loading} scroll={{ x: 1100 }} />
+      <Table columns={columns} dataSource={tokens} rowKey="id" loading={loading} scroll={{ x: 1200 }} />
       <Modal title={editing ? '编辑 Token' : '新增 Token'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={500}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="Token 名称" /></Form.Item>
@@ -192,7 +192,7 @@ export default function Tokens() {
         <Table
           columns={[
             { title: '日期', dataIndex: 'date', key: 'date' },
-            { title: '消耗积分', dataIndex: 'credits', key: 'credits', render: v => Number(v).toFixed(2) },
+            { title: '消耗积分', dataIndex: 'credits', key: 'credits', render: v => Math.round(Number(v)) + ' 积分' },
           ]}
           dataSource={historyData}
           rowKey="date"

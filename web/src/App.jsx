@@ -9,6 +9,7 @@ import Profile from './pages/Profile'
 import Users from './pages/Users'
 import Models from './pages/Models'
 import Coupons from './pages/Coupons'
+import NotFound from './pages/NotFound'
 
 function PrivateRoute({ children }) {
   const token = localStorage.getItem('token')
@@ -44,7 +45,9 @@ export default function App() {
           <Route path="users" element={<Users />} />
           <Route path="models" element={<Models />} />
           <Route path="coupons" element={<Coupons />} />
+          <Route path="*" element={<NotFound />} />
         </Route>
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>
   )

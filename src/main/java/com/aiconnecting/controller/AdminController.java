@@ -1,28 +1,25 @@
 package com.aiconnecting.controller;
 
 import com.aiconnecting.common.ApiResponse;
+import com.aiconnecting.dto.CouponGenerateRequest;
 import com.aiconnecting.dto.CouponRedemptionDTO;
 import com.aiconnecting.dto.DashboardStats;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Coupon;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.entity.UsageLog;
-import com.aiconnecting.repository.ChannelRepository;
-import com.aiconnecting.repository.UserRepository;
-import com.aiconnecting.repository.TokenRepository;
 import com.aiconnecting.service.UserService;
 import com.aiconnecting.service.UsageLogService;
 import com.aiconnecting.service.CouponService;
-import com.aiconnecting.repository.UsageLogRepository;
+import com.aiconnecting.service.TokenService;
+import com.aiconnecting.service.ChannelService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.data.domain.Page;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
@@ -30,13 +27,13 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AdminController {
 
-    private final ChannelRepository channelRepository;
-    private final UserRepository userRepository;
-    private final TokenRepository tokenRepository;
+    @Value("${app.admin.reset-password:88888888}")
+    private String resetPassword;
+
+    private final ChannelService channelService;
     private final UserService userService;
     private final UsageLogService usageLogService;
-    private final UsageLogRepository usageLogRepository;
-    private final PasswordEncoder passwordEncoder;
+    private final TokenService tokenService;
     private final CouponService couponService;
 
     /**
@@ -47,14 +44,14 @@ public class AdminController {
         boolean isAdmin = "admin".equalsIgnoreCase(currentUser.getRole());
 
         if (isAdmin) {
-            List<Channel> channels = channelRepository.findAll();
+            List<Channel> channels = channelService.listAll();
             long activeChannels = channels.stream().filter(c -> c.getStatus() == 1).count();
 
             DashboardStats stats = DashboardStats.builder()
                     .totalChannels((long) channels.size())
                     .activeChannels(activeChannels)
-                    .totalTokens(tokenRepository.count())
-                    .totalUsers(userRepository.count())
+                    .totalTokens(tokenService.count())
+                    .totalUsers(userService.count())
                     .totalRequests(usageLogService.getTotalRequests())
                     .totalTokensUsed(channels.stream().mapToLong(Channel::getUsedQuota).sum())
                     .requestsToday(usageLogService.getRequestsToday())
@@ -68,21 +65,35 @@ public class AdminController {
                     .build();
             return ApiResponse.success(stats);
         } else {
-            // 普通用户：只看自己的 Token 和使用记录
-            var userTokens = tokenRepository.findByUserId(currentUser.getId());
+            // 普通用户：只看自己的 Token 和使用记录（优化为 2 次聚合查询）
+            var userTokens = tokenService.listByUser(currentUser.getId());
             var tokenIds = userTokens.stream().map(t -> t.getId()).toList();
 
             long totalTokensUsed = userTokens.stream().mapToLong(t -> t.getUsedQuota() != null ? t.getUsedQuota() : 0).sum();
-            long totalRequests = tokenIds.isEmpty() ? 0 : usageLogRepository.countByTokenIdIn(tokenIds);
-            long requestsToday = tokenIds.isEmpty() ? 0 : usageLogRepository.countByTokenIdInSince(tokenIds, java.time.LocalDate.now().atStartOfDay());
-            long tokensUsedToday = tokenIds.isEmpty() ? 0 : usageLogRepository.sumTokensByTokenIdInSince(tokenIds, java.time.LocalDate.now().atStartOfDay());
 
-            long totalInputTokens = tokenIds.isEmpty() ? 0 : usageLogRepository.sumPromptTokensByTokenIdIn(tokenIds);
-            long totalOutputTokens = tokenIds.isEmpty() ? 0 : usageLogRepository.sumCompletionTokensByTokenIdIn(tokenIds);
-            long inputTokensToday = tokenIds.isEmpty() ? 0 : usageLogRepository.sumPromptTokensByTokenIdInSince(tokenIds, java.time.LocalDate.now().atStartOfDay());
-            long outputTokensToday = tokenIds.isEmpty() ? 0 : usageLogRepository.sumCompletionTokensByTokenIdInSince(tokenIds, java.time.LocalDate.now().atStartOfDay());
-            double totalCreditsConsumed = tokenIds.isEmpty() ? 0 : usageLogRepository.sumCreditCostByTokenIdIn(tokenIds);
-            double creditsConsumedToday = tokenIds.isEmpty() ? 0 : usageLogRepository.sumCreditCostByTokenIdInSince(tokenIds, java.time.LocalDate.now().atStartOfDay());
+            // 聚合查询：全部时间
+            long totalRequests = 0, totalTokensUsedLog = 0, totalInputTokens = 0, totalOutputTokens = 0;
+            double totalCreditsConsumed = 0;
+            if (!tokenIds.isEmpty()) {
+                Object[] allMetrics = usageLogService.sumAllMetricsByTokenIds(tokenIds);
+                totalRequests = ((Number) allMetrics[0]).longValue();
+                totalTokensUsedLog = ((Number) allMetrics[1]).longValue();
+                totalInputTokens = ((Number) allMetrics[2]).longValue();
+                totalOutputTokens = ((Number) allMetrics[3]).longValue();
+                totalCreditsConsumed = ((Number) allMetrics[4]).doubleValue();
+            }
+
+            // 聚合查询：今日
+            long requestsToday = 0, tokensUsedToday = 0, inputTokensToday = 0, outputTokensToday = 0;
+            double creditsConsumedToday = 0;
+            if (!tokenIds.isEmpty()) {
+                Object[] todayMetrics = usageLogService.sumAllMetricsByTokenIdsSince(tokenIds, java.time.LocalDate.now().atStartOfDay());
+                requestsToday = ((Number) todayMetrics[0]).longValue();
+                tokensUsedToday = ((Number) todayMetrics[1]).longValue();
+                inputTokensToday = ((Number) todayMetrics[2]).longValue();
+                outputTokensToday = ((Number) todayMetrics[3]).longValue();
+                creditsConsumedToday = ((Number) todayMetrics[4]).doubleValue();
+            }
 
             DashboardStats stats = DashboardStats.builder()
                     .totalChannels(0L)
@@ -110,12 +121,7 @@ public class AdminController {
      */
     @GetMapping("/users")
     public ApiResponse<List<User>> listUsers(@RequestParam(required = false) String search) {
-        List<User> users;
-        if (search != null && !search.trim().isEmpty()) {
-            users = userRepository.searchByKeyword(search.trim());
-        } else {
-            users = userRepository.findAll();
-        }
+        List<User> users = userService.searchUsers(search);
         users.forEach(u -> u.setPassword(null));
         return ApiResponse.success(users);
     }
@@ -125,22 +131,16 @@ public class AdminController {
      */
     @PutMapping("/users/{id}/status")
     public ApiResponse<Void> updateUserStatus(@PathVariable Long id, @RequestBody java.util.Map<String, Integer> body) {
-        User user = userRepository.findById(id)
-                .orElseThrow(() -> new com.aiconnecting.common.BusinessException("用户不存在"));
-        user.setStatus(body.get("status"));
-        userRepository.save(user);
+        userService.updateUserStatus(id, body.get("status"));
         return ApiResponse.success();
     }
 
     /**
-     * 用户管理 - 重置密码为 88888888
+     * 用户管理 - 重置密码
      */
     @PutMapping("/users/{id}/reset-password")
     public ApiResponse<Void> resetPassword(@PathVariable Long id) {
-        User user = userRepository.findById(id)
-                .orElseThrow(() -> new com.aiconnecting.common.BusinessException("用户不存在"));
-        user.setPassword(passwordEncoder.encode("88888888"));
-        userRepository.save(user);
+        userService.resetPassword(id, resetPassword);
         return ApiResponse.success();
     }
 
@@ -149,10 +149,7 @@ public class AdminController {
      */
     @PutMapping("/users/{id}/credits")
     public ApiResponse<Void> updateCredits(@PathVariable Long id, @RequestBody java.util.Map<String, Double> body) {
-        User user = userRepository.findById(id)
-                .orElseThrow(() -> new com.aiconnecting.common.BusinessException("用户不存在"));
-        user.setCredits(body.get("credits"));
-        userRepository.save(user);
+        userService.updateCredits(id, body.get("credits"));
         return ApiResponse.success();
     }
 
@@ -163,9 +160,7 @@ public class AdminController {
     public ApiResponse<Page<UsageLog>> getLogs(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        Page<UsageLog> logs = usageLogRepository.findAll(
-                PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")));
-        return ApiResponse.success(logs);
+        return ApiResponse.success(usageLogService.getLogs(page, size));
     }
 
     /**
@@ -173,12 +168,9 @@ public class AdminController {
      */
     @PostMapping("/coupons")
     public ApiResponse<Coupon> generateCoupon(@AuthenticationPrincipal User currentUser,
-                                              @RequestBody java.util.Map<String, Object> body) {
-        Double credits = Double.valueOf(body.get("credits").toString());
-        Integer maxUses = body.get("maxUses") != null ? Integer.valueOf(body.get("maxUses").toString()) : 1;
-        LocalDateTime expiryDate = body.get("expiryDate") != null
-                ? LocalDateTime.parse(body.get("expiryDate").toString()) : null;
-        Coupon coupon = couponService.generateCoupon(currentUser, credits, maxUses, expiryDate);
+                                              @Valid @RequestBody CouponGenerateRequest request) {
+        Coupon coupon = couponService.generateCoupon(currentUser, request.getCredits(),
+                request.getMaxUses(), request.getExpiryDate());
         return ApiResponse.success(coupon);
     }
 

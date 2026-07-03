@@ -40,22 +40,7 @@ public class RelayController {
                                   @RequestBody String requestBody,
                                   HttpServletRequest request,
                                   HttpServletResponse response) throws IOException {
-        String tokenKey = extractTokenKey(authHeader);
-
-        // 解析请求获取模型名
-        JsonNode jsonBody = objectMapper.readTree(requestBody);
-        String model = jsonBody.has("model") ? jsonBody.get("model").asText() : "";
-        boolean stream = jsonBody.has("stream") && jsonBody.get("stream").asBoolean();
-
-        if (stream) {
-            relayService.relayStreamRequest(tokenKey, "/v1/chat/completions",
-                    requestBody, model, request, response);
-            return null;
-        }
-
-        String result = relayService.relayRequest(tokenKey, "/v1/chat/completions",
-                requestBody, model, request);
-        return objectMapper.readTree(result);
+        return handleRelayRequest(authHeader, requestBody, "/v1/chat/completions", request, response);
     }
 
     /**
@@ -66,20 +51,7 @@ public class RelayController {
                               @RequestBody String requestBody,
                               HttpServletRequest request,
                               HttpServletResponse response) throws IOException {
-        String tokenKey = extractTokenKey(authHeader);
-        JsonNode jsonBody = objectMapper.readTree(requestBody);
-        String model = jsonBody.has("model") ? jsonBody.get("model").asText() : "";
-        boolean stream = jsonBody.has("stream") && jsonBody.get("stream").asBoolean();
-
-        if (stream) {
-            relayService.relayStreamRequest(tokenKey, "/v1/completions",
-                    requestBody, model, request, response);
-            return null;
-        }
-
-        String result = relayService.relayRequest(tokenKey, "/v1/completions",
-                requestBody, model, request);
-        return objectMapper.readTree(result);
+        return handleRelayRequest(authHeader, requestBody, "/v1/completions", request, response);
     }
 
     /**
@@ -89,13 +61,7 @@ public class RelayController {
     public Object embeddings(@RequestHeader(value = "Authorization", required = false) String authHeader,
                              @RequestBody String requestBody,
                              HttpServletRequest request) throws IOException {
-        String tokenKey = extractTokenKey(authHeader);
-        JsonNode jsonBody = objectMapper.readTree(requestBody);
-        String model = jsonBody.has("model") ? jsonBody.get("model").asText() : "";
-
-        String result = relayService.relayRequest(tokenKey, "/v1/embeddings",
-                requestBody, model, request);
-        return objectMapper.readTree(result);
+        return handleRelayRequest(authHeader, requestBody, "/v1/embeddings", request, null);
     }
 
     /**
@@ -166,5 +132,25 @@ public class RelayController {
             throw new BusinessException(401, "缺少 Authorization header 或格式不正确");
         }
         return authHeader.substring(7);
+    }
+
+    /**
+     * 通用中转处理：解析请求、判断流式/非流式、调用 RelayService
+     */
+    private Object handleRelayRequest(String authHeader, String requestBody,
+                                       String path, HttpServletRequest request,
+                                       HttpServletResponse response) throws IOException {
+        String tokenKey = extractTokenKey(authHeader);
+        JsonNode jsonBody = objectMapper.readTree(requestBody);
+        String model = jsonBody.has("model") ? jsonBody.get("model").asText() : "";
+        boolean stream = jsonBody.has("stream") && jsonBody.get("stream").asBoolean();
+
+        if (stream && response != null) {
+            relayService.relayStreamRequest(tokenKey, path, requestBody, model, request, response);
+            return null;
+        }
+
+        String result = relayService.relayRequest(tokenKey, path, requestBody, model, request);
+        return objectMapper.readTree(result);
     }
 }

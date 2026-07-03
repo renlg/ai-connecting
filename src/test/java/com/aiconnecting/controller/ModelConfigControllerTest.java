@@ -47,7 +47,7 @@ class ModelConfigControllerTest {
     void list() throws Exception {
         ModelConfig m1 = ModelConfig.builder().id(1L).name("gpt-4").status(1).build();
         ModelConfig m2 = ModelConfig.builder().id(2L).name("gpt-3.5").status(0).build();
-        when(modelConfigRepository.findAllByOrderByStatusDescNameAsc()).thenReturn(List.of(m1, m2));
+        when(modelConfigRepository.findByAdminOnlyFalseOrderByStatusDescNameAsc()).thenReturn(List.of(m1, m2));
 
         mockMvc.perform(get("/api/admin/models"))
                 .andExpect(status().isOk())
@@ -71,7 +71,7 @@ class ModelConfigControllerTest {
     @Test
     void listEnabled() throws Exception {
         ModelConfig m = ModelConfig.builder().id(1L).name("gpt-4").status(1).build();
-        when(modelConfigRepository.findByStatusOrderByStatusDescNameAsc(1)).thenReturn(List.of(m));
+        when(modelConfigRepository.findByStatusAndAdminOnlyFalseOrderByStatusDescNameAsc(1)).thenReturn(List.of(m));
 
         mockMvc.perform(get("/api/admin/models/enabled"))
                 .andExpect(status().isOk())

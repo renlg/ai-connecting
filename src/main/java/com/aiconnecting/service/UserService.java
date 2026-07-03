@@ -14,6 +14,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
+import java.util.List;
 
 @Service
 @Slf4j
@@ -92,6 +93,13 @@ public class UserService {
                 .orElseThrow(() -> new BusinessException("用户不存在"));
     }
 
+    /**
+     * 获取用户总数
+     */
+    public long count() {
+        return userRepository.count();
+    }
+
     public User updateProfile(Long userId, String nickname, String email) {
         User user = getById(userId);
         if (nickname != null) user.setNickname(nickname);
@@ -105,6 +113,43 @@ public class UserService {
             throw new BusinessException("原密码错误");
         }
         user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+    }
+
+    /**
+     * 搜索用户（支持关键字）
+     */
+    public List<User> searchUsers(String keyword) {
+        if (keyword != null && !keyword.trim().isEmpty()) {
+            return userRepository.searchByKeyword(keyword.trim());
+        }
+        return userRepository.findAll();
+    }
+
+    /**
+     * 更新用户状态
+     */
+    public void updateUserStatus(Long userId, Integer status) {
+        User user = getById(userId);
+        user.setStatus(status);
+        userRepository.save(user);
+    }
+
+    /**
+     * 管理员重置用户密码
+     */
+    public void resetPassword(Long userId, String newPassword) {
+        User user = getById(userId);
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+    }
+
+    /**
+     * 更新用户积分
+     */
+    public void updateCredits(Long userId, Double credits) {
+        User user = getById(userId);
+        user.setCredits(credits);
         userRepository.save(user);
     }
 }

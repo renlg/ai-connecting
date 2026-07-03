@@ -8,7 +8,12 @@ import java.time.LocalDateTime;
  * 使用日志
  */
 @Entity
-@Table(name = "usage_logs")
+@Table(name = "usage_logs", indexes = {
+        @Index(name = "idx_usage_logs_token_id", columnList = "tokenId"),
+        @Index(name = "idx_usage_logs_channel_id", columnList = "channelId"),
+        @Index(name = "idx_usage_logs_created_at", columnList = "createdAt"),
+        @Index(name = "idx_usage_logs_token_created", columnList = "tokenId, createdAt")
+})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
