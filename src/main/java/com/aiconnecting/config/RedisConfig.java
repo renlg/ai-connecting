@@ -4,6 +4,7 @@ import io.lettuce.core.resource.ClientResources;
 import io.lettuce.core.resource.DefaultClientResources;
 import io.lettuce.core.resource.DnsResolver;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -20,6 +21,7 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
  * Redis 配置类
  */
 @Configuration
+@ConditionalOnProperty(name = "app.rate-limit.enabled", havingValue = "true")
 public class RedisConfig {
 
     @Value("${spring.data.redis.host}")

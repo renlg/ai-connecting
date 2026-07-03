@@ -2,8 +2,10 @@ package com.aiconnecting.controller;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.entity.Channel;
+import com.aiconnecting.entity.Token;
 import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.RelayService;
+import com.aiconnecting.service.TokenService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
@@ -27,6 +29,7 @@ public class RelayController {
 
     private final RelayService relayService;
     private final ChannelService channelService;
+    private final TokenService tokenService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -126,6 +129,9 @@ public class RelayController {
      */
     @GetMapping("/v1/models")
     public Map<String, Object> listModels(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        String tokenKey = extractTokenKey(authHeader);
+        Token token = tokenService.validateTokenKey(tokenKey);
+
         List<Channel> channels = channelService.listAll().stream()
                 .filter(c -> c.getStatus() == 1)
                 .collect(Collectors.toList());

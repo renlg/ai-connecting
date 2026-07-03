@@ -13,4 +13,11 @@ public class DashboardStats {
     private Long totalTokensUsed;
     private Long requestsToday;
     private Long tokensUsedToday;
+    private Long totalInputTokens;
+    private Long totalOutputTokens;
+    private Long inputTokensToday;
+    private Long outputTokensToday;
+    private Double totalCreditsConsumed;
+    private Double creditsConsumedToday;
+    private Double myCredits;
 }

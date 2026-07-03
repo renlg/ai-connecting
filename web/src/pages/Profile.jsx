@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react'
-import { Card, Form, Input, Button, message, Descriptions, Divider } from 'antd'
-import { getProfile, updateProfile, changePassword } from '../api'
+import { Card, Form, Input, Button, message, Descriptions, Modal, InputNumber } from 'antd'
+import { getProfile, updateProfile, changePassword, updateUserCredits } from '../api'
 
 export default function Profile() {
   const [user, setUser] = useState(null)
   const [profileForm] = Form.useForm()
   const [pwdForm] = Form.useForm()
+  const [creditsForm] = Form.useForm()
+  const [creditsModalOpen, setCreditsModalOpen] = useState(false)
+  const isAdmin = user?.role === 'admin'
 
   const load = () => {
     getProfile().then(res => {
@@ -30,6 +33,14 @@ export default function Profile() {
     pwdForm.resetFields()
   }
 
+  const handleUpdateCredits = async () => {
+    const values = await creditsForm.validateFields()
+    await updateUserCredits(user.id, values.credits)
+    message.success('积分已更新')
+    setCreditsModalOpen(false)
+    load()
+  }
+
   if (!user) return null
 
   return (
@@ -41,6 +52,7 @@ export default function Profile() {
           <Descriptions.Item label="角色">{user.role === 'admin' ? '管理员' : '普通用户'}</Descriptions.Item>
           <Descriptions.Item label="额度">{user.quota === -1 ? '无限' : user.quota}</Descriptions.Item>
           <Descriptions.Item label="已用额度">{user.usedQuota}</Descriptions.Item>
+          <Descriptions.Item label="积分">{user.credits != null ? Math.round(Number(user.credits)) : 0} 积分{isAdmin && <Button type="link" size="small" onClick={() => { creditsForm.setFieldsValue({ credits: user.credits ?? 0 }); setCreditsModalOpen(true) }}>修改积分</Button>}</Descriptions.Item>
           <Descriptions.Item label="创建时间">{user.createdAt}</Descriptions.Item>
         </Descriptions>
       </Card>
@@ -68,6 +80,16 @@ export default function Profile() {
           <Form.Item><Button type="primary" htmlType="submit">修改密码</Button></Form.Item>
         </Form>
       </Card>
+
+      {isAdmin && (
+        <Modal title="修改积分" open={creditsModalOpen} onOk={handleUpdateCredits} onCancel={() => setCreditsModalOpen(false)} width={400}>
+          <Form form={creditsForm} layout="vertical">
+            <Form.Item name="credits" label="积分" rules={[{ required: true, message: '请输入积分数量' }]}>
+              <InputNumber style={{ width: '100%' }} min={0} step={1} placeholder="输入积分数量" />
+            </Form.Item>
+          </Form>
+        </Modal>
+      )}
     </div>
   )
 }

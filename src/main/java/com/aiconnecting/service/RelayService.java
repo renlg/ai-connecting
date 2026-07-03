@@ -4,7 +4,6 @@ import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.UsageLog;
-import com.aiconnecting.entity.User;
 import com.aiconnecting.repository.ChannelRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -12,6 +11,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -30,7 +30,9 @@ public class RelayService {
     private final TokenService tokenService;
     private final UsageLogService usageLogService;
     private final ChannelRepository channelRepository;
-    private final RateLimitService rateLimitService;
+
+    @Autowired(required = false)
+    private RateLimitService rateLimitService;
 
     private final OkHttpClient httpClient = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -72,9 +74,16 @@ public class RelayService {
         Channel channel = selectChannel(model);
 
         // 5. 渠道限流检查
-        rateLimitService.checkChannelRateLimit(channel.getId(), channel.getRateLimit());
+        if (rateLimitService != null) {
+            rateLimitService.checkChannelRateLimit(channel.getId(), channel.getRateLimit());
+        }
 
-        // 6. 转发请求
+        // 6. Token 限流检查
+        if (rateLimitService != null) {
+            rateLimitService.checkTokenRateLimit(token.getId(), token.getRateLimit());
+        }
+
+        // 7. 转发请求
         long startTime = System.currentTimeMillis();
         String response = forwardRequest(channel, path, requestBody);
         long duration = System.currentTimeMillis() - startTime;
@@ -103,9 +112,16 @@ public class RelayService {
         Channel channel = selectChannel(model);
 
         // 4. 渠道限流检查
-        rateLimitService.checkChannelRateLimit(channel.getId(), channel.getRateLimit());
+        if (rateLimitService != null) {
+            rateLimitService.checkChannelRateLimit(channel.getId(), channel.getRateLimit());
+        }
 
-        // 5. 构建转发请求
+        // 5. Token 限流检查
+        if (rateLimitService != null) {
+            rateLimitService.checkTokenRateLimit(token.getId(), token.getRateLimit());
+        }
+
+        // 6. 构建转发请求
         String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
 
         RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
@@ -163,7 +179,7 @@ public class RelayService {
                 .build();
         usageLogService.save(usageLog);
 
-        // 更新渠道已用额度
+        // 8. 更新渠道已用额度
         channel.setUsedQuota(channel.getUsedQuota() + 1);
         channelRepository.save(channel);
     }

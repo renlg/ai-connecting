@@ -7,10 +7,28 @@ import Channels from './pages/Channels'
 import Tokens from './pages/Tokens'
 import Profile from './pages/Profile'
 import Users from './pages/Users'
+import Models from './pages/Models'
+import Coupons from './pages/Coupons'
 
 function PrivateRoute({ children }) {
   const token = localStorage.getItem('token')
-  return token ? children : <Navigate to="/login" />
+
+  if (!token) {
+    return <Navigate to="/login" replace />
+  }
+
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    if (payload.exp && payload.exp * 1000 < Date.now()) {
+      localStorage.clear()
+      return <Navigate to="/login" replace />
+    }
+  } catch {
+    localStorage.clear()
+    return <Navigate to="/login" replace />
+  }
+
+  return children
 }
 
 export default function App() {
@@ -24,6 +42,8 @@ export default function App() {
           <Route path="tokens" element={<Tokens />} />
           <Route path="profile" element={<Profile />} />
           <Route path="users" element={<Users />} />
+          <Route path="models" element={<Models />} />
+          <Route path="coupons" element={<Coupons />} />
         </Route>
       </Routes>
     </BrowserRouter>

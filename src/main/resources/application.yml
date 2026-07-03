@@ -30,8 +30,10 @@ spring:
           min-idle: 2         # 连接池最小空闲连接数
 
 app:
+  rate-limit:
+    enabled: true          # 限流功能开关（开启需要 Redis）
   jwt:
     secret: ai-connecting-secret-key-change-this-in-production-2024
     expiration: 86400000  # 24 hours in ms
   admin:
-    default-password: admin123
+    default-password: ${ADMIN_DEFAULT_PASSWORD:hk0SRCOYTS7rGhkGV7aqrvqN}

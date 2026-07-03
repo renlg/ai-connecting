@@ -49,4 +49,31 @@ public class UsageLogService {
         LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
         return getTotalTokensSince(startOfDay);
     }
+
+    public long getTotalInputTokens() {
+        return usageLogRepository.sumPromptTokens();
+    }
+
+    public long getTotalOutputTokens() {
+        return usageLogRepository.sumCompletionTokens();
+    }
+
+    public long getInputTokensToday() {
+        LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
+        return usageLogRepository.sumPromptTokensSince(startOfDay);
+    }
+
+    public long getOutputTokensToday() {
+        LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
+        return usageLogRepository.sumCompletionTokensSince(startOfDay);
+    }
+
+    public double getTotalCreditsConsumed() {
+        return usageLogRepository.sumCreditCost();
+    }
+
+    public double getCreditsConsumedToday() {
+        LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
+        return usageLogRepository.sumCreditCostSince(startOfDay);
+    }
 }

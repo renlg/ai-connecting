@@ -12,12 +12,16 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.http.MediaType;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+
+import jakarta.servlet.http.HttpServletResponse;
 
 @Configuration
 @EnableWebSecurity
@@ -42,11 +46,30 @@ public class SecurityConfig {
                 .requestMatchers("/v1/models").permitAll()
                 .requestMatchers("/v1/images/**").permitAll()
                 .requestMatchers("/v1/audio/**").permitAll()
+                // 仪表盘接口允许所有已认证用户访问（控制器内部按角色返回数据）
+                .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/dashboard").authenticated()
+                // 模型列表接口允许所有已认证用户访问（控制器内部按角色过滤）
+                .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/models").authenticated()
+                .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/models/enabled").authenticated()
                 // 管理接口需要 admin 角色
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 // 其他 API 需要认证
                 .requestMatchers("/api/**").authenticated()
                 .anyRequest().permitAll()
+            )
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                    response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+                    response.getWriter().write("{\"code\":401,\"message\":\"未登录或登录已过期，请重新登录\"}");
+                })
+                .accessDeniedHandler((request, response, accessDeniedException) -> {
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                    response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+                    response.getWriter().write("{\"code\":403,\"message\":\"权限不足\"}");
+                })
             )
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 

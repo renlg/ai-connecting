@@ -45,6 +45,9 @@ public class UsageLog {
     /** 耗时 (毫秒) */
     private Long duration;
 
+    /** 本次请求消耗的积分 (支持小数) */
+    private Double creditCost;
+
     /** 请求路径 */
     @Column(length = 500)
     private String requestPath;

@@ -8,6 +8,7 @@ import com.aiconnecting.entity.User;
 import com.aiconnecting.repository.UserRepository;
 import com.aiconnecting.security.JwtUtils;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class UserService {
 
@@ -27,7 +29,9 @@ public class UserService {
 
     @PostConstruct
     public void initAdmin() {
-        if (!userRepository.existsByUsername("admin")) {
+        if (userRepository.existsByUsername("admin")) {
+            log.info("admin 用户已存在，跳过初始化");
+        } else {
             User admin = User.builder()
                     .username("admin")
                     .password(passwordEncoder.encode(adminDefaultPassword))
@@ -38,6 +42,7 @@ public class UserService {
                     .status(1)
                     .build();
             userRepository.save(admin);
+            log.warn("数据库中无 admin 用户，已使用默认密码创建默认管理员，请尽快修改密码");
         }
     }
 

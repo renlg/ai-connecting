@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Form, Input, Button, Card, message, Tabs, Typography } from 'antd'
-import { UserOutlined, LockOutlined } from '@ant-design/icons'
+import { UserOutlined, LockOutlined, MailOutlined } from '@ant-design/icons'
 import { login, register } from '../api'
 
 const { Title } = Typography
@@ -82,6 +82,9 @@ export default function Login() {
                   </Form.Item>
                   <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
                     <Input.Password prefix={<LockOutlined />} placeholder="密码" />
+                  </Form.Item>
+                  <Form.Item name="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
+                    <Input prefix={<MailOutlined />} placeholder="邮箱" />
                   </Form.Item>
                   <Form.Item name="nickname">
                     <Input prefix={<UserOutlined />} placeholder="昵称 (可选)" />

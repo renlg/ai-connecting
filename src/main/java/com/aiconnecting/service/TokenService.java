@@ -38,8 +38,10 @@ public class TokenService {
                 .userId(userId)
                 .quota(request.getQuota() != null ? request.getQuota() : -1L)
                 .usedQuota(0L)
+                .credits(request.getCredits() != null ? request.getCredits() : -1.0)
                 .expiredAt(request.getExpiredAt())
                 .allowedModels(request.getAllowedModels())
+                .rateLimit(request.getRateLimit() != null ? request.getRateLimit() : 0)
                 .status(1)
                 .build();
 
@@ -50,8 +52,10 @@ public class TokenService {
         Token token = getById(id);
         if (request.getName() != null) token.setName(request.getName());
         if (request.getQuota() != null) token.setQuota(request.getQuota());
+        if (request.getCredits() != null) token.setCredits(request.getCredits());
         if (request.getExpiredAt() != null) token.setExpiredAt(request.getExpiredAt());
         if (request.getAllowedModels() != null) token.setAllowedModels(request.getAllowedModels());
+        if (request.getRateLimit() != null) token.setRateLimit(request.getRateLimit());
         return tokenRepository.save(token);
     }
 
@@ -96,4 +100,5 @@ public class TokenService {
             tokenRepository.save(token);
         }
     }
+
 }

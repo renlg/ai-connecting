@@ -1,15 +1,20 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Menu, Avatar, Dropdown, Space, theme } from 'antd'
+import { Layout, Menu, Avatar, Dropdown, Space, theme, Modal, Input, message } from 'antd'
 import {
   DashboardOutlined, ApiOutlined, KeyOutlined,
-  UserOutlined, TeamOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined
+  UserOutlined, TeamOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
+  RobotOutlined, GiftOutlined
 } from '@ant-design/icons'
+import { redeemCoupon } from '../api'
 
 const { Header, Sider, Content } = Layout
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false)
+  const [redeemOpen, setRedeemOpen] = useState(false)
+  const [redeemCode, setRedeemCode] = useState('')
+  const [redeemLoading, setRedeemLoading] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const { token: themeToken } = theme.useToken()
@@ -19,14 +24,21 @@ export default function AppLayout() {
 
   const menuItems = [
     { key: '/', icon: <DashboardOutlined />, label: '仪表盘' },
-    ...(isAdmin ? [{ key: '/channels', icon: <ApiOutlined />, label: '渠道管理' }] : []),
+    ...(isAdmin ? [
+      { key: '/channels', icon: <ApiOutlined />, label: '渠道管理' },
+      { key: '/models', icon: <RobotOutlined />, label: '模型管理' },
+    ] : []),
     { key: '/tokens', icon: <KeyOutlined />, label: 'Token 管理' },
-    ...(isAdmin ? [{ key: '/users', icon: <TeamOutlined />, label: '用户管理' }] : []),
+    ...(isAdmin ? [
+      { key: '/users', icon: <TeamOutlined />, label: '用户管理' },
+      { key: '/coupons', icon: <GiftOutlined />, label: '积分券管理' },
+    ] : []),
     { key: '/profile', icon: <UserOutlined />, label: '个人中心' },
   ]
 
   const userMenu = {
     items: [
+      { key: 'redeem', icon: <GiftOutlined />, label: '积分兑换', onClick: () => setRedeemOpen(true) },
       { key: 'profile', icon: <UserOutlined />, label: '个人中心', onClick: () => navigate('/profile') },
       { type: 'divider' },
       { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', onClick: () => {
@@ -35,6 +47,24 @@ export default function AppLayout() {
         navigate('/login')
       }},
     ]
+  }
+
+  const handleRedeem = async () => {
+    if (!redeemCode.trim()) {
+      message.warning('请输入兑换码')
+      return
+    }
+    setRedeemLoading(true)
+    try {
+      await redeemCoupon(redeemCode.trim())
+      message.success('兑换成功')
+      setRedeemOpen(false)
+      setRedeemCode('')
+    } catch (err) {
+      message.error(err?.message || '兑换失败')
+    } finally {
+      setRedeemLoading(false)
+    }
   }
 
   return (
@@ -65,6 +95,22 @@ export default function AppLayout() {
           <Outlet />
         </Content>
       </Layout>
+      <Modal
+        title="积分兑换"
+        open={redeemOpen}
+        onCancel={() => { setRedeemOpen(false); setRedeemCode('') }}
+        okText="兑换"
+        cancelText="取消"
+        confirmLoading={redeemLoading}
+        onOk={handleRedeem}
+      >
+        <Input
+          placeholder="请输入兑换码"
+          value={redeemCode}
+          onChange={(e) => setRedeemCode(e.target.value)}
+          onPressEnter={handleRedeem}
+        />
+      </Modal>
     </Layout>
   )
 }

@@ -3,6 +3,7 @@ package com.aiconnecting.service;
 import com.aiconnecting.common.BusinessException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
@@ -16,6 +17,7 @@ import java.util.Collections;
 @Service
 @RequiredArgsConstructor
 @Slf4j
+@ConditionalOnProperty(name = "app.rate-limit.enabled", havingValue = "true")
 public class RateLimitService {
 
     private final RedisTemplate<String, Long> redisTemplate;

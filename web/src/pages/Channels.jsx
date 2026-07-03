@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined } from '@ant-design/icons'
-import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus } from '../api'
+import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels } from '../api'
 
 export default function Channels() {
   const [channels, setChannels] = useState([])
@@ -9,6 +9,8 @@ export default function Channels() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
+  const [modelOptions, setModelOptions] = useState([])
+
 
   const load = () => {
     setLoading(true)
@@ -17,10 +19,22 @@ export default function Channels() {
     }).finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
+  const loadModels = () => {
+    getEnabledModels().then(res => {
+      if (res.code === 200) {
+        setModelOptions((res.data || []).map(m => ({ value: m.name, label: m.name })))
+      }
+    })
+  }
+
+  useEffect(() => { load(); loadModels() }, [])
 
   const handleSave = async () => {
     const values = await form.validateFields()
+    // 多选模型转逗号分隔字符串
+    if (values.models && Array.isArray(values.models)) {
+      values.models = values.models.join(',')
+    }
     if (editing) {
       await updateChannel(editing.id, values)
       message.success('更新成功')
@@ -52,13 +66,19 @@ export default function Channels() {
     { title: '类型', dataIndex: 'type', width: 100, render: v => <Tag color="blue">{v}</Tag> },
     { title: 'Base URL', dataIndex: 'baseUrl', ellipsis: true },
     { title: '模型', dataIndex: 'models', ellipsis: true, render: v => v ? v.split(',').map(m => <Tag key={m}>{m.trim()}</Tag>) : '-' },
-    { title: '优先级', dataIndex: 'priority', width: 80 },
-    { title: '已用额度', dataIndex: 'usedQuota', width: 100 },
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },
     {
       title: '操作', width: 150, render: (_, record) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(record); form.setFieldsValue(record); setModalOpen(true) }}>编辑</Button>
+          <Button size="small" icon={<EditOutlined />} onClick={() => {
+            setEditing(record)
+            const formValues = { ...record }
+            if (formValues.models && typeof formValues.models === 'string') {
+              formValues.models = formValues.models.split(',').map(m => m.trim()).filter(m => m)
+            }
+            form.setFieldsValue(formValues)
+            setModalOpen(true)
+          }}>编辑</Button>
           <Popconfirm title="确定删除？" onConfirm={() => handleDelete(record.id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
           </Popconfirm>
@@ -82,7 +102,15 @@ export default function Channels() {
           </Form.Item>
           <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true }]}><Input placeholder="https://api.openai.com" /></Form.Item>
           <Form.Item name="apiKey" label="API Key" rules={[{ required: true }]}><Input.Password placeholder="sk-xxx" /></Form.Item>
-          <Form.Item name="models" label="支持模型"><Input placeholder="gpt-4,gpt-3.5-turbo (逗号分隔)" /></Form.Item>
+          <Form.Item name="models" label="支持模型">
+            <Select
+              mode="tags"
+              placeholder="选择或输入模型名称"
+              options={modelOptions}
+              tokenSeparators={[',']}
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
           <Space>
             <Form.Item name="priority" label="优先级" initialValue={0}><InputNumber /></Form.Item>
             <Form.Item name="rateLimit" label="速率限制" initialValue={0}><InputNumber min={0} placeholder="0=不限" /></Form.Item>

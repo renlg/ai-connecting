@@ -44,17 +44,36 @@ export const updateChannelStatus = (id, status) => api.put(`/api/admin/channels/
 export const testChannel = (id) => api.post(`/api/admin/channels/${id}/test`);
 
 // Tokens
-export const getTokens = () => api.get('/api/tokens');
+export const getTokens = (search) => api.get('/api/tokens', { params: search ? { search } : {} });
 export const getToken = (id) => api.get(`/api/tokens/${id}`);
 export const createToken = (data) => api.post('/api/tokens', data);
 export const updateToken = (id, data) => api.put(`/api/tokens/${id}`, data);
 export const deleteToken = (id) => api.delete(`/api/tokens/${id}`);
 export const updateTokenStatus = (id, status) => api.put(`/api/tokens/${id}/status`, { status });
+export const getTokenCreditHistory = (id) => api.get(`/api/tokens/${id}/credit-history`);
+
+// Models (Admin)
+export const getModels = () => api.get('/api/admin/models');
+export const getEnabledModels = () => api.get('/api/admin/models/enabled');
+export const createModel = (data) => api.post('/api/admin/models', data);
+export const updateModel = (id, data) => api.put(`/api/admin/models/${id}`, data);
+export const deleteModel = (id) => api.delete(`/api/admin/models/${id}`);
+export const updateModelStatus = (id, status) => api.put(`/api/admin/models/${id}/status`, { status });
+export const batchCreateModels = (names) => api.post('/api/admin/models/batch', { names });
 
 // Admin
 export const getDashboard = () => api.get('/api/admin/dashboard');
-export const getUsers = () => api.get('/api/admin/users');
+export const getUsers = (search) => api.get('/api/admin/users', { params: search ? { search } : {} });
 export const updateUserStatus = (id, status) => api.put(`/api/admin/users/${id}/status`, { status });
+export const resetUserPassword = (id) => api.put(`/api/admin/users/${id}/reset-password`);
+export const updateUserCredits = (id, credits) => api.put(`/api/admin/users/${id}/credits`, { credits });
 export const getLogs = (page = 0, size = 20) => api.get(`/api/admin/logs?page=${page}&size=${size}`);
+
+// Coupons
+export const redeemCoupon = (code) => api.post('/api/user/coupons/redeem', { code });
+export const getCoupons = () => api.get('/api/admin/coupons');
+export const generateCoupon = (data) => api.post('/api/admin/coupons', data);
+export const updateCouponStatus = (id, status) => api.put(`/api/admin/coupons/${id}/status`, { status });
+export const getCouponRedemptions = (id) => api.get(`/api/admin/coupons/${id}/redemptions`);
 
 export default api;

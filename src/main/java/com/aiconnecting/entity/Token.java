@@ -39,6 +39,10 @@ public class Token {
     @Column(nullable = false)
     private Long usedQuota;
 
+    /** Token 积分 (-1=无限，与用户积分独立) */
+    @Column(nullable = false)
+    private Double credits;
+
     /** 过期时间 (null=永不过期) */
     private LocalDateTime expiredAt;
 
@@ -50,10 +54,18 @@ public class Token {
     @Column(length = 2000)
     private String allowedModels;
 
+    /** 速率限制 (每分钟请求数, 0=不限) */
+    @Column(columnDefinition = "integer default 0")
+    private Integer rateLimit;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
+
+    /** 所属用户名 (非数据库字段，用于前端展示) */
+    @Transient
+    private String ownerName;
 
     @PrePersist
     protected void onCreate() {
@@ -61,7 +73,9 @@ public class Token {
         updatedAt = LocalDateTime.now();
         if (quota == null) quota = -1L;
         if (usedQuota == null) usedQuota = 0L;
+        if (credits == null) credits = -1.0;
         if (status == null) status = 1;
+        if (rateLimit == null) rateLimit = 0;
     }
 
     @PreUpdate
