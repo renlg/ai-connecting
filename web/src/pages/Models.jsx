@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Space, Tag, message, Popconfirm, Switch, Tooltip } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, ThunderboltOutlined, WalletOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, EditOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { getModels, createModel, updateModel, deleteModel, updateModelStatus, batchCreateModels } from '../api'
 
 const { TextArea } = Input
@@ -13,9 +13,6 @@ export default function Models() {
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
   const [batchForm] = Form.useForm()
-  const [rateModalOpen, setRateModalOpen] = useState(false)
-  const [rateModel, setRateModel] = useState(null)
-  const [rateForm] = Form.useForm()
 
   const load = () => {
     setLoading(true)
@@ -70,17 +67,6 @@ export default function Models() {
     load()
   }
 
-  const handleUpdateRate = async () => {
-    const values = await rateForm.validateFields()
-    await updateModel(rateModel.id, {
-      inputCreditRate: values.inputCreditRate,
-      outputCreditRate: values.outputCreditRate,
-    })
-    message.success('积分比例已更新')
-    setRateModalOpen(false)
-    load()
-  }
-
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '模型名称', dataIndex: 'name', width: 180, render: v => <Tag color="blue">{v}</Tag> },
@@ -106,18 +92,13 @@ export default function Models() {
       render: v => v ? new Date(v).toLocaleString('zh-CN') : '-'
     },
     {
-      title: '操作', width: 220, fixed: 'right', render: (_, record) => (
+      title: '操作', width: 160, fixed: 'right', render: (_, record) => (
         <Space size="small" wrap>
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
             form.setFieldsValue(record)
             setModalOpen(true)
           }}>编辑</Button>
-          <Button size="small" icon={<WalletOutlined />} onClick={() => {
-            setRateModel(record)
-            rateForm.setFieldsValue({ inputCreditRate: record.inputCreditRate ?? 0, outputCreditRate: record.outputCreditRate ?? 0 })
-            setRateModalOpen(true)
-          }}>修改比例</Button>
           <Popconfirm title="确定删除该模型？" onConfirm={() => handleDelete(record.id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
           </Popconfirm>
@@ -172,17 +153,6 @@ export default function Models() {
         <div style={{ color: '#999', fontSize: 12 }}>提示：已存在的模型名称会自动跳过</div>
       </Modal>
 
-      {/* 修改积分比例 */}
-      <Modal title={`修改积分比例 - ${rateModel?.name || ''}`} open={rateModalOpen} onOk={handleUpdateRate} onCancel={() => setRateModalOpen(false)} width={500}>
-        <Form form={rateForm} layout="vertical">
-          <Form.Item name="inputCreditRate" label="输入积分比例（每1000 token）">
-            <InputNumber min={0} style={{ width: '100%' }} placeholder="每 1000 输入 token 消耗的积分数" />
-          </Form.Item>
-          <Form.Item name="outputCreditRate" label="输出积分比例（每1000 token）">
-            <InputNumber min={0} style={{ width: '100%' }} placeholder="每 1000 输出 token 消耗的积分数" />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   )
 }
