@@ -64,9 +64,9 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
     @Query("SELECT COALESCE(SUM(u.creditCost), 0.0) FROM UsageLog u WHERE u.tokenId IN :tokenIds AND u.createdAt >= :since")
     double sumCreditCostByTokenIdInSince(List<Long> tokenIds, LocalDateTime since);
 
-    @Query(value = "SELECT DATE(created_at) as date, COALESCE(SUM(credit_cost), 0) as credits " +
+    @Query(value = "SELECT DATE(created_at / 1000, 'unixepoch') as date, COALESCE(SUM(credit_cost), 0) as credits " +
             "FROM usage_logs WHERE token_id = ?1 AND created_at >= ?2 " +
-            "GROUP BY DATE(created_at) ORDER BY DATE(created_at) ASC", nativeQuery = true)
+            "GROUP BY DATE(created_at / 1000, 'unixepoch') ORDER BY date ASC", nativeQuery = true)
     List<Object[]> findDailyCreditCostByTokenIdSince(Long tokenId, LocalDateTime since);
 
     // Dashboard 聚合查询：一次查询获取所有指标

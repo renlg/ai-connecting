@@ -94,15 +94,15 @@ public class UsageLogService {
      * 事务性记录使用日志并更新额度（由 RelayService 调用，确保 @Transactional 生效）
      */
     @Transactional
-    public void recordUsageAndQuotas(UsageLog usageLog, Long tokenId, Long channelId, int totalTokens) {
+    public void recordUsageAndQuotas(UsageLog usageLog, Long tokenId, Long channelId, int totalTokens, Long userId) {
         usageLogRepository.save(usageLog);
         // 原子更新 token 额度
         if (totalTokens > 0) {
             channelRepository.addUsedQuota(channelId, totalTokens);
         }
         // 扣减用户积分
-        if (usageLog.getCreditCost() != null && usageLog.getCreditCost() > 0) {
-            userRepository.deductCredits(usageLog.getTokenId(), usageLog.getCreditCost());
+        if (usageLog.getCreditCost() != null && usageLog.getCreditCost() > 0 && userId != null) {
+            userRepository.deductCredits(userId, usageLog.getCreditCost());
         }
     }
 

@@ -286,7 +286,7 @@ public class RelayService {
                 .build();
 
         // 11. 事务性记录日志并更新额度
-        usageLogService.recordUsageAndQuotas(usageLog, token.getId(), usedChannel.getId(), totalTokens);
+        usageLogService.recordUsageAndQuotas(usageLog, token.getId(), usedChannel.getId(), totalTokens, token.getUserId());
         tokenService.addUsedQuota(token.getId(), totalTokens);
     }
 
@@ -341,7 +341,7 @@ public class RelayService {
                     .promptTokens(promptTokens).completionTokens(completionTokens).totalTokens(totalTokens)
                     .creditCost(creditCost).ip(getClientIp(httpRequest)).duration(duration)
                     .requestPath("/v1/messages").build();
-            usageLogService.recordUsageAndQuotas(usageLog, token.getId(), result.channel().getId(), totalTokens);
+            usageLogService.recordUsageAndQuotas(usageLog, token.getId(), result.channel().getId(), totalTokens, token.getUserId());
             tokenService.addUsedQuota(token.getId(), totalTokens);
             return result.response();
         } else {
@@ -516,7 +516,7 @@ public class RelayService {
                 .promptTokens(promptTokens).completionTokens(completionTokens).totalTokens(totalTokens)
                 .creditCost(creditCost).ip(getClientIp(httpRequest)).duration(duration)
                 .requestPath("/v1/messages").build();
-        usageLogService.recordUsageAndQuotas(usageLog, token.getId(), usedChannel.getId(), totalTokens);
+        usageLogService.recordUsageAndQuotas(usageLog, token.getId(), usedChannel.getId(), totalTokens, token.getUserId());
         tokenService.addUsedQuota(token.getId(), totalTokens);
     }
 
@@ -662,7 +662,7 @@ public class RelayService {
                 .promptTokens(promptTokens).completionTokens(completionTokens).totalTokens(totalTokens)
                 .creditCost(creditCost).ip(getClientIp(httpRequest)).duration(duration)
                 .requestPath("/v1/messages").build();
-        usageLogService.recordUsageAndQuotas(usageLog, token.getId(), usedChannel.getId(), totalTokens);
+        usageLogService.recordUsageAndQuotas(usageLog, token.getId(), usedChannel.getId(), totalTokens, token.getUserId());
         tokenService.addUsedQuota(token.getId(), totalTokens);
     }
 
@@ -867,7 +867,7 @@ public class RelayService {
                 .build();
 
         // 事务性记录日志并更新额度
-        usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(), totalTokens);
+        usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(), totalTokens, token.getUserId());
         tokenService.addUsedQuota(token.getId(), totalTokens);
     }
 
