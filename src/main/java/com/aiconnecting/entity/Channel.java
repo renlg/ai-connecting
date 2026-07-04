@@ -35,9 +35,9 @@ public class Channel {
     @Column(nullable = false, length = 1000)
     private String apiKey;
 
-    /** 支持的模型列表, 逗号分隔 */
+    /** 支持的模型ID列表, 逗号分隔 */
     @Column(length = 2000)
-    private String models;
+    private String modelIds;
 
     /** 状态: 1=启用, 0=禁用 */
     @Column(nullable = false)

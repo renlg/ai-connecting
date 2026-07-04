@@ -5,7 +5,10 @@ import com.aiconnecting.dto.ChannelRequest;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.service.ChannelService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+
+import jakarta.servlet.http.HttpServletResponse;
 
 import java.util.List;
 import java.util.Map;
@@ -52,5 +55,24 @@ public class ChannelController {
     @PostMapping("/{id}/test")
     public ApiResponse<Boolean> test(@PathVariable Long id) {
         return ApiResponse.success(channelService.testChannel(id));
+    }
+
+    /**
+     * 从上游渠道获取支持的模型列表
+     */
+    @PostMapping("/fetch-models")
+    public ApiResponse<List<String>> fetchModels(@RequestBody Map<String, String> request) {
+        String baseUrl = request.get("baseUrl");
+        String apiKey = request.get("apiKey");
+        String type = request.get("type");
+        return ApiResponse.success(channelService.fetchUpstreamModels(baseUrl, apiKey, type));
+    }
+
+    /**
+     * 测试渠道聊天功能（流式）
+     */
+    @PostMapping(value = "/test-chat-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public void testChatStream(@RequestBody Map<String, String> request, HttpServletResponse response) throws Exception {
+        channelService.testChatStream(request, response);
     }
 }

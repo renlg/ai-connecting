@@ -6,6 +6,7 @@ import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.repository.UsageLogRepository;
 import com.aiconnecting.repository.UserRepository;
+import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
@@ -47,6 +48,9 @@ class TokenControllerTest {
 
     @MockBean
     private UsageLogRepository usageLogRepository;
+
+    @MockBean
+    private RelayService relayService;
 
     @MockBean
     private JwtUtils jwtUtils;
@@ -251,5 +255,202 @@ class TokenControllerTest {
                         .content("{\"status\":0}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200));
+    }
+
+    // ==================== TestChat ====================
+
+    @Test
+    void testChat_openai_success() throws Exception {
+        // Mock relayService.resolveModelName
+        when(relayService.resolveModelName("GPT-4o")).thenReturn("gpt-4o");
+        // Mock relayService.relayRequest - return a valid OpenAI response JSON
+        String openAiResponse = """
+                {
+                    "choices": [{"message": {"content": "Hello!"}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+                }
+                """;
+        when(relayService.relayRequest(eq("sk-test-key"), eq("/v1/chat/completions"),
+                anyString(), eq("gpt-4o"), isNull())).thenReturn(openAiResponse);
+
+        String body = """
+                {
+                    "tokenKey": "sk-test-key",
+                    "protocol": "openai",
+                    "model": "GPT-4o",
+                    "message": "hi"
+                }
+                """;
+
+        mockMvc.perform(post("/api/tokens/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.success").value(true))
+                .andExpect(jsonPath("$.data.content").value("Hello!"))
+                .andExpect(jsonPath("$.data.protocol").value("openai"))
+                .andExpect(jsonPath("$.data.usage.prompt_tokens").value(5))
+                .andExpect(jsonPath("$.data.usage.completion_tokens").value(3))
+                .andExpect(jsonPath("$.data.usage.total_tokens").value(8));
+    }
+
+    @Test
+    void testChat_claude_success() throws Exception {
+        when(relayService.resolveModelName("Claude-3-Opus")).thenReturn("claude-3-opus-20240229");
+        String claudeResponse = """
+                {
+                    "content": [{"type": "text", "text": "Hi there!"}],
+                    "usage": {"input_tokens": 10, "output_tokens": 5}
+                }
+                """;
+        when(relayService.claudeRelayRequest(eq("sk-test-key"), anyString(),
+                eq("claude-3-opus-20240229"), isNull())).thenReturn(claudeResponse);
+
+        String body = """
+                {
+                    "tokenKey": "sk-test-key",
+                    "protocol": "claude",
+                    "model": "Claude-3-Opus",
+                    "message": "hello"
+                }
+                """;
+
+        mockMvc.perform(post("/api/tokens/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.success").value(true))
+                .andExpect(jsonPath("$.data.content").value("Hi there!"))
+                .andExpect(jsonPath("$.data.protocol").value("claude"))
+                .andExpect(jsonPath("$.data.usage.input_tokens").value(10))
+                .andExpect(jsonPath("$.data.usage.output_tokens").value(5));
+    }
+
+    @Test
+    void testChat_missingTokenKey() throws Exception {
+        String body = """
+                {
+                    "protocol": "openai",
+                    "model": "gpt-4",
+                    "message": "hi"
+                }
+                """;
+
+        mockMvc.perform(post("/api/tokens/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("缺少 Token Key"));
+    }
+
+    @Test
+    void testChat_blankTokenKey() throws Exception {
+        String body = """
+                {
+                    "tokenKey": "  ",
+                    "protocol": "openai",
+                    "model": "gpt-4",
+                    "message": "hi"
+                }
+                """;
+
+        mockMvc.perform(post("/api/tokens/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("缺少 Token Key"));
+    }
+
+    @Test
+    void testChat_missingModel() throws Exception {
+        String body = """
+                {
+                    "tokenKey": "sk-test-key",
+                    "protocol": "openai",
+                    "message": "hi"
+                }
+                """;
+
+        mockMvc.perform(post("/api/tokens/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("请选择模型"));
+    }
+
+    @Test
+    void testChat_businessException() throws Exception {
+        when(relayService.resolveModelName("GPT-4o")).thenReturn("gpt-4o");
+        when(relayService.relayRequest(eq("sk-invalid"), anyString(),
+                anyString(), eq("gpt-4o"), isNull()))
+                .thenThrow(new BusinessException(401, "无效的 Token"));
+
+        String body = """
+                {
+                    "tokenKey": "sk-invalid",
+                    "protocol": "openai",
+                    "model": "GPT-4o",
+                    "message": "hi"
+                }
+                """;
+
+        mockMvc.perform(post("/api/tokens/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.success").value(false))
+                .andExpect(jsonPath("$.data.error").value("无效的 Token"));
+    }
+
+    @Test
+    void testChat_runtimeException() throws Exception {
+        when(relayService.resolveModelName("GPT-4o")).thenReturn("gpt-4o");
+        when(relayService.relayRequest(eq("sk-test-key"), anyString(),
+                anyString(), eq("gpt-4o"), isNull()))
+                .thenThrow(new RuntimeException("Connection timeout"));
+
+        String body = """
+                {
+                    "tokenKey": "sk-test-key",
+                    "protocol": "openai",
+                    "model": "GPT-4o",
+                    "message": "hi"
+                }
+                """;
+
+        mockMvc.perform(post("/api/tokens/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.success").value(false))
+                .andExpect(jsonPath("$.data.error").value("请求失败: Connection timeout"));
+    }
+
+    @Test
+    void testChat_defaultMessage() throws Exception {
+        when(relayService.resolveModelName("gpt-4")).thenReturn("gpt-4");
+        String openAiResponse = """
+                {
+                    "choices": [{"message": {"content": "Hello!"}}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+                }
+                """;
+        when(relayService.relayRequest(eq("sk-test-key"), eq("/v1/chat/completions"),
+                anyString(), eq("gpt-4"), isNull())).thenReturn(openAiResponse);
+
+        // message is null -> should default to "hi"
+        String body = """
+                {
+                    "tokenKey": "sk-test-key",
+                    "protocol": "openai",
+                    "model": "gpt-4"
+                }
+                """;
+
+        mockMvc.perform(post("/api/tokens/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.success").value(true));
     }
 }

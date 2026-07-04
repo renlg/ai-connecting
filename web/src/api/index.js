@@ -42,6 +42,112 @@ export const updateChannel = (id, data) => api.put(`/api/admin/channels/${id}`, 
 export const deleteChannel = (id) => api.delete(`/api/admin/channels/${id}`);
 export const updateChannelStatus = (id, status) => api.put(`/api/admin/channels/${id}/status`, { status });
 export const testChannel = (id) => api.post(`/api/admin/channels/${id}/test`);
+export const fetchChannelModels = (data) => api.post('/api/admin/channels/fetch-models', data);
+export const testChannelChat = (data) => api.post('/api/admin/channels/test-chat', data);
+
+// 流式测试渠道聊天（返回 ReadableStream）
+export async function testChannelChatStream(data, onChunk, onComplete, onError) {
+  const token = localStorage.getItem('token');
+  const response = await fetch('/api/admin/channels/test-chat-stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify(data)
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed === 'data: [DONE]') {
+          onComplete && onComplete();
+          return;
+        }
+        if (trimmed.startsWith('data: ')) {
+          try {
+            const json = JSON.parse(trimmed.slice(6));
+            onChunk && onChunk(json);
+          } catch (e) {
+            console.error('Parse SSE error:', e, trimmed);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    onError && onError(err);
+    throw err;
+  }
+}
+
+// Token 流式测试
+export async function testTokenChatStream(data, onChunk, onComplete, onError) {
+  const token = localStorage.getItem('token');
+  const response = await fetch('/api/tokens/test-chat-stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify(data)
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed === 'data: [DONE]') {
+          onComplete && onComplete();
+          return;
+        }
+        if (trimmed.startsWith('data: ')) {
+          try {
+            const json = JSON.parse(trimmed.slice(6));
+            onChunk && onChunk(json);
+          } catch (e) {
+            console.error('Parse SSE error:', e, trimmed);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    onError && onError(err);
+    throw err;
+  }
+}
 
 // Tokens
 export const getTokens = (search) => api.get('/api/tokens', { params: search ? { search } : {} });
@@ -51,6 +157,8 @@ export const updateToken = (id, data) => api.put(`/api/tokens/${id}`, data);
 export const deleteToken = (id) => api.delete(`/api/tokens/${id}`);
 export const updateTokenStatus = (id, status) => api.put(`/api/tokens/${id}/status`, { status });
 export const getTokenCreditHistory = (id) => api.get(`/api/tokens/${id}/credit-history`);
+export const testTokenChat = (data) => api.post('/api/tokens/test-chat', data);
+export const getTokenModels = () => api.get('/api/tokens/models');
 
 // Models (Admin)
 export const getModels = () => api.get('/api/admin/models');

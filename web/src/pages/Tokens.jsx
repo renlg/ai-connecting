@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined } from '@ant-design/icons'
-import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getEnabledModels, getTokenCreditHistory } from '../api'
+import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
+import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, testTokenChatStream, getTokenModels } from '../api'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
@@ -12,12 +12,20 @@ export default function Tokens() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
-  const [modelOptions, setModelOptions] = useState([])
   const [searchText, setSearchText] = useState('')
   const [historyModalOpen, setHistoryModalOpen] = useState(false)
   const [historyToken, setHistoryToken] = useState(null)
   const [historyData, setHistoryData] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [testModalOpen, setTestModalOpen] = useState(false)
+  const [testToken, setTestToken] = useState(null)
+  const [testProtocol, setTestProtocol] = useState('openai')
+  const [testModel, setTestModel] = useState('')
+  const [testMessage, setTestMessage] = useState('')
+  const [testResult, setTestResult] = useState(null)
+  const [testLoading, setTestLoading] = useState(false)
+  const [modelOptions, setModelOptions] = useState([])
+  const [streamContent, setStreamContent] = useState('')
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const isAdmin = user.role === 'admin'
 
@@ -28,18 +36,20 @@ export default function Tokens() {
     }).finally(() => setLoading(false))
   }
 
+  useEffect(() => { load() }, [])
+
   const loadModels = () => {
-    getEnabledModels().then(res => {
+    getTokenModels().then(res => {
       if (res.code === 200) {
         setModelOptions((res.data || []).map(m => ({
-          value: m.name,
-          label: m.displayName || m.name
+          value: m.displayName,
+          label: m.displayName
         })))
       }
     })
   }
 
-  useEffect(() => { load(); loadModels() }, [])
+  useEffect(() => { loadModels() }, [])
 
   const handleSearch = (value) => {
     setSearchText(value)
@@ -48,10 +58,6 @@ export default function Tokens() {
 
   const handleSave = async () => {
     const values = await form.validateFields()
-    // 多选模型转逗号分隔字符串
-    if (values.allowedModels && Array.isArray(values.allowedModels)) {
-      values.allowedModels = values.allowedModels.join(',')
-    }
     if (editing) {
       await updateToken(editing.id, values)
       message.success('更新成功')
@@ -106,6 +112,49 @@ export default function Tokens() {
     }
   }
 
+  const handleTestChat = async () => {
+    if (!testModel) {
+      message.warning('请选择模型')
+      return
+    }
+    setTestLoading(true)
+    setStreamContent('')
+    setTestResult({ success: true, protocol: testProtocol })
+    
+    const startTime = Date.now()
+    try {
+      await testTokenChatStream(
+        {
+          tokenKey: testToken.tokenKey,
+          protocol: testProtocol,
+          model: testModel,
+          message: testMessage || 'hi'
+        },
+        (chunk) => {
+          // 累积流式内容
+          if (chunk.content) {
+            setStreamContent(prev => prev + chunk.content)
+          }
+          // 更新耗时
+          setTestResult(prev => ({ ...prev, duration: Date.now() - startTime }))
+        },
+        () => {
+          // 完成
+          setTestLoading(false)
+          message.success('测试完成')
+        },
+        (err) => {
+          setTestLoading(false)
+          setTestResult({ success: false, error: err.message || '请求失败' })
+          message.error(err.message || '请求失败')
+        }
+      )
+    } catch (err) {
+      setTestLoading(false)
+      setTestResult({ success: false, error: err.message || '请求失败' })
+    }
+  }
+
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '名称', dataIndex: 'name', width: 120 },
@@ -121,21 +170,24 @@ export default function Tokens() {
     },
     { title: '积分', dataIndex: 'credits', width: 100, render: v => v === -1 ? '无限' : (v != null ? Math.round(Number(v)) + ' 积分' : '0 积分') },
     ...(isAdmin ? [{ title: '限流(次/分)', dataIndex: 'rateLimit', width: 100, render: v => v === 0 ? '不限' : v + ' 次/分' }] : []),
-    { title: '允许模型', dataIndex: 'allowedModels', ellipsis: true, render: v => v ? v.split(',').map(m => <Tag key={m}>{m.trim()}</Tag>) : '全部' },
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },
     {
-      title: '操作', width: 220, fixed: 'right', render: (_, record) => (
+      title: '操作', width: 280, fixed: 'right', render: (_, record) => (
         <Space size="small" wrap>
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
-            const formValues = { ...record }
-            if (formValues.allowedModels && typeof formValues.allowedModels === 'string') {
-              formValues.allowedModels = formValues.allowedModels.split(',').map(m => m.trim()).filter(m => m)
-            }
-            form.setFieldsValue(formValues)
+            form.setFieldsValue(record)
             setModalOpen(true)
           }}>编辑</Button>
           <Button size="small" icon={<BarChartOutlined />} onClick={() => openCreditHistory(record)}>消耗记录</Button>
+          <Button size="small" icon={<ExperimentOutlined />} onClick={() => {
+            setTestToken(record)
+            setTestProtocol('openai')
+            setTestModel(modelOptions.length > 0 ? modelOptions[0].value : '')
+            setTestMessage('')
+            setTestResult(null)
+            setTestModalOpen(true)
+          }}>测试</Button>
           <Popconfirm title="确定删除？" onConfirm={() => handleDelete(record.id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
           </Popconfirm>
@@ -166,15 +218,6 @@ export default function Tokens() {
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="Token 名称" /></Form.Item>
           <Form.Item name="credits" label="积分" initialValue={-1}><InputNumber style={{ width: '100%' }} placeholder="-1 表示无限" /></Form.Item>
-          <Form.Item name="allowedModels" label="允许模型">
-            <Select
-              mode="multiple"
-              placeholder="选择允许的模型（空=全部）"
-              options={modelOptions}
-              allowClear
-              style={{ width: '100%' }}
-            />
-          </Form.Item>
           {isAdmin && (
             <Form.Item name="rateLimit" label="限流(每分钟请求数)" initialValue={0} tooltip="0 表示不限流">
               <InputNumber style={{ width: '100%' }} min={0} step={10} placeholder="每分钟最大请求数，0 表示不限" />
@@ -201,6 +244,87 @@ export default function Tokens() {
           size="small"
           locale={{ emptyText: '暂无消耗记录' }}
         />
+      </Modal>
+
+      {/* Token 测试弹窗 */}
+      <Modal
+        title={`Token 测试 - ${testToken?.name || ''}`}
+        open={testModalOpen}
+        onCancel={() => setTestModalOpen(false)}
+        footer={null}
+        width={600}
+      >
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 8 }}>协议：</div>
+          <Select
+            value={testProtocol}
+            onChange={setTestProtocol}
+            style={{ width: '100%' }}
+            options={[
+              { value: 'openai', label: 'OpenAI（/v1/chat/completions）' },
+              { value: 'claude', label: 'Claude CC（/v1/messages）' }
+            ]}
+          />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 8 }}>模型：</div>
+          <Select
+            value={testModel}
+            onChange={setTestModel}
+            style={{ width: '100%' }}
+            options={modelOptions}
+            placeholder="选择模型"
+            showSearch
+            optionFilterProp="label"
+          />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 8 }}>消息：</div>
+          <Input.TextArea
+            value={testMessage}
+            onChange={e => setTestMessage(e.target.value)}
+            placeholder="输入测试消息，不填则默认发送 hi"
+            rows={2}
+            onPressEnter={e => { if (e.ctrlKey || e.metaKey) handleTestChat() }}
+          />
+        </div>
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
+          loading={testLoading}
+          onClick={handleTestChat}
+          block
+        >
+          发送测试 (Ctrl+Enter)
+        </Button>
+
+        {testResult && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong>响应结果：</strong>
+              <Space>
+                {testResult.protocol && <Tag color="blue">{testResult.protocol.toUpperCase()}</Tag>}
+                {testResult.success ? (
+                  <Tag color="green">✓ 成功</Tag>
+                ) : (
+                  <Tag color="red">✗ 失败</Tag>
+                )}
+                {testResult.duration && <Tag>{testResult.duration}ms</Tag>}
+              </Space>
+            </div>
+            {testResult.success ? (
+              <div>
+                <div style={{ background: '#f5f5f5', padding: 12, borderRadius: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 14, minHeight: 80 }}>
+                  {streamContent || (testLoading ? '正在接收...' : '(空响应)')}
+                </div>
+              </div>
+            ) : (
+              <div style={{ background: '#fff2f0', padding: 12, borderRadius: 6, color: '#ff4d4f', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 13 }}>
+                {testResult.error || '未知错误'}
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   )

@@ -5,6 +5,7 @@ import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.repository.ChannelRepository;
 import com.aiconnecting.repository.ModelConfigRepository;
 import com.aiconnecting.repository.UsageLogRepository;
+import com.aiconnecting.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -25,6 +26,7 @@ public class UsageLogService {
     private final UsageLogRepository usageLogRepository;
     private final ChannelRepository channelRepository;
     private final ModelConfigRepository modelConfigRepository;
+    private final UserRepository userRepository;
 
     public UsageLog save(UsageLog log) {
         return usageLogRepository.save(log);
@@ -98,6 +100,10 @@ public class UsageLogService {
         if (totalTokens > 0) {
             channelRepository.addUsedQuota(channelId, totalTokens);
         }
+        // 扣减用户积分
+        if (usageLog.getCreditCost() != null && usageLog.getCreditCost() > 0) {
+            userRepository.deductCredits(usageLog.getTokenId(), usageLog.getCreditCost());
+        }
     }
 
     /**
@@ -106,7 +112,8 @@ public class UsageLogService {
     public double calculateCreditCost(String model, int promptTokens, int completionTokens) {
         if (promptTokens == 0 && completionTokens == 0) return 0.0;
 
-        ModelConfig modelConfig = modelConfigRepository.findByName(model).orElse(null);
+        List<ModelConfig> models = modelConfigRepository.findByName(model);
+        ModelConfig modelConfig = models.isEmpty() ? null : models.get(0);
         if (modelConfig == null) return 0.0;
 
         double inputCost = (promptTokens / 1000.0) * modelConfig.getInputCreditRate();

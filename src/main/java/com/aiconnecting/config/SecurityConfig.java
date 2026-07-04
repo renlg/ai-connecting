@@ -46,6 +46,8 @@ public class SecurityConfig {
                 .requestMatchers("/v1/models").permitAll()
                 .requestMatchers("/v1/images/**").permitAll()
                 .requestMatchers("/v1/audio/**").permitAll()
+                .requestMatchers("/v1/messages").permitAll()
+                .requestMatchers("/v1/messages/**").permitAll()
                 // 仪表盘接口允许所有已认证用户访问（控制器内部按角色返回数据）
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/dashboard").authenticated()
                 // 模型列表接口允许所有已认证用户访问（控制器内部按角色过滤）

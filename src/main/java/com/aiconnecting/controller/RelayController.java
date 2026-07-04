@@ -2,8 +2,12 @@ package com.aiconnecting.controller;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.entity.Channel;
+import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.Token;
-import com.aiconnecting.service.ChannelService;
+import com.aiconnecting.entity.User;
+import com.aiconnecting.repository.ChannelRepository;
+import com.aiconnecting.repository.ModelConfigRepository;
+import com.aiconnecting.repository.UserRepository;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -16,7 +20,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * OpenAI 兼容 API 中转控制器
@@ -28,8 +31,10 @@ import java.util.stream.Collectors;
 public class RelayController {
 
     private final RelayService relayService;
-    private final ChannelService channelService;
     private final TokenService tokenService;
+    private final ModelConfigRepository modelConfigRepository;
+    private final ChannelRepository channelRepository;
+    private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
 
     /**
@@ -41,6 +46,46 @@ public class RelayController {
                                   HttpServletRequest request,
                                   HttpServletResponse response) throws IOException {
         return handleRelayRequest(authHeader, requestBody, "/v1/chat/completions", request, response);
+    }
+
+    /**
+     * Claude Messages API (兼容 CC 协议)
+     * 接收 Claude 格式请求，内部转换为 OpenAI 格式发送给上游，响应转换回 Claude 格式
+     */
+    @PostMapping("/v1/messages")
+    public Object claudeMessages(@RequestHeader(value = "Authorization", required = false) String authHeader,
+                                  @RequestHeader(value = "x-api-key", required = false) String apiKey,
+                                  @RequestBody String requestBody,
+                                  HttpServletRequest request,
+                                  HttpServletResponse response) throws IOException {
+        // 支持 Bearer Token 和 x-api-key 两种认证方式
+        String tokenKey;
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            tokenKey = authHeader.substring(7);
+        } else if (apiKey != null && !apiKey.isBlank()) {
+            tokenKey = apiKey;
+        } else {
+            throw new BusinessException(401, "缺少认证信息，请使用 Authorization: Bearer <token> 或 x-api-key: <token>");
+        }
+
+        JsonNode jsonBody = objectMapper.readTree(requestBody);
+        String model = jsonBody.has("model") ? jsonBody.get("model").asText() : "";
+        // 将 displayName 转换为实际模型名
+        String resolvedModel = relayService.resolveModelName(model);
+        if (!resolvedModel.equals(model)) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
+            requestBody = objectMapper.writeValueAsString(jsonBody);
+        }
+
+        boolean stream = jsonBody.has("stream") && jsonBody.get("stream").asBoolean();
+
+        if (stream) {
+            relayService.claudeRelayStreamRequest(tokenKey, requestBody, resolvedModel, request, response);
+            return null;
+        }
+
+        String result = relayService.claudeRelayRequest(tokenKey, requestBody, resolvedModel, request);
+        return objectMapper.readTree(result);
     }
 
     /**
@@ -98,25 +143,34 @@ public class RelayController {
         String tokenKey = extractTokenKey(authHeader);
         Token token = tokenService.validateTokenKey(tokenKey);
 
-        List<Channel> channels = channelService.listAll().stream()
-                .filter(c -> c.getStatus() == 1)
-                .collect(Collectors.toList());
+        boolean isAdmin = userRepository.findById(token.getUserId())
+                .map(u -> "admin".equals(u.getRole()))
+                .orElse(false);
 
-        Set<String> modelSet = new LinkedHashSet<>();
-        for (Channel channel : channels) {
-            if (channel.getModels() != null && !channel.getModels().isEmpty()) {
-                for (String model : channel.getModels().split(",")) {
-                    modelSet.add(model.trim());
+        List<ModelConfig> models = isAdmin
+                ? modelConfigRepository.findByStatusOrderByStatusDescNameAsc(1)
+                : modelConfigRepository.findByStatusAndAdminOnlyFalseOrderByStatusDescNameAsc(1);
+
+        // 收集所有启用渠道配置的模型ID
+        Set<String> channelModelIds = new LinkedHashSet<>();
+        for (Channel channel : channelRepository.findByStatusOrderByPriorityDesc(1)) {
+            if (channel.getModelIds() != null && !channel.getModelIds().isEmpty()) {
+                for (String modelId : channel.getModelIds().split(",")) {
+                    channelModelIds.add(modelId.trim());
                 }
             }
         }
 
         List<Map<String, Object>> modelList = new ArrayList<>();
-        for (String model : modelSet) {
+        for (ModelConfig model : models) {
+            // 检查模型ID是否在渠道配置中
+            if (!channelModelIds.contains(String.valueOf(model.getId()))) {
+                continue;
+            }
             Map<String, Object> modelObj = new LinkedHashMap<>();
-            modelObj.put("id", model);
+            modelObj.put("id", model.getDisplayName());
             modelObj.put("object", "model");
-            modelObj.put("created", System.currentTimeMillis() / 1000);
+            modelObj.put("created", model.getCreatedAt().atZone(java.time.ZoneId.systemDefault()).toEpochSecond());
             modelObj.put("owned_by", "ai-connecting");
             modelList.add(modelObj);
         }
@@ -143,6 +197,15 @@ public class RelayController {
         String tokenKey = extractTokenKey(authHeader);
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.has("model") ? jsonBody.get("model").asText() : "";
+
+        // 将 displayName 转换为实际模型名
+        String resolvedModel = relayService.resolveModelName(model);
+        if (!resolvedModel.equals(model)) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
+            requestBody = objectMapper.writeValueAsString(jsonBody);
+        }
+        model = resolvedModel;
+
         boolean stream = jsonBody.has("stream") && jsonBody.get("stream").asBoolean();
 
         if (stream && response != null) {

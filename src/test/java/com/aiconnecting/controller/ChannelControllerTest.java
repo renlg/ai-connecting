@@ -16,6 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -202,5 +203,236 @@ class ChannelControllerTest {
         mockMvc.perform(post("/api/admin/channels/99/test"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("渠道不存在"));
+    }
+
+    // ==================== FetchModels ====================
+
+    @Test
+    void fetchModels_success() throws Exception {
+        when(channelService.fetchUpstreamModels(eq("https://api.openai.com"), eq("sk-xxx"), eq("openai")))
+                .thenReturn(List.of("gpt-4", "gpt-4o", "gpt-3.5-turbo"));
+
+        String body = """
+                {
+                    "baseUrl": "https://api.openai.com",
+                    "apiKey": "sk-xxx",
+                    "type": "openai"
+                }
+                """;
+
+        mockMvc.perform(post("/api/admin/channels/fetch-models")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data").isArray())
+                .andExpect(jsonPath("$.data.length()").value(3))
+                .andExpect(jsonPath("$.data[0]").value("gpt-4"));
+    }
+
+    @Test
+    void fetchModels_emptyResult() throws Exception {
+        when(channelService.fetchUpstreamModels(eq("https://api.example.com"), eq("sk-yyy"), eq("openai")))
+                .thenReturn(List.of());
+
+        String body = """
+                {
+                    "baseUrl": "https://api.example.com",
+                    "apiKey": "sk-yyy",
+                    "type": "openai"
+                }
+                """;
+
+        mockMvc.perform(post("/api/admin/channels/fetch-models")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isEmpty());
+    }
+
+    @Test
+    void fetchModels_missingBaseUrl() throws Exception {
+        when(channelService.fetchUpstreamModels(isNull(), eq("sk-xxx"), eq("openai")))
+                .thenThrow(new BusinessException("请先填写 Base URL 和 API Key"));
+
+        String body = """
+                {
+                    "apiKey": "sk-xxx",
+                    "type": "openai"
+                }
+                """;
+
+        mockMvc.perform(post("/api/admin/channels/fetch-models")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("请先填写 Base URL 和 API Key"));
+    }
+
+    @Test
+    void fetchModels_missingApiKey() throws Exception {
+        when(channelService.fetchUpstreamModels(eq("https://api.openai.com"), isNull(), eq("openai")))
+                .thenThrow(new BusinessException("请先填写 Base URL 和 API Key"));
+
+        String body = """
+                {
+                    "baseUrl": "https://api.openai.com",
+                    "type": "openai"
+                }
+                """;
+
+        mockMvc.perform(post("/api/admin/channels/fetch-models")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("请先填写 Base URL 和 API Key"));
+    }
+
+    @Test
+    void fetchModels_claudeType() throws Exception {
+        when(channelService.fetchUpstreamModels(eq("https://api.anthropic.com"), eq("sk-ant-xxx"), eq("claude")))
+                .thenReturn(List.of("claude-3-opus-20240229", "claude-3-sonnet-20240229"));
+
+        String body = """
+                {
+                    "baseUrl": "https://api.anthropic.com",
+                    "apiKey": "sk-ant-xxx",
+                    "type": "claude"
+                }
+                """;
+
+        mockMvc.perform(post("/api/admin/channels/fetch-models")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[0]").value("claude-3-opus-20240229"));
+    }
+
+    // ==================== TestChat ====================
+
+    @Test
+    void testChat_openai_success() throws Exception {
+        Map<String, Object> chatResult = new java.util.LinkedHashMap<>();
+        chatResult.put("success", true);
+        chatResult.put("content", "Hello!");
+        chatResult.put("duration", 500L);
+        when(channelService.testChat(eq("https://api.openai.com"), eq("sk-xxx"), eq("openai"), eq("gpt-4"), eq("hi")))
+                .thenReturn(chatResult);
+
+        String body = """
+                {
+                    "baseUrl": "https://api.openai.com",
+                    "apiKey": "sk-xxx",
+                    "type": "openai",
+                    "model": "gpt-4",
+                    "message": "hi"
+                }
+                """;
+
+        mockMvc.perform(post("/api/admin/channels/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.success").value(true))
+                .andExpect(jsonPath("$.data.content").value("Hello!"))
+                .andExpect(jsonPath("$.data.duration").value(500));
+    }
+
+    @Test
+    void testChat_claude_success() throws Exception {
+        Map<String, Object> chatResult = new java.util.LinkedHashMap<>();
+        chatResult.put("success", true);
+        chatResult.put("content", "Hi there!");
+        chatResult.put("duration", 800L);
+        when(channelService.testChat(eq("https://api.anthropic.com"), eq("sk-ant-xxx"), eq("claude"), eq("claude-3-opus"), eq("hello")))
+                .thenReturn(chatResult);
+
+        String body = """
+                {
+                    "baseUrl": "https://api.anthropic.com",
+                    "apiKey": "sk-ant-xxx",
+                    "type": "claude",
+                    "model": "claude-3-opus",
+                    "message": "hello"
+                }
+                """;
+
+        mockMvc.perform(post("/api/admin/channels/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.success").value(true))
+                .andExpect(jsonPath("$.data.content").value("Hi there!"));
+    }
+
+    @Test
+    void testChat_missingBaseUrl() throws Exception {
+        when(channelService.testChat(isNull(), eq("sk-xxx"), eq("openai"), eq("gpt-4"), eq("hi")))
+                .thenThrow(new BusinessException("请先填写 Base URL 和 API Key"));
+
+        String body = """
+                {
+                    "apiKey": "sk-xxx",
+                    "type": "openai",
+                    "model": "gpt-4",
+                    "message": "hi"
+                }
+                """;
+
+        mockMvc.perform(post("/api/admin/channels/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("请先填写 Base URL 和 API Key"));
+    }
+
+    @Test
+    void testChat_missingModel() throws Exception {
+        when(channelService.testChat(eq("https://api.openai.com"), eq("sk-xxx"), eq("openai"), isNull(), eq("hi")))
+                .thenThrow(new BusinessException("请选择模型"));
+
+        String body = """
+                {
+                    "baseUrl": "https://api.openai.com",
+                    "apiKey": "sk-xxx",
+                    "type": "openai",
+                    "message": "hi"
+                }
+                """;
+
+        mockMvc.perform(post("/api/admin/channels/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("请选择模型"));
+    }
+
+    @Test
+    void testChat_upstreamError() throws Exception {
+        Map<String, Object> chatResult = new java.util.LinkedHashMap<>();
+        chatResult.put("success", false);
+        chatResult.put("statusCode", 401);
+        chatResult.put("error", "Invalid API key");
+        chatResult.put("duration", 200L);
+        when(channelService.testChat(eq("https://api.openai.com"), eq("sk-invalid"), eq("openai"), eq("gpt-4"), eq("hi")))
+                .thenReturn(chatResult);
+
+        String body = """
+                {
+                    "baseUrl": "https://api.openai.com",
+                    "apiKey": "sk-invalid",
+                    "type": "openai",
+                    "model": "gpt-4",
+                    "message": "hi"
+                }
+                """;
+
+        mockMvc.perform(post("/api/admin/channels/test-chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.success").value(false))
+                .andExpect(jsonPath("$.data.error").value("Invalid API key"));
     }
 }
