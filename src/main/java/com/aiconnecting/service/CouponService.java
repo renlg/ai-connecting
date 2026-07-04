@@ -77,15 +77,14 @@ public class CouponService {
             throw new BusinessException("今日兑换次数已达上限");
         }
 
-        // 原子递增使用次数（防止并发超限）
-        couponRepository.incrementUsedCount(coupon.getId());
-
-        // 检查是否实际更新成功（防止并发竞争）
-        Coupon updated = couponRepository.findById(coupon.getId())
-                .orElseThrow(() -> new BusinessException("积分券不存在"));
-        if (updated.getUsedCount() > updated.getMaxUses()) {
+        // 原子递增使用次数（WHERE 条件保证不超限，返回 0 表示已达上限）
+        int affected = couponRepository.incrementUsedCount(coupon.getId());
+        if (affected == 0) {
             throw new BusinessException("该兑换码已达到使用次数上限");
         }
+
+        Coupon updated = couponRepository.findById(coupon.getId())
+                .orElseThrow(() -> new BusinessException("积分券不存在"));
 
         User freshUser = userRepository.findById(user.getId())
                 .orElseThrow(() -> new BusinessException("用户不存在"));

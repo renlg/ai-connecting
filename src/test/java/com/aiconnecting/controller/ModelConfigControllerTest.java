@@ -3,6 +3,8 @@ package com.aiconnecting.controller;
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.repository.ModelConfigRepository;
+import com.aiconnecting.service.ModelConfigService;
+import com.aiconnecting.service.RelayService;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,6 +35,12 @@ class ModelConfigControllerTest {
     private ObjectMapper objectMapper;
 
     @MockBean
+    private ModelConfigService modelConfigService;
+
+    @MockBean
+    private RelayService relayService;
+
+    @MockBean
     private ModelConfigRepository modelConfigRepository;
 
     @MockBean
@@ -47,7 +55,7 @@ class ModelConfigControllerTest {
     void list() throws Exception {
         ModelConfig m1 = ModelConfig.builder().id(1L).name("gpt-4").status(1).build();
         ModelConfig m2 = ModelConfig.builder().id(2L).name("gpt-3.5").status(0).build();
-        when(modelConfigRepository.findByAdminOnlyFalseOrderByStatusDescNameAsc()).thenReturn(List.of(m1, m2));
+        when(modelConfigService.listNonAdmin()).thenReturn(List.of(m1, m2));
 
         mockMvc.perform(get("/api/admin/models"))
                 .andExpect(status().isOk())
@@ -59,7 +67,7 @@ class ModelConfigControllerTest {
 
     @Test
     void list_empty() throws Exception {
-        when(modelConfigRepository.findAllByOrderByStatusDescNameAsc()).thenReturn(List.of());
+        when(modelConfigService.listNonAdmin()).thenReturn(List.of());
 
         mockMvc.perform(get("/api/admin/models"))
                 .andExpect(status().isOk())
@@ -71,7 +79,7 @@ class ModelConfigControllerTest {
     @Test
     void listEnabled() throws Exception {
         ModelConfig m = ModelConfig.builder().id(1L).name("gpt-4").status(1).build();
-        when(modelConfigRepository.findByStatusAndAdminOnlyFalseOrderByStatusDescNameAsc(1)).thenReturn(List.of(m));
+        when(modelConfigService.listEnabled(false)).thenReturn(List.of(m));
 
         mockMvc.perform(get("/api/admin/models/enabled"))
                 .andExpect(status().isOk())
@@ -81,7 +89,7 @@ class ModelConfigControllerTest {
 
     @Test
     void listEnabled_empty() throws Exception {
-        when(modelConfigRepository.findByStatusOrderByStatusDescNameAsc(1)).thenReturn(List.of());
+        when(modelConfigService.listEnabled(false)).thenReturn(List.of());
 
         mockMvc.perform(get("/api/admin/models/enabled"))
                 .andExpect(status().isOk())
@@ -94,7 +102,7 @@ class ModelConfigControllerTest {
     void create() throws Exception {
         ModelConfig saved = ModelConfig.builder().id(1L).name("gpt-4o")
                 .displayName("GPT-4o").inputCreditRate(5).outputCreditRate(15).status(1).build();
-        when(modelConfigRepository.save(any(ModelConfig.class))).thenReturn(saved);
+        when(modelConfigService.save(any(ModelConfig.class))).thenReturn(saved);
 
         String body = """
                 {
@@ -135,7 +143,7 @@ class ModelConfigControllerTest {
     void create_defaultRates() throws Exception {
         ModelConfig saved = ModelConfig.builder().id(1L).name("gpt-4o")
                 .inputCreditRate(0).outputCreditRate(0).status(1).build();
-        when(modelConfigRepository.save(any(ModelConfig.class))).thenReturn(saved);
+        when(modelConfigService.save(any(ModelConfig.class))).thenReturn(saved);
 
         mockMvc.perform(post("/api/admin/models")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -151,11 +159,11 @@ class ModelConfigControllerTest {
     void update() throws Exception {
         ModelConfig existing = ModelConfig.builder().id(1L).name("gpt-4")
                 .displayName("GPT-4").inputCreditRate(5).outputCreditRate(15).status(1).build();
-        when(modelConfigRepository.findById(1L)).thenReturn(Optional.of(existing));
+        when(modelConfigService.getById(1L)).thenReturn(existing);
 
         ModelConfig updated = ModelConfig.builder().id(1L).name("gpt-4")
                 .displayName("GPT-4 Updated").inputCreditRate(10).outputCreditRate(20).status(1).build();
-        when(modelConfigRepository.save(any(ModelConfig.class))).thenReturn(updated);
+        when(modelConfigService.save(any(ModelConfig.class))).thenReturn(updated);
 
         String body = """
                 {
@@ -174,7 +182,7 @@ class ModelConfigControllerTest {
 
     @Test
     void update_notFound() throws Exception {
-        when(modelConfigRepository.findById(99L)).thenReturn(Optional.empty());
+        when(modelConfigService.getById(99L)).thenThrow(new BusinessException("模型不存在"));
 
         mockMvc.perform(put("/api/admin/models/99")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -187,8 +195,8 @@ class ModelConfigControllerTest {
 
     @Test
     void deleteModel() throws Exception {
-        when(modelConfigRepository.existsById(1L)).thenReturn(true);
-        doNothing().when(modelConfigRepository).deleteById(1L);
+        when(modelConfigService.existsById(1L)).thenReturn(true);
+        doNothing().when(modelConfigService).delete(1L);
 
         mockMvc.perform(delete("/api/admin/models/1"))
                 .andExpect(status().isOk())
@@ -197,7 +205,7 @@ class ModelConfigControllerTest {
 
     @Test
     void deleteModel_notFound() throws Exception {
-        when(modelConfigRepository.existsById(99L)).thenReturn(false);
+        when(modelConfigService.existsById(99L)).thenReturn(false);
 
         mockMvc.perform(delete("/api/admin/models/99"))
                 .andExpect(status().isBadRequest())
@@ -209,8 +217,8 @@ class ModelConfigControllerTest {
     @Test
     void updateStatus() throws Exception {
         ModelConfig config = ModelConfig.builder().id(1L).name("gpt-4").status(0).build();
-        when(modelConfigRepository.findById(1L)).thenReturn(Optional.of(config));
-        when(modelConfigRepository.save(any(ModelConfig.class))).thenReturn(config);
+        when(modelConfigService.getById(1L)).thenReturn(config);
+        when(modelConfigService.save(any(ModelConfig.class))).thenReturn(config);
 
         mockMvc.perform(put("/api/admin/models/1/status")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -221,7 +229,7 @@ class ModelConfigControllerTest {
 
     @Test
     void updateStatus_notFound() throws Exception {
-        when(modelConfigRepository.findById(99L)).thenReturn(Optional.empty());
+        when(modelConfigService.getById(99L)).thenThrow(new BusinessException("模型不存在"));
 
         mockMvc.perform(put("/api/admin/models/99/status")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -236,9 +244,8 @@ class ModelConfigControllerTest {
     void batchCreate() throws Exception {
         ModelConfig m1 = ModelConfig.builder().id(1L).name("gpt-4o").status(1).build();
         ModelConfig m2 = ModelConfig.builder().id(2L).name("gpt-4o-mini").status(1).build();
-        when(modelConfigRepository.save(any(ModelConfig.class)))
-                .thenReturn(m1)
-                .thenReturn(m2);
+        when(modelConfigService.batchCreate(List.of("gpt-4o", "gpt-4o-mini")))
+                .thenReturn(List.of(m1, m2));
 
         String body = """
                 {
@@ -281,7 +288,7 @@ class ModelConfigControllerTest {
     @Test
     void batchCreate_filtersBlankNames() throws Exception {
         ModelConfig m = ModelConfig.builder().id(1L).name("gpt-4o").status(1).build();
-        when(modelConfigRepository.save(any(ModelConfig.class))).thenReturn(m);
+        when(modelConfigService.batchCreate(List.of("gpt-4o", "", "  "))).thenReturn(List.of(m));
 
         String body = """
                 {
@@ -293,6 +300,7 @@ class ModelConfigControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray())
                 .andExpect(jsonPath("$.data.length()").value(1));
     }
 }

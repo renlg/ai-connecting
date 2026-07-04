@@ -9,12 +9,23 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @RequiredArgsConstructor
 public class TokenService {
 
     private final TokenRepository tokenRepository;
+
+    /** Token 验证缓存，减少数据库查询，缓存 30 秒（缩短以减少禁用/过期Token延迟） */
+    private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
+    private static final long TOKEN_CACHE_TTL_MS = 30 * 1000L;
+
+    private record CachedToken(Token token, long cachedAt) {
+        boolean isExpired() {
+            return System.currentTimeMillis() - cachedAt > TOKEN_CACHE_TTL_MS;
+        }
+    }
 
     public List<Token> listByUser(Long userId) {
         return tokenRepository.findByUserId(userId);
@@ -56,13 +67,15 @@ public class TokenService {
         if (request.getExpiredAt() != null) token.setExpiredAt(request.getExpiredAt());
         if (request.getAllowedModels() != null) token.setAllowedModels(request.getAllowedModels());
         if (request.getRateLimit() != null) token.setRateLimit(request.getRateLimit());
-        return tokenRepository.save(token);
+        Token saved = tokenRepository.save(token);
+        evictTokenCache(saved.getTokenKey());
+        return saved;
     }
 
     public void delete(Long id) {
-        if (!tokenRepository.existsById(id)) {
-            throw new BusinessException("Token 不存在");
-        }
+        Token token = tokenRepository.findById(id)
+                .orElseThrow(() -> new BusinessException("Token 不存在"));
+        evictTokenCache(token.getTokenKey());
         tokenRepository.deleteById(id);
     }
 
@@ -70,14 +83,22 @@ public class TokenService {
         Token token = getById(id);
         token.setStatus(status);
         tokenRepository.save(token);
+        evictTokenCache(token.getTokenKey());
     }
 
     /**
-     * 通过 token key 验证并获取 token 实体
+     * 通过 token key 验证并获取 token 实体（带短时缓存）
      */
     public Token validateTokenKey(String tokenKey) {
-        Token token = tokenRepository.findByTokenKey(tokenKey)
-                .orElseThrow(() -> new BusinessException(401, "无效的 Token"));
+        CachedToken cached = tokenCache.get(tokenKey);
+        Token token;
+        if (cached != null && !cached.isExpired()) {
+            token = cached.token();
+        } else {
+            token = tokenRepository.findByTokenKey(tokenKey)
+                    .orElseThrow(() -> new BusinessException(401, "无效的 Token"));
+            tokenCache.put(tokenKey, new CachedToken(token, System.currentTimeMillis()));
+        }
 
         if (token.getStatus() != 1) {
             throw new BusinessException(403, "Token 已被禁用");
@@ -104,6 +125,22 @@ public class TokenService {
      */
     public long count() {
         return tokenRepository.count();
+    }
+
+    /**
+     * 清除指定 Token 的缓存
+     */
+    public void evictTokenCache(String tokenKey) {
+        if (tokenKey != null) {
+            tokenCache.remove(tokenKey);
+        }
+    }
+
+    /**
+     * 清除所有 Token 验证缓存
+     */
+    public void clearTokenCache() {
+        tokenCache.clear();
     }
 
 }

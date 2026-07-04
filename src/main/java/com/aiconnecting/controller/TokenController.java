@@ -2,18 +2,17 @@ package com.aiconnecting.controller;
 
 import com.aiconnecting.common.ApiResponse;
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.dto.TokenRequest;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
-import com.aiconnecting.repository.UsageLogRepository;
-import com.aiconnecting.repository.UserRepository;
-import com.aiconnecting.entity.Channel;
+import com.aiconnecting.service.UserService;
 import com.aiconnecting.entity.ModelConfig;
-import com.aiconnecting.repository.ChannelRepository;
-import com.aiconnecting.repository.ModelConfigRepository;
+import com.aiconnecting.service.ModelConfigService;
 import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
+import com.aiconnecting.service.UsageLogService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -33,12 +32,11 @@ import java.util.stream.Collectors;
 public class TokenController {
 
     private final TokenService tokenService;
-    private final UsageLogRepository usageLogRepository;
-    private final UserRepository userRepository;
+    private final UsageLogService usageLogService;
+    private final UserService userService;
     private final RelayService relayService;
     private final ChannelService channelService;
-    private final ChannelRepository channelRepository;
-    private final ModelConfigRepository modelConfigRepository;
+    private final ModelConfigService modelConfigService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 普通用户查看自己的 token */
@@ -64,8 +62,10 @@ public class TokenController {
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<Token> getById(@PathVariable Long id) {
-        return ApiResponse.success(tokenService.getById(id));
+    public ApiResponse<Token> getById(@AuthenticationPrincipal User user, @PathVariable Long id) {
+        Token token = tokenService.getById(id);
+        checkTokenOwner(user, token);
+        return ApiResponse.success(token);
     }
 
     @PostMapping
@@ -107,7 +107,7 @@ public class TokenController {
             throw new BusinessException(403, "无权查看该 Token 的消耗记录");
         }
         LocalDateTime since = LocalDateTime.now().minusDays(90);
-        List<Object[]> rows = usageLogRepository.findDailyCreditCostByTokenIdSince(id, since);
+        List<Object[]> rows = usageLogService.getDailyCreditCost(id, since);
         List<Map<String, Object>> result = new ArrayList<>();
         for (Object[] row : rows) {
             Map<String, Object> item = new HashMap<>();
@@ -122,7 +122,8 @@ public class TokenController {
      * 测试 Token 聊天功能 - 支持 OpenAI 和 Claude 协议
      */
     @PostMapping("/test-chat")
-    public ApiResponse<Map<String, Object>> testChat(@RequestBody Map<String, String> request) {
+    public ApiResponse<Map<String, Object>> testChat(@AuthenticationPrincipal User user,
+                                                     @RequestBody Map<String, String> request) {
         String tokenKey = request.get("tokenKey");
         String protocol = request.get("protocol"); // "openai" or "claude"
         String model = request.get("model");
@@ -134,6 +135,10 @@ public class TokenController {
         if (model == null || model.isBlank()) {
             throw new BusinessException("请选择模型");
         }
+
+        // 校验当前用户对该 Token 的所有权
+        Token tokenEntity = tokenService.validateTokenKey(tokenKey);
+        checkTokenOwner(user, tokenEntity);
 
         // 解析 displayName 为实际模型名
         String resolvedModel = relayService.resolveModelName(model);
@@ -215,11 +220,9 @@ public class TokenController {
      * 测试 Token 聊天功能（流式）- 支持 OpenAI 和 Claude 协议
      */
     @PostMapping(value = "/test-chat-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public void testChatStream(@RequestBody Map<String, String> request, HttpServletResponse response) throws Exception {
-        response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
-        response.setCharacterEncoding("UTF-8");
-        response.setHeader("Cache-Control", "no-cache");
-        response.setHeader("Connection", "keep-alive");
+    public void testChatStream(@AuthenticationPrincipal User user,
+                               @RequestBody Map<String, String> request, HttpServletResponse response) throws Exception {
+        SseUtils.setSseHeaders(response);
 
         String tokenKey = request.get("tokenKey");
         String protocol = request.get("protocol"); // "openai" or "claude"
@@ -232,6 +235,10 @@ public class TokenController {
         if (model == null || model.isBlank()) {
             throw new BusinessException("请选择模型");
         }
+
+        // 校验当前用户对该 Token 的所有权
+        Token tokenEntity = tokenService.validateTokenKey(tokenKey);
+        checkTokenOwner(user, tokenEntity);
 
         // 解析 displayName 为实际模型名
         String resolvedModel = relayService.resolveModelName(model);
@@ -262,7 +269,7 @@ public class TokenController {
             }
         } catch (Exception e) {
             // 发送错误事件
-            response.getWriter().write("data: {\"error\":\"" + escapeJson(e.getMessage()) + "\"}\n\n");
+            response.getWriter().write("data: {\"error\":\"" + SseUtils.escapeJson(e.getMessage()) + "\"}\n\n");
             // 发送 [DONE] 标记以结束 SSE 流
             response.getWriter().write("data: [DONE]\n\n");
             response.getWriter().flush();
@@ -279,24 +286,6 @@ public class TokenController {
         relayService.claudeRelayStreamRequest(tokenKey, requestBody, model, null, response);
     }
 
-    private String extractMessageFromRequestBody(String requestBody) {
-        try {
-            JsonNode node = objectMapper.readTree(requestBody);
-            JsonNode messages = node.get("messages");
-            if (messages != null && messages.isArray() && messages.size() > 0) {
-                return messages.get(messages.size() - 1).path("content").asText("hi");
-            }
-        } catch (Exception e) {
-            // ignore
-        }
-        return "hi";
-    }
-
-    private String escapeJson(String str) {
-        if (str == null) return "";
-        return str.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
-    }
-
     /**
      * 填充 Token 的 ownerName
      */
@@ -304,8 +293,7 @@ public class TokenController {
         if (tokens == null || tokens.isEmpty()) return;
         // 批量查询用户
         var userIds = tokens.stream().map(Token::getUserId).distinct().collect(Collectors.toList());
-        var userMap = userRepository.findAllById(userIds).stream()
-                .collect(Collectors.toMap(User::getId, User::getUsername));
+        var userMap = userService.getUserIdToNameMap(userIds);
         tokens.forEach(t -> t.setOwnerName(userMap.getOrDefault(t.getUserId(), "unknown")));
     }
 
@@ -316,27 +304,10 @@ public class TokenController {
     public ApiResponse<List<Map<String, Object>>> getAvailableModels(@AuthenticationPrincipal User user) {
         boolean isAdmin = "admin".equals(user.getRole());
 
-        // 获取启用的模型
-        List<ModelConfig> models = isAdmin
-                ? modelConfigRepository.findByStatusOrderByStatusDescNameAsc(1)
-                : modelConfigRepository.findByStatusAndAdminOnlyFalseOrderByStatusDescNameAsc(1);
+        List<ModelConfig> models = modelConfigService.getAvailableModels(isAdmin);
 
-        // 收集所有启用渠道配置的模型ID
-        Set<String> channelModelIds = new LinkedHashSet<>();
-        for (Channel channel : channelRepository.findByStatusOrderByPriorityDesc(1)) {
-            if (channel.getModelIds() != null && !channel.getModelIds().isEmpty()) {
-                for (String modelId : channel.getModelIds().split(",")) {
-                    channelModelIds.add(modelId.trim());
-                }
-            }
-        }
-
-        // 只返回 id 和 displayName
         List<Map<String, Object>> result = new ArrayList<>();
         for (ModelConfig model : models) {
-            if (!channelModelIds.contains(String.valueOf(model.getId()))) {
-                continue;
-            }
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("id", model.getId());
             item.put("displayName", model.getDisplayName() != null ? model.getDisplayName() : model.getName());

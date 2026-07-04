@@ -27,9 +27,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtUtils jwtUtils;
     private final UserRepository userRepository;
 
-    /** 用户缓存，减少数据库查询，缓存 5 分钟 */
+    /** 用户缓存，减少数据库查询，缓存 1 分钟（缩短以减少角色/状态变更延迟） */
     private final Map<String, CachedUser> userCache = new ConcurrentHashMap<>();
-    private static final long CACHE_TTL_MS = 5 * 60 * 1000L;
+    private static final long CACHE_TTL_MS = 60 * 1000L;
 
     private record CachedUser(User user, long cachedAt) {
         boolean isExpired() {

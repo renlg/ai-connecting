@@ -5,7 +5,8 @@ import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.dto.ModelConfigRequest;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.User;
-import com.aiconnecting.repository.ModelConfigRepository;
+import com.aiconnecting.service.ModelConfigService;
+import com.aiconnecting.service.RelayService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -18,7 +19,8 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class ModelConfigController {
 
-    private final ModelConfigRepository modelConfigRepository;
+    private final ModelConfigService modelConfigService;
+    private final RelayService relayService;
 
     /**
      * 获取所有模型配置（启用优先，按名称排序）
@@ -28,9 +30,9 @@ public class ModelConfigController {
     public ApiResponse<List<ModelConfig>> list(@AuthenticationPrincipal User user) {
         boolean isAdmin = user != null && "admin".equalsIgnoreCase(user.getRole());
         if (isAdmin) {
-            return ApiResponse.success(modelConfigRepository.findAllByOrderByStatusDescNameAsc());
+            return ApiResponse.success(modelConfigService.listAll());
         }
-        return ApiResponse.success(modelConfigRepository.findByAdminOnlyFalseOrderByStatusDescNameAsc());
+        return ApiResponse.success(modelConfigService.listNonAdmin());
     }
 
     /**
@@ -41,9 +43,9 @@ public class ModelConfigController {
     public ApiResponse<List<ModelConfig>> listEnabled(@AuthenticationPrincipal User user) {
         boolean isAdmin = user != null && "admin".equalsIgnoreCase(user.getRole());
         if (isAdmin) {
-            return ApiResponse.success(modelConfigRepository.findByStatusOrderByStatusDescNameAsc(1));
+            return ApiResponse.success(modelConfigService.listEnabled(true));
         }
-        return ApiResponse.success(modelConfigRepository.findByStatusAndAdminOnlyFalseOrderByStatusDescNameAsc(1));
+        return ApiResponse.success(modelConfigService.listEnabled(false));
     }
 
     /**
@@ -63,7 +65,9 @@ public class ModelConfigController {
                 .adminOnly(Boolean.TRUE.equals(request.getAdminOnly()))
                 .status(1)
                 .build();
-        return ApiResponse.success(modelConfigRepository.save(config));
+        ModelConfig saved = modelConfigService.save(config);
+        relayService.clearModelNameCache();
+        return ApiResponse.success(saved);
     }
 
     /**
@@ -71,8 +75,7 @@ public class ModelConfigController {
      */
     @PutMapping("/{id}")
     public ApiResponse<ModelConfig> update(@PathVariable Long id, @RequestBody ModelConfigRequest request) {
-        ModelConfig config = modelConfigRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("模型不存在"));
+        ModelConfig config = modelConfigService.getById(id);
         if (request.getName() != null) {
             config.setName(request.getName());
         }
@@ -91,7 +94,9 @@ public class ModelConfigController {
         if (request.getAdminOnly() != null) {
             config.setAdminOnly(request.getAdminOnly());
         }
-        return ApiResponse.success(modelConfigRepository.save(config));
+        ModelConfig saved = modelConfigService.save(config);
+        relayService.clearModelNameCache();
+        return ApiResponse.success(saved);
     }
 
     /**
@@ -99,10 +104,11 @@ public class ModelConfigController {
      */
     @DeleteMapping("/{id}")
     public ApiResponse<Void> delete(@PathVariable Long id) {
-        if (!modelConfigRepository.existsById(id)) {
+        if (!modelConfigService.existsById(id)) {
             throw new BusinessException("模型不存在");
         }
-        modelConfigRepository.deleteById(id);
+        modelConfigService.delete(id);
+        relayService.clearModelNameCache();
         return ApiResponse.success();
     }
 
@@ -111,10 +117,10 @@ public class ModelConfigController {
      */
     @PutMapping("/{id}/status")
     public ApiResponse<Void> updateStatus(@PathVariable Long id, @RequestBody Map<String, Integer> body) {
-        ModelConfig config = modelConfigRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("模型不存在"));
+        ModelConfig config = modelConfigService.getById(id);
         config.setStatus(body.get("status"));
-        modelConfigRepository.save(config);
+        modelConfigService.save(config);
+        relayService.clearModelNameCache();
         return ApiResponse.success();
     }
 
@@ -127,11 +133,8 @@ public class ModelConfigController {
         if (names == null || names.isEmpty()) {
             throw new BusinessException("模型名称列表不能为空");
         }
-        List<ModelConfig> created = names.stream()
-                .filter(name -> name != null && !name.isBlank())
-                .map(name -> ModelConfig.builder().name(name).status(1).build())
-                .map(modelConfigRepository::save)
-                .toList();
+        List<ModelConfig> created = modelConfigService.batchCreate(names);
+        relayService.clearModelNameCache();
         return ApiResponse.success(created);
     }
 }

@@ -1,5 +1,10 @@
 server:
   port: 8080
+  tomcat:
+    max-http-form-post-size: 10MB
+  servlet:
+    multipart:
+      max-request-size: 10MB
 
 spring:
   application:
@@ -20,10 +25,10 @@ spring:
     default-property-inclusion: non_null
   data:
     redis:
-      host: ${REDIS_HOST:r-bp1p6kzhgdqkv3td03pd.redis.rds.aliyuncs.com}
-      port: ${REDIS_PORT:8188}
-      username: ${REDIS_USERNAME:renlg_redis}
-      password: ${REDIS_PASSWORD:uz2JnlFGQLtPue}
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      username: ${REDIS_USERNAME:}
+      password: ${REDIS_PASSWORD:}
       database: ${REDIS_DATABASE:0}
       timeout: 5000ms
       lettuce:
@@ -47,11 +52,13 @@ management:
         include: health,info,metrics,prometheus
 
 app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}  # 逗号分隔的允许源，未配置时默认允许所有
   rate-limit:
-    enabled: true          # 限流功能开关（开启需要 Redis）
+    enabled: ${RATE_LIMIT_ENABLED:false}  # 限流功能开关（开启需要 Redis）
   jwt:
-    secret: ${JWT_SECRET:ai-connecting-secret-key-change-this-in-production-2024}
+    secret: ${JWT_SECRET}  # 必须通过环境变量设置，不提供默认值
     expiration: 86400000  # 24 hours in ms
   admin:
-    default-password: ${ADMIN_DEFAULT_PASSWORD:hk0SRCOYTS7rGhkGV7aqrvqN}
-    reset-password: ${ADMIN_RESET_PASSWORD:88888888}
+    default-password: ${ADMIN_DEFAULT_PASSWORD}  # 必须通过环境变量设置
+    reset-password: ${ADMIN_RESET_PASSWORD:}

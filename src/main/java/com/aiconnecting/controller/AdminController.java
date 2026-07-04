@@ -1,6 +1,7 @@
 package com.aiconnecting.controller;
 
 import com.aiconnecting.common.ApiResponse;
+import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.dto.CouponGenerateRequest;
 import com.aiconnecting.dto.CouponRedemptionDTO;
 import com.aiconnecting.dto.DashboardStats;
@@ -27,7 +28,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AdminController {
 
-    @Value("${app.admin.reset-password:88888888}")
+    @Value("${app.admin.reset-password:}")
     private String resetPassword;
 
     private final ChannelService channelService;
@@ -140,6 +141,9 @@ public class AdminController {
      */
     @PutMapping("/users/{id}/reset-password")
     public ApiResponse<Void> resetPassword(@PathVariable Long id) {
+        if (resetPassword == null || resetPassword.isBlank()) {
+            throw new BusinessException("重置密码未配置，请设置环境变量 ADMIN_RESET_PASSWORD");
+        }
         userService.resetPassword(id, resetPassword);
         return ApiResponse.success();
     }

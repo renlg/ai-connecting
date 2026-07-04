@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.dto.ChannelRequest;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.repository.ChannelRepository;
@@ -106,6 +107,15 @@ public class ChannelService {
     }
 
     /**
+     * 原子增加渠道已用额度
+     */
+    public void addUsedQuota(Long channelId, long quota) {
+        if (quota > 0) {
+            channelRepository.addUsedQuota(channelId, quota);
+        }
+    }
+
+    /**
      * 根据模型ID获取可用的渠道列表 (按优先级排序)
      */
     public List<Channel> getActiveChannelsByModel(String modelId) {
@@ -149,45 +159,7 @@ public class ChannelService {
 
     private Map<String, Object> testOpenAIChat(String baseUrl, String apiKey, String model,
                                                 String message, long startTime) throws IOException {
-        String url = baseUrl.replaceAll("/+$", "") + "/v1/chat/completions";
-        String jsonBody = objectMapper.writeValueAsString(Map.of(
-                "model", model,
-                "messages", List.of(Map.of("role", "user", "content", message != null ? message : "hi")),
-                "max_tokens", 100
-        ));
-
-        Request request = new Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer " + apiKey)
-                .addHeader("Content-Type", "application/json")
-                .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
-                .build();
-
-        try (Response response = httpClient.newCall(request).execute()) {
-            String body = response.body() != null ? response.body().string() : "";
-            long duration = System.currentTimeMillis() - startTime;
-            Map<String, Object> result = new java.util.LinkedHashMap<>();
-            result.put("success", response.isSuccessful());
-            result.put("statusCode", response.code());
-            result.put("duration", duration);
-
-            if (response.isSuccessful()) {
-                JsonNode root = objectMapper.readTree(body);
-                String content = root.path("choices").path(0).path("message").path("content").asText("");
-                result.put("content", content);
-                JsonNode usage = root.get("usage");
-                if (usage != null) {
-                    Map<String, Object> usageMap = new java.util.LinkedHashMap<>();
-                    usageMap.put("prompt_tokens", usage.path("prompt_tokens").asInt(0));
-                    usageMap.put("completion_tokens", usage.path("completion_tokens").asInt(0));
-                    usageMap.put("total_tokens", usage.path("total_tokens").asInt(0));
-                    result.put("usage", usageMap);
-                }
-            } else {
-                result.put("error", body.length() > 500 ? body.substring(0, 500) : body);
-            }
-            return result;
-        }
+        return doTestChat(baseUrl, apiKey, model, message, startTime, false);
     }
 
     /**
@@ -195,7 +167,14 @@ public class ChannelService {
      */
     private Map<String, Object> testClaudeChat(String baseUrl, String apiKey, String model,
                                                 String message, long startTime) throws IOException {
-        // 使用 OpenAI 格式发送请求
+        return doTestChat(baseUrl, apiKey, model, message, startTime, true);
+    }
+
+    /**
+     * 通用非流式测试方法，isClaude 控制 usage 字段输出格式
+     */
+    private Map<String, Object> doTestChat(String baseUrl, String apiKey, String model,
+                                            String message, long startTime, boolean isClaude) throws IOException {
         String url = baseUrl.replaceAll("/+$", "") + "/v1/chat/completions";
         String jsonBody = objectMapper.writeValueAsString(Map.of(
                 "model", model,
@@ -220,15 +199,19 @@ public class ChannelService {
 
             if (response.isSuccessful()) {
                 JsonNode root = objectMapper.readTree(body);
-                // 将 OpenAI 响应转换为 Claude 格式
                 String content = root.path("choices").path(0).path("message").path("content").asText("");
-                // Claude 格式: content 是数组 [{type: "text", text: "..."}]
                 result.put("content", content);
                 JsonNode usage = root.get("usage");
                 if (usage != null) {
                     Map<String, Object> usageMap = new java.util.LinkedHashMap<>();
-                    usageMap.put("input_tokens", usage.path("prompt_tokens").asInt(0));
-                    usageMap.put("output_tokens", usage.path("completion_tokens").asInt(0));
+                    if (isClaude) {
+                        usageMap.put("input_tokens", usage.path("prompt_tokens").asInt(0));
+                        usageMap.put("output_tokens", usage.path("completion_tokens").asInt(0));
+                    } else {
+                        usageMap.put("prompt_tokens", usage.path("prompt_tokens").asInt(0));
+                        usageMap.put("completion_tokens", usage.path("completion_tokens").asInt(0));
+                        usageMap.put("total_tokens", usage.path("total_tokens").asInt(0));
+                    }
                     result.put("usage", usageMap);
                 }
             } else {
@@ -242,10 +225,7 @@ public class ChannelService {
      * 测试渠道聊天功能（流式）- 发送一条消息并流式返回响应
      */
     public void testChatStream(Map<String, String> request, HttpServletResponse response) throws Exception {
-        response.setContentType("text/event-stream");
-        response.setCharacterEncoding("UTF-8");
-        response.setHeader("Cache-Control", "no-cache");
-        response.setHeader("Connection", "keep-alive");
+        SseUtils.setSseHeaders(response);
 
         String baseUrl = request.get("baseUrl");
         String apiKey = request.get("apiKey");
@@ -268,15 +248,31 @@ public class ChannelService {
             }
         } catch (Exception e) {
             // 发送错误事件
-            response.getWriter().write("data: {\"error\":\"" + escapeJson(e.getMessage()) + "\"}\n\n");
+            response.getWriter().write("data: {\"error\":\"" + SseUtils.escapeJson(e.getMessage()) + "\"}\n\n");
             response.getWriter().flush();
         }
     }
 
     private void testOpenAIChatStream(String baseUrl, String apiKey, String model,
                                        String message, HttpServletResponse response) throws Exception {
+        doTestChatStream(baseUrl, apiKey, model, message, response, false);
+    }
+
+    /**
+     * Claude 协议流式测试 - 内部转换为 OpenAI 格式发送给上游，响应再转换回 Claude SSE 格式
+     */
+    private void testClaudeChatStream(String baseUrl, String apiKey, String model,
+                                       String message, HttpServletResponse response) throws Exception {
+        doTestChatStream(baseUrl, apiKey, model, message, response, true);
+    }
+
+    /**
+     * 通用流式测试方法，isClaude 控制 SSE 输出格式
+     */
+    private void doTestChatStream(String baseUrl, String apiKey, String model,
+                                   String message, HttpServletResponse response, boolean isClaude) throws Exception {
         String url = baseUrl.replaceAll("/+$", "") + "/v1/chat/completions";
-        log.info("流式请求 OpenAI: url={}, model={}", url, model);
+        log.info("{}流式请求: url={}, model={}", isClaude ? "Claude(转OpenAI) " : "", url, model);
         String jsonBody = objectMapper.writeValueAsString(Map.of(
                 "model", model,
                 "messages", List.of(Map.of("role", "user", "content", message != null ? message : "hi")),
@@ -306,9 +302,10 @@ public class ChannelService {
             log.info("HTTP请求返回, 耗时: {}ms, code: {}", httpDuration, code);
 
             if (code != 200) {
-                String errorBody = new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                String errorBody = conn.getErrorStream() != null
+                        ? new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8) : "";
                 log.error("上游返回错误: {}", errorBody);
-                response.getWriter().write("data: {\"error\":\"HTTP " + code + ": " + escapeJson(errorBody) + "\"}\n\n");
+                response.getWriter().write("data: {\"error\":\"HTTP " + code + (errorBody.isEmpty() ? "" : ": " + SseUtils.escapeJson(errorBody)) + "\"}\n\n");
                 response.getWriter().flush();
                 return;
             }
@@ -325,8 +322,10 @@ public class ChannelService {
 
                 String data = line.substring(5).trim();
                 if ("[DONE]".equals(data)) {
-                    response.getWriter().write("data: [DONE]\n\n");
-                    response.getWriter().flush();
+                    if (!isClaude) {
+                        response.getWriter().write("data: [DONE]\n\n");
+                        response.getWriter().flush();
+                    }
                     log.info("流式传输完成, 共 {} 个 chunk, {} 行数据", chunkCount, lineCount);
                     break;
                 }
@@ -338,12 +337,17 @@ public class ChannelService {
                     String reasoningContent = delta.path("reasoning_content").asText("");
                     String text = content.isEmpty() ? reasoningContent : content;
                     if (!text.isEmpty()) {
-                        Map<String, Object> chunk = new java.util.LinkedHashMap<>();
-                        chunk.put("content", text);
-                        if (!reasoningContent.isEmpty()) {
-                            chunk.put("reasoning", true);
+                        if (isClaude) {
+                            String claudeEvt = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + objectMapper.writeValueAsString(text) + "}}";
+                            response.getWriter().write("data: " + claudeEvt + "\n\n");
+                        } else {
+                            Map<String, Object> chunk = new java.util.LinkedHashMap<>();
+                            chunk.put("content", text);
+                            if (!reasoningContent.isEmpty()) {
+                                chunk.put("reasoning", true);
+                            }
+                            response.getWriter().write("data: " + objectMapper.writeValueAsString(chunk) + "\n\n");
                         }
-                        response.getWriter().write("data: " + objectMapper.writeValueAsString(chunk) + "\n\n");
                         response.getWriter().flush();
                         chunkCount++;
                     }
@@ -354,102 +358,6 @@ public class ChannelService {
         } finally {
             conn.disconnect();
         }
-    }
-
-    /**
-     * Claude 协议流式测试 - 内部转换为 OpenAI 格式发送给上游，响应再转换回 Claude SSE 格式
-     */
-    private void testClaudeChatStream(String baseUrl, String apiKey, String model,
-                                       String message, HttpServletResponse response) throws Exception {
-        log.info("Claude 协议测试 (内部转 OpenAI): url={}, model={}", baseUrl, model);
-        String url = baseUrl.replaceAll("/+$", "") + "/v1/chat/completions";
-        String jsonBody = objectMapper.writeValueAsString(Map.of(
-                "model", model,
-                "messages", List.of(Map.of("role", "user", "content", message != null ? message : "hi")),
-                "max_tokens", 4096,
-                "stream", true
-        ));
-
-        // 使用 HttpURLConnection 避免 OkHttp 连接池问题
-        java.net.URL urlObj = new java.net.URL(url);
-        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) urlObj.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(120000);
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Authorization", "Bearer " + apiKey);
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Connection", "close");
-
-        log.info("Claude测试准备发送HTTP请求");
-        long httpStart = System.currentTimeMillis();
-        try {
-            conn.getOutputStream().write(jsonBody.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            conn.getOutputStream().flush();
-
-            int code = conn.getResponseCode();
-            long httpDuration = System.currentTimeMillis() - httpStart;
-            log.info("Claude测试HTTP请求返回, 耗时: {}ms, code: {}", httpDuration, code);
-
-            if (code != 200) {
-                String errorBody = new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                log.error("Claude 测试上游返回错误: {}", errorBody);
-                response.getWriter().write("data: {\"error\":\"HTTP " + code + ": " + escapeJson(errorBody) + "\"}\n\n");
-                response.getWriter().flush();
-                return;
-            }
-
-            java.io.BufferedReader reader = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
-            String line;
-            int chunkCount = 0;
-            int lineCount = 0;
-            while ((line = reader.readLine()) != null) {
-                lineCount++;
-                line = line.trim();
-                if (!line.startsWith("data:")) continue;
-                String data = line.substring(5).trim();
-                if ("[DONE]".equals(data)) continue;
-                try {
-                    JsonNode json = objectMapper.readTree(data);
-                    JsonNode delta = json.path("choices").path(0).path("delta");
-                    String content = delta.path("content").asText("");
-                    String reasoningContent = delta.path("reasoning_content").asText("");
-                    String text = content.isEmpty() ? reasoningContent : content;
-                    if (!text.isEmpty()) {
-                        String claudeEvt = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + objectMapper.writeValueAsString(text) + "}}";
-                        response.getWriter().write("data: " + claudeEvt + "\n\n");
-                        response.getWriter().flush();
-                        chunkCount++;
-                    }
-                } catch (Exception e) {
-                    log.warn("转换 OpenAI SSE 为 Claude 格式失败: {}", data);
-                }
-            }
-            log.info("Claude 测试流式传输完成, 共 {} 个 chunk, {} 行数据", chunkCount, lineCount);
-        } finally {
-            conn.disconnect();
-        }
-    }
-
-    /**
-     * 通过渠道对象进行流式 OpenAI 聊天（供 TokenController 调用）
-     */
-    public void streamOpenAIChatByChannel(Channel channel, String model, String message, HttpServletResponse response) throws Exception {
-        testOpenAIChatStream(channel.getBaseUrl(), channel.getApiKey(), model, message, response);
-    }
-
-    /**
-     * 通过渠道对象进行流式 Claude 协议聊天（供 TokenController 调用）
-     * 内部将 Claude 格式转换为 OpenAI 格式发送给上游，响应转换回 Claude SSE 格式
-     */
-    public void streamClaudeChatByChannel(Channel channel, String model, String message, HttpServletResponse response) throws Exception {
-        testClaudeChatStream(channel.getBaseUrl(), channel.getApiKey(), model, message, response);
-    }
-
-    private String escapeJson(String str) {
-        if (str == null) return "";
-        return str.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 
     /**

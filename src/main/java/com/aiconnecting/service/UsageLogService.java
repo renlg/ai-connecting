@@ -1,9 +1,6 @@
 package com.aiconnecting.service;
 
-import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.UsageLog;
-import com.aiconnecting.repository.ChannelRepository;
-import com.aiconnecting.repository.ModelConfigRepository;
 import com.aiconnecting.repository.UsageLogRepository;
 import com.aiconnecting.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @RequiredArgsConstructor
@@ -24,20 +22,25 @@ import java.util.List;
 public class UsageLogService {
 
     private final UsageLogRepository usageLogRepository;
-    private final ChannelRepository channelRepository;
-    private final ModelConfigRepository modelConfigRepository;
+    private final ChannelService channelService;
+    private final ModelConfigService modelConfigService;
     private final UserRepository userRepository;
+
+    /** 积分计算除数：每千 token */
+    private static final double CREDIT_RATE_DIVISOR = 1000.0;
+
+    /** 模型积分比例缓存，避免每次请求查库，缓存 5 分钟 */
+    private final ConcurrentHashMap<String, CachedCreditRate> creditRateCache = new ConcurrentHashMap<>();
+    private static final long CREDIT_RATE_CACHE_TTL_MS = 5 * 60 * 1000L;
+
+    private record CachedCreditRate(int inputRate, int outputRate, long cachedAt) {
+        boolean isExpired() {
+            return System.currentTimeMillis() - cachedAt > CREDIT_RATE_CACHE_TTL_MS;
+        }
+    }
 
     public UsageLog save(UsageLog log) {
         return usageLogRepository.save(log);
-    }
-
-    public List<UsageLog> getByToken(Long tokenId) {
-        return usageLogRepository.findByTokenIdOrderByCreatedAtDesc(tokenId);
-    }
-
-    public List<UsageLog> getByChannel(Long channelId) {
-        return usageLogRepository.findByChannelIdOrderByCreatedAtDesc(channelId);
     }
 
     public Long getTotalTokensSince(LocalDateTime since) {
@@ -98,7 +101,7 @@ public class UsageLogService {
         usageLogRepository.save(usageLog);
         // 原子更新 token 额度
         if (totalTokens > 0) {
-            channelRepository.addUsedQuota(channelId, totalTokens);
+            channelService.addUsedQuota(channelId, totalTokens);
         }
         // 扣减用户积分
         if (usageLog.getCreditCost() != null && usageLog.getCreditCost() > 0 && userId != null) {
@@ -112,13 +115,30 @@ public class UsageLogService {
     public double calculateCreditCost(String model, int promptTokens, int completionTokens) {
         if (promptTokens == 0 && completionTokens == 0) return 0.0;
 
-        List<ModelConfig> models = modelConfigRepository.findByName(model);
-        ModelConfig modelConfig = models.isEmpty() ? null : models.get(0);
-        if (modelConfig == null) return 0.0;
+        CachedCreditRate cached = creditRateCache.get(model);
+        int inputRate, outputRate;
+        if (cached != null && !cached.isExpired()) {
+            inputRate = cached.inputRate();
+            outputRate = cached.outputRate();
+        } else {
+            List<com.aiconnecting.entity.ModelConfig> models = modelConfigService.findByName(model);
+            com.aiconnecting.entity.ModelConfig modelConfig = models.isEmpty() ? null : models.get(0);
+            if (modelConfig == null) return 0.0;
+            inputRate = modelConfig.getInputCreditRate();
+            outputRate = modelConfig.getOutputCreditRate();
+            creditRateCache.put(model, new CachedCreditRate(inputRate, outputRate, System.currentTimeMillis()));
+        }
 
-        double inputCost = (promptTokens / 1000.0) * modelConfig.getInputCreditRate();
-        double outputCost = (completionTokens / 1000.0) * modelConfig.getOutputCreditRate();
+        double inputCost = (promptTokens / CREDIT_RATE_DIVISOR) * inputRate;
+        double outputCost = (completionTokens / CREDIT_RATE_DIVISOR) * outputRate;
         return inputCost + outputCost;
+    }
+
+    /**
+     * 清除积分比例缓存（模型配置变更时调用）
+     */
+    public void clearCreditRateCache() {
+        creditRateCache.clear();
     }
 
     /**
@@ -143,5 +163,12 @@ public class UsageLogService {
     public Object[] sumAllMetricsByTokenIdsSince(List<Long> tokenIds, LocalDateTime since) {
         List<Object[]> result = usageLogRepository.sumAllMetricsByTokenIdsSince(tokenIds, since);
         return result.isEmpty() ? new Object[]{0L, 0L, 0L, 0L, 0.0} : result.get(0);
+    }
+
+    /**
+     * 查询指定 Token 的每日消耗积分
+     */
+    public List<Object[]> getDailyCreditCost(Long tokenId, LocalDateTime since) {
+        return usageLogRepository.findDailyCreditCostByTokenIdSince(tokenId, since);
     }
 }

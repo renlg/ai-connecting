@@ -19,9 +19,12 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 
 import jakarta.servlet.http.HttpServletResponse;
+
+import org.springframework.beans.factory.annotation.Value;
 
 @Configuration
 @EnableWebSecurity
@@ -30,6 +33,9 @@ import jakarta.servlet.http.HttpServletResponse;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @Value("${app.cors.allowed-origins:}")
+    private String allowedOrigins;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -53,6 +59,8 @@ public class SecurityConfig {
                 // 模型列表接口允许所有已认证用户访问（控制器内部按角色过滤）
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/models").authenticated()
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/models/enabled").authenticated()
+                // Actuator 端点需要认证
+                .requestMatchers("/actuator/**").authenticated()
                 // 管理接口需要 admin 角色
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 // 其他 API 需要认证
@@ -91,10 +99,16 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("*"));
+        // 支持通过环境变量配置允许的源，未配置时默认允许所有
+        if (allowedOrigins != null && !allowedOrigins.isBlank()) {
+            config.setAllowedOrigins(Arrays.asList(allowedOrigins.split(",")));
+        } else {
+            config.setAllowedOriginPatterns(List.of("*"));
+        }
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
+        config.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
         return source;

@@ -9,8 +9,11 @@ import com.aiconnecting.repository.ModelConfigRepository;
 import com.aiconnecting.repository.UsageLogRepository;
 import com.aiconnecting.repository.UserRepository;
 import com.aiconnecting.service.ChannelService;
+import com.aiconnecting.service.ModelConfigService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
+import com.aiconnecting.service.UsageLogService;
+import com.aiconnecting.service.UserService;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,6 +30,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -65,6 +69,15 @@ class TokenControllerTest {
     private ModelConfigRepository modelConfigRepository;
 
     @MockBean
+    private UsageLogService usageLogService;
+
+    @MockBean
+    private UserService userService;
+
+    @MockBean
+    private ModelConfigService modelConfigService;
+
+    @MockBean
     private JwtUtils jwtUtils;
 
     @MockBean
@@ -100,8 +113,7 @@ class TokenControllerTest {
 
         Token t = Token.builder().id(1L).name("test-token").userId(2L).build();
         when(tokenService.listAll()).thenReturn(List.of(t));
-        User owner = User.builder().id(2L).username("user").build();
-        when(userRepository.findAllById(List.of(2L))).thenReturn(List.of(owner));
+        when(userService.getUserIdToNameMap(List.of(2L))).thenReturn(Map.of(2L, "user"));
 
         mockMvc.perform(get("/api/tokens"))
                 .andExpect(status().isOk())
@@ -117,7 +129,7 @@ class TokenControllerTest {
 
         Token t = Token.builder().id(1L).name("my-token").userId(2L).build();
         when(tokenService.listByUser(2L)).thenReturn(List.of(t));
-        when(userRepository.findAllById(List.of(2L))).thenReturn(List.of(regularUser));
+        when(userService.getUserIdToNameMap(List.of(2L))).thenReturn(Map.of(2L, "user"));
 
         mockMvc.perform(get("/api/tokens"))
                 .andExpect(status().isOk())
@@ -132,9 +144,7 @@ class TokenControllerTest {
         Token t1 = Token.builder().id(1L).name("token1").userId(2L).build();
         Token t2 = Token.builder().id(2L).name("token2").userId(1L).build();
         when(tokenService.listAll()).thenReturn(List.of(t1, t2));
-        User user2 = User.builder().id(2L).username("testuser").build();
-        User user1 = User.builder().id(1L).username("admin").build();
-        when(userRepository.findAllById(anyList())).thenReturn(List.of(user2, user1));
+        when(userService.getUserIdToNameMap(anyList())).thenReturn(Map.of(2L, "testuser", 1L, "admin"));
 
         mockMvc.perform(get("/api/tokens").param("search", "testuser"))
                 .andExpect(status().isOk())
@@ -158,7 +168,7 @@ class TokenControllerTest {
     @Test
     void getById() throws Exception {
         setAuthentication(regularUser);
-        Token t = Token.builder().id(1L).name("my-token").build();
+        Token t = Token.builder().id(1L).name("my-token").userId(2L).build();
         when(tokenService.getById(1L)).thenReturn(t);
 
         mockMvc.perform(get("/api/tokens/1"))
@@ -273,6 +283,9 @@ class TokenControllerTest {
 
     @Test
     void testChat_openai_success() throws Exception {
+        setAuthentication(regularUser);
+        Token tokenEntity = Token.builder().id(1L).name("test").userId(2L).build();
+        when(tokenService.validateTokenKey("sk-test-key")).thenReturn(tokenEntity);
         // Mock relayService.resolveModelName
         when(relayService.resolveModelName("GPT-4o")).thenReturn("gpt-4o");
         // Mock relayService.relayRequest - return a valid OpenAI response JSON
@@ -308,6 +321,9 @@ class TokenControllerTest {
 
     @Test
     void testChat_claude_success() throws Exception {
+        setAuthentication(regularUser);
+        Token tokenEntity = Token.builder().id(1L).name("test").userId(2L).build();
+        when(tokenService.validateTokenKey("sk-test-key")).thenReturn(tokenEntity);
         when(relayService.resolveModelName("Claude-3-Opus")).thenReturn("claude-3-opus-20240229");
         String claudeResponse = """
                 {
@@ -392,6 +408,9 @@ class TokenControllerTest {
 
     @Test
     void testChat_businessException() throws Exception {
+        setAuthentication(regularUser);
+        Token tokenEntity = Token.builder().id(1L).name("test").userId(2L).build();
+        when(tokenService.validateTokenKey("sk-invalid")).thenReturn(tokenEntity);
         when(relayService.resolveModelName("GPT-4o")).thenReturn("gpt-4o");
         when(relayService.relayRequest(eq("sk-invalid"), anyString(),
                 anyString(), eq("gpt-4o"), isNull()))
@@ -416,6 +435,9 @@ class TokenControllerTest {
 
     @Test
     void testChat_runtimeException() throws Exception {
+        setAuthentication(regularUser);
+        Token tokenEntity = Token.builder().id(1L).name("test").userId(2L).build();
+        when(tokenService.validateTokenKey("sk-test-key")).thenReturn(tokenEntity);
         when(relayService.resolveModelName("GPT-4o")).thenReturn("gpt-4o");
         when(relayService.relayRequest(eq("sk-test-key"), anyString(),
                 anyString(), eq("gpt-4o"), isNull()))
@@ -440,6 +462,9 @@ class TokenControllerTest {
 
     @Test
     void testChat_defaultMessage() throws Exception {
+        setAuthentication(regularUser);
+        Token tokenEntity = Token.builder().id(1L).name("test").userId(2L).build();
+        when(tokenService.validateTokenKey("sk-test-key")).thenReturn(tokenEntity);
         when(relayService.resolveModelName("gpt-4")).thenReturn("gpt-4");
         String openAiResponse = """
                 {

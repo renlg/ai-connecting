@@ -1,15 +1,13 @@
 package com.aiconnecting.controller;
 
 import com.aiconnecting.common.BusinessException;
-import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
-import com.aiconnecting.repository.ChannelRepository;
-import com.aiconnecting.repository.ModelConfigRepository;
-import com.aiconnecting.repository.UserRepository;
+import com.aiconnecting.service.ModelConfigService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
+import com.aiconnecting.service.UserService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,9 +30,8 @@ public class RelayController {
 
     private final RelayService relayService;
     private final TokenService tokenService;
-    private final ModelConfigRepository modelConfigRepository;
-    private final ChannelRepository channelRepository;
-    private final UserRepository userRepository;
+    private final ModelConfigService modelConfigService;
+    private final UserService userService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -143,30 +140,12 @@ public class RelayController {
         String tokenKey = extractTokenKey(authHeader);
         Token token = tokenService.validateTokenKey(tokenKey);
 
-        boolean isAdmin = userRepository.findById(token.getUserId())
-                .map(u -> "admin".equals(u.getRole()))
-                .orElse(false);
+        boolean isAdmin = userService.isAdmin(token.getUserId());
 
-        List<ModelConfig> models = isAdmin
-                ? modelConfigRepository.findByStatusOrderByStatusDescNameAsc(1)
-                : modelConfigRepository.findByStatusAndAdminOnlyFalseOrderByStatusDescNameAsc(1);
-
-        // 收集所有启用渠道配置的模型ID
-        Set<String> channelModelIds = new LinkedHashSet<>();
-        for (Channel channel : channelRepository.findByStatusOrderByPriorityDesc(1)) {
-            if (channel.getModelIds() != null && !channel.getModelIds().isEmpty()) {
-                for (String modelId : channel.getModelIds().split(",")) {
-                    channelModelIds.add(modelId.trim());
-                }
-            }
-        }
+        List<ModelConfig> models = modelConfigService.getAvailableModels(isAdmin);
 
         List<Map<String, Object>> modelList = new ArrayList<>();
         for (ModelConfig model : models) {
-            // 检查模型ID是否在渠道配置中
-            if (!channelModelIds.contains(String.valueOf(model.getId()))) {
-                continue;
-            }
             Map<String, Object> modelObj = new LinkedHashMap<>();
             modelObj.put("id", model.getDisplayName());
             modelObj.put("object", "model");
