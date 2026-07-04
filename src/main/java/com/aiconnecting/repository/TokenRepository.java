@@ -10,7 +10,6 @@ import java.util.Optional;
 public interface TokenRepository extends JpaRepository<Token, Long> {
     Optional<Token> findByTokenKey(String tokenKey);
     List<Token> findByUserId(Long userId);
-    boolean existsByTokenKey(String tokenKey);
 
     @Modifying
     @Query("UPDATE Token t SET t.usedQuota = t.usedQuota + :delta WHERE t.id = :tokenId")

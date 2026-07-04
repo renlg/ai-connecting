@@ -36,14 +36,11 @@ export const changePassword = (data) => api.put('/api/user/password', data);
 
 // Channels (Admin)
 export const getChannels = () => api.get('/api/admin/channels');
-export const getChannel = (id) => api.get(`/api/admin/channels/${id}`);
 export const createChannel = (data) => api.post('/api/admin/channels', data);
 export const updateChannel = (id, data) => api.put(`/api/admin/channels/${id}`, data);
 export const deleteChannel = (id) => api.delete(`/api/admin/channels/${id}`);
 export const updateChannelStatus = (id, status) => api.put(`/api/admin/channels/${id}/status`, { status });
-export const testChannel = (id) => api.post(`/api/admin/channels/${id}/test`);
 export const fetchChannelModels = (data) => api.post('/api/admin/channels/fetch-models', data);
-export const testChannelChat = (data) => api.post('/api/admin/channels/test-chat', data);
 
 // 流式测试渠道聊天（返回 ReadableStream）
 export async function testChannelChatStream(data, onChunk, onComplete, onError) {
@@ -157,7 +154,6 @@ export const updateToken = (id, data) => api.put(`/api/tokens/${id}`, data);
 export const deleteToken = (id) => api.delete(`/api/tokens/${id}`);
 export const updateTokenStatus = (id, status) => api.put(`/api/tokens/${id}/status`, { status });
 export const getTokenCreditHistory = (id) => api.get(`/api/tokens/${id}/credit-history`);
-export const testTokenChat = (data) => api.post('/api/tokens/test-chat', data);
 export const getTokenModels = () => api.get('/api/tokens/models');
 
 // Models (Admin)
@@ -175,7 +171,6 @@ export const getUsers = (search) => api.get('/api/admin/users', { params: search
 export const updateUserStatus = (id, status) => api.put(`/api/admin/users/${id}/status`, { status });
 export const resetUserPassword = (id) => api.put(`/api/admin/users/${id}/reset-password`);
 export const updateUserCredits = (id, credits) => api.put(`/api/admin/users/${id}/credits`, { credits });
-export const getLogs = (page = 0, size = 20) => api.get(`/api/admin/logs?page=${page}&size=${size}`);
 
 // Coupons
 export const redeemCoupon = (code) => api.post('/api/user/coupons/redeem', { code });

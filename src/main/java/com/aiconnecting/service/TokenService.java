@@ -136,11 +136,4 @@ public class TokenService {
         }
     }
 
-    /**
-     * 清除所有 Token 验证缓存
-     */
-    public void clearTokenCache() {
-        tokenCache.clear();
-    }
-
 }

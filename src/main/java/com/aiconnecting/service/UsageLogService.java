@@ -39,17 +39,9 @@ public class UsageLogService {
         }
     }
 
-    public UsageLog save(UsageLog log) {
-        return usageLogRepository.save(log);
-    }
-
     public Long getTotalTokensSince(LocalDateTime since) {
         Long result = usageLogRepository.sumTotalTokensSince(since);
         return result != null ? result : 0L;
-    }
-
-    public Long getRequestsSince(LocalDateTime since) {
-        return usageLogRepository.countRequestsSince(since);
     }
 
     public Long getTotalRequests() {
@@ -132,13 +124,6 @@ public class UsageLogService {
         double inputCost = (promptTokens / CREDIT_RATE_DIVISOR) * inputRate;
         double outputCost = (completionTokens / CREDIT_RATE_DIVISOR) * outputRate;
         return inputCost + outputCost;
-    }
-
-    /**
-     * 清除积分比例缓存（模型配置变更时调用）
-     */
-    public void clearCreditRateCache() {
-        creditRateCache.clear();
     }
 
     /**

@@ -6,8 +6,8 @@ import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.Token;
+import com.aiconnecting.entity.User;
 import com.aiconnecting.entity.UsageLog;
-import com.aiconnecting.service.ModelConfigService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -26,7 +26,6 @@ import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -44,6 +43,7 @@ public class RelayService {
     private final TokenService tokenService;
     private final UsageLogService usageLogService;
     private final ModelConfigService modelConfigService;
+    private final UserService userService;
 
     @Autowired(required = false)
     private RateLimitService rateLimitService;
@@ -97,6 +97,11 @@ public class RelayService {
         Token token = tokenService.validateTokenKey(tokenKey);
         if (token.getQuota() != -1 && token.getUsedQuota() >= token.getQuota()) {
             throw new BusinessException(429, "Token 额度已用完");
+        }
+        // 校验用户积分（admin 用户不受限制）
+        User tokenUser = userService.getById(token.getUserId());
+        if (!"admin".equals(tokenUser.getRole()) && tokenUser.getCredits() != null && tokenUser.getCredits() <= 0) {
+            throw new BusinessException(402, "用户积分不足，请先充值");
         }
         checkModelPermission(token, model);
         String channelModelId = resolveToChannelModelId(model);

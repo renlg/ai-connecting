@@ -102,18 +102,4 @@ public class RateLimitService {
         }
     }
 
-    /**
-     * 获取渠道当前窗口内的请求数（用于监控/展示）
-     */
-    public long getChannelCurrentRate(Long channelId) {
-        String key = "rate_limit:channel:" + channelId;
-        long now = System.currentTimeMillis();
-        try {
-            Long count = redisTemplate.opsForZSet().count(key, now - WINDOW_SIZE_MS, now);
-            return count != null ? count : 0;
-        } catch (Exception e) {
-            log.warn("获取渠道请求频率失败: {}", e.getMessage());
-            return 0;
-        }
-    }
 }

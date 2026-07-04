@@ -146,28 +146,12 @@ public class ChannelService {
         long startTime = System.currentTimeMillis();
 
         try {
-            if ("claude".equalsIgnoreCase(type) || "anthropic".equalsIgnoreCase(type)) {
-                return testClaudeChat(baseUrl, apiKey, model, message, startTime);
-            } else {
-                return testOpenAIChat(baseUrl, apiKey, model, message, startTime);
-            }
+            boolean isClaude = "claude".equalsIgnoreCase(type) || "anthropic".equalsIgnoreCase(type);
+            return doTestChat(baseUrl, apiKey, model, message, startTime, isClaude);
         } catch (IOException e) {
             log.error("渠道测试请求失败: {}", e.getMessage());
             throw new BusinessException("连接上游失败: " + e.getMessage());
         }
-    }
-
-    private Map<String, Object> testOpenAIChat(String baseUrl, String apiKey, String model,
-                                                String message, long startTime) throws IOException {
-        return doTestChat(baseUrl, apiKey, model, message, startTime, false);
-    }
-
-    /**
-     * Claude 协议非流式测试 - 内部转换为 OpenAI 格式发送给上游，响应转换回 Claude 格式
-     */
-    private Map<String, Object> testClaudeChat(String baseUrl, String apiKey, String model,
-                                                String message, long startTime) throws IOException {
-        return doTestChat(baseUrl, apiKey, model, message, startTime, true);
     }
 
     /**
@@ -241,29 +225,13 @@ public class ChannelService {
         }
 
         try {
-            if ("claude".equalsIgnoreCase(type) || "anthropic".equalsIgnoreCase(type)) {
-                testClaudeChatStream(baseUrl, apiKey, model, message, response);
-            } else {
-                testOpenAIChatStream(baseUrl, apiKey, model, message, response);
-            }
+            boolean isClaude = "claude".equalsIgnoreCase(type) || "anthropic".equalsIgnoreCase(type);
+            doTestChatStream(baseUrl, apiKey, model, message, response, isClaude);
         } catch (Exception e) {
             // 发送错误事件
             response.getWriter().write("data: {\"error\":\"" + SseUtils.escapeJson(e.getMessage()) + "\"}\n\n");
             response.getWriter().flush();
         }
-    }
-
-    private void testOpenAIChatStream(String baseUrl, String apiKey, String model,
-                                       String message, HttpServletResponse response) throws Exception {
-        doTestChatStream(baseUrl, apiKey, model, message, response, false);
-    }
-
-    /**
-     * Claude 协议流式测试 - 内部转换为 OpenAI 格式发送给上游，响应再转换回 Claude SSE 格式
-     */
-    private void testClaudeChatStream(String baseUrl, String apiKey, String model,
-                                       String message, HttpServletResponse response) throws Exception {
-        doTestChatStream(baseUrl, apiKey, model, message, response, true);
     }
 
     /**

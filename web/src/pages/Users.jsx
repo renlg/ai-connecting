@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react'
 import { Table, Tag, Switch, message, Button, Popconfirm, InputNumber, Modal, Form, Space, Input } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import { getUsers, updateUserStatus, resetUserPassword, updateUserCredits } from '../api'
-import dayjs from 'dayjs'
 
 export default function Users() {
   const [users, setUsers] = useState([])

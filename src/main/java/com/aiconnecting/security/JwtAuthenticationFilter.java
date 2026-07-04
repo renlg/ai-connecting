@@ -83,10 +83,4 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         userCache.remove(username);
     }
 
-    /**
-     * 清除所有用户缓存
-     */
-    public void clearUserCache() {
-        userCache.clear();
-    }
 }
