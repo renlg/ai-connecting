@@ -223,6 +223,16 @@ export default function Tokens() {
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true) }}>新增 Token</Button>
         </Space>
       </div>
+      {modelOptions.length > 0 && (
+        <div style={{ marginBottom: 16, padding: '12px 16px', background: '#fafafa', borderRadius: 8, border: '1px solid #f0f0f0' }}>
+          <div style={{ marginBottom: 8, fontSize: 13, color: '#888' }}>可用模型（{modelOptions.length}）</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {modelOptions.map(m => (
+              <Tag key={m.value} color="blue" style={{ margin: 0 }}>{m.label}</Tag>
+            ))}
+          </div>
+        </div>
+      )}
       <Table columns={columns} dataSource={tokens} rowKey="id" loading={loading} scroll={{ x: 1200 }} />
       <Modal title={editing ? '编辑 Token' : '新增 Token'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={500}>
         <Form form={form} layout="vertical">
