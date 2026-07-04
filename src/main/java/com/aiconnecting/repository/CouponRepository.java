@@ -13,7 +13,7 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
      * 原子递增使用次数，返回更新后的 usedCount
      * 如果超过 maxUses 则不会更新（SQLite 不支持 WHERE 条件更新，需在业务层校验）
      */
-    @Modifying
+    @Modifying(clearAutomatically = true)
     @Query("UPDATE Coupon c SET c.usedCount = c.usedCount + 1 WHERE c.id = :couponId AND c.usedCount < c.maxUses")
-    void incrementUsedCount(@org.springframework.data.repository.query.Param("couponId") Long couponId);
+    int incrementUsedCount(@org.springframework.data.repository.query.Param("couponId") Long couponId);
 }

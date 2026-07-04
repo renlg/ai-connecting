@@ -4,8 +4,11 @@ import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.dto.TokenRequest;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
+import com.aiconnecting.repository.ChannelRepository;
+import com.aiconnecting.repository.ModelConfigRepository;
 import com.aiconnecting.repository.UsageLogRepository;
 import com.aiconnecting.repository.UserRepository;
+import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.security.JwtAuthenticationFilter;
@@ -51,6 +54,15 @@ class TokenControllerTest {
 
     @MockBean
     private RelayService relayService;
+
+    @MockBean
+    private ChannelService channelService;
+
+    @MockBean
+    private ChannelRepository channelRepository;
+
+    @MockBean
+    private ModelConfigRepository modelConfigRepository;
 
     @MockBean
     private JwtUtils jwtUtils;

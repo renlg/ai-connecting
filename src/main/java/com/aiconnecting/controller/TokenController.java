@@ -263,6 +263,8 @@ public class TokenController {
         } catch (Exception e) {
             // 发送错误事件
             response.getWriter().write("data: {\"error\":\"" + escapeJson(e.getMessage()) + "\"}\n\n");
+            // 发送 [DONE] 标记以结束 SSE 流
+            response.getWriter().write("data: [DONE]\n\n");
             response.getWriter().flush();
         }
     }

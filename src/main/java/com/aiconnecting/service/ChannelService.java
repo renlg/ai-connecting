@@ -39,8 +39,12 @@ public class ChannelService {
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(15, TimeUnit.SECONDS);
         OkHttpClient.Builder streamBuilder = new OkHttpClient.Builder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(300, TimeUnit.SECONDS);
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(300, TimeUnit.SECONDS)
+                .callTimeout(120, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(false);
+        // 禁用连接池复用，防止陈旧连接导致请求卡死
+        streamBuilder.connectionPool(new okhttp3.ConnectionPool(5, 10, TimeUnit.SECONDS));
         if (tracingInterceptor != null) {
             baseBuilder.addInterceptor(tracingInterceptor);
             streamBuilder.addInterceptor(tracingInterceptor);
@@ -280,31 +284,37 @@ public class ChannelService {
                 "stream", true
         ));
 
-        Request httpRequest = new Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer " + apiKey)
-                .addHeader("Content-Type", "application/json")
-                .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
-                .build();
+        // 使用 HttpURLConnection 避免 OkHttp 连接池问题
+        java.net.URL urlObj = new java.net.URL(url);
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) urlObj.openConnection();
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(15000);
+        conn.setReadTimeout(120000);
+        conn.setDoOutput(true);
+        conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setRequestProperty("Connection", "close");
 
-        try (Response httpResponse = streamHttpClient.newCall(httpRequest).execute()) {
-            log.info("上游响应: code={}", httpResponse.code());
-            if (!httpResponse.isSuccessful()) {
-                String body = httpResponse.body() != null ? httpResponse.body().string() : "";
-                log.error("上游返回错误: {}", body);
-                response.getWriter().write("data: {\"error\":\"HTTP " + httpResponse.code() + ": " + escapeJson(body) + "\"}\n\n");
+        log.info("准备发送HTTP请求");
+        long httpStart = System.currentTimeMillis();
+        try {
+            conn.getOutputStream().write(jsonBody.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            conn.getOutputStream().flush();
+
+            int code = conn.getResponseCode();
+            long httpDuration = System.currentTimeMillis() - httpStart;
+            log.info("HTTP请求返回, 耗时: {}ms, code: {}", httpDuration, code);
+
+            if (code != 200) {
+                String errorBody = new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                log.error("上游返回错误: {}", errorBody);
+                response.getWriter().write("data: {\"error\":\"HTTP " + code + ": " + escapeJson(errorBody) + "\"}\n\n");
                 response.getWriter().flush();
                 return;
             }
 
-            // 读取 SSE 流
-            ResponseBody responseBody = httpResponse.body();
-            if (responseBody == null) {
-                log.warn("上游返回 body 为空");
-                return;
-            }
-
-            java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(responseBody.byteStream()));
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
             String line;
             int chunkCount = 0;
             int lineCount = 0;
@@ -326,7 +336,6 @@ public class ChannelService {
                     JsonNode delta = json.path("choices").path(0).path("delta");
                     String content = delta.path("content").asText("");
                     String reasoningContent = delta.path("reasoning_content").asText("");
-                    // 合并 content 和 reasoning_content（推理模型如 DeepSeek R1）
                     String text = content.isEmpty() ? reasoningContent : content;
                     if (!text.isEmpty()) {
                         Map<String, Object> chunk = new java.util.LinkedHashMap<>();
@@ -342,6 +351,8 @@ public class ChannelService {
                     log.warn("解析 SSE 数据失败: {}", data);
                 }
             }
+        } finally {
+            conn.disconnect();
         }
     }
 
@@ -351,7 +362,6 @@ public class ChannelService {
     private void testClaudeChatStream(String baseUrl, String apiKey, String model,
                                        String message, HttpServletResponse response) throws Exception {
         log.info("Claude 协议测试 (内部转 OpenAI): url={}, model={}", baseUrl, model);
-        // 使用 OpenAI 格式发送，但将响应转换为 Claude SSE 格式
         String url = baseUrl.replaceAll("/+$", "") + "/v1/chat/completions";
         String jsonBody = objectMapper.writeValueAsString(Map.of(
                 "model", model,
@@ -360,30 +370,37 @@ public class ChannelService {
                 "stream", true
         ));
 
-        Request httpRequest = new Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer " + apiKey)
-                .addHeader("Content-Type", "application/json")
-                .post(RequestBody.create(jsonBody, MediaType.parse("application/json")))
-                .build();
+        // 使用 HttpURLConnection 避免 OkHttp 连接池问题
+        java.net.URL urlObj = new java.net.URL(url);
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) urlObj.openConnection();
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(15000);
+        conn.setReadTimeout(120000);
+        conn.setDoOutput(true);
+        conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setRequestProperty("Connection", "close");
 
-        try (Response httpResponse = streamHttpClient.newCall(httpRequest).execute()) {
-            log.info("Claude 测试上游响应: code={}", httpResponse.code());
-            if (!httpResponse.isSuccessful()) {
-                String body = httpResponse.body() != null ? httpResponse.body().string() : "";
-                log.error("Claude 测试上游返回错误: {}", body);
-                response.getWriter().write("data: {\"error\":\"HTTP " + httpResponse.code() + ": " + escapeJson(body) + "\"}\n\n");
+        log.info("Claude测试准备发送HTTP请求");
+        long httpStart = System.currentTimeMillis();
+        try {
+            conn.getOutputStream().write(jsonBody.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            conn.getOutputStream().flush();
+
+            int code = conn.getResponseCode();
+            long httpDuration = System.currentTimeMillis() - httpStart;
+            log.info("Claude测试HTTP请求返回, 耗时: {}ms, code: {}", httpDuration, code);
+
+            if (code != 200) {
+                String errorBody = new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                log.error("Claude 测试上游返回错误: {}", errorBody);
+                response.getWriter().write("data: {\"error\":\"HTTP " + code + ": " + escapeJson(errorBody) + "\"}\n\n");
                 response.getWriter().flush();
                 return;
             }
 
-            ResponseBody responseBody = httpResponse.body();
-            if (responseBody == null) {
-                log.warn("Claude 测试上游返回 body 为空");
-                return;
-            }
-
-            java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(responseBody.byteStream()));
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(conn.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
             String line;
             int chunkCount = 0;
             int lineCount = 0;
@@ -410,6 +427,8 @@ public class ChannelService {
                 }
             }
             log.info("Claude 测试流式传输完成, 共 {} 个 chunk, {} 行数据", chunkCount, lineCount);
+        } finally {
+            conn.disconnect();
         }
     }
 

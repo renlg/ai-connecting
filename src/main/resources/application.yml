@@ -5,8 +5,11 @@ spring:
   application:
     name: ai-connecting
   datasource:
-    url: jdbc:sqlite:./data/ai-connecting.db
+    url: jdbc:sqlite:./data/ai-connecting.db?busy_timeout=5000
     driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
+      connection-test-query: "SELECT 1"
   jpa:
     database-platform: org.hibernate.community.dialect.SQLiteDialect
     hibernate:

@@ -131,9 +131,19 @@ export default function Tokens() {
           message: testMessage || 'hi'
         },
         (chunk) => {
-          // 累积流式内容
-          if (chunk.content) {
-            setStreamContent(prev => prev + chunk.content)
+          // 从 SSE chunk 中提取内容
+          let text = ''
+          if (testProtocol === 'claude') {
+            // Claude 流式: {"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}
+            if (chunk.type === 'content_block_delta' && chunk.delta?.text) {
+              text = chunk.delta.text
+            }
+          } else {
+            // OpenAI 流式: {"choices":[{"delta":{"content":"..."}}]}
+            text = chunk.choices?.[0]?.delta?.content || ''
+          }
+          if (text) {
+            setStreamContent(prev => prev + text)
           }
           // 更新耗时
           setTestResult(prev => ({ ...prev, duration: Date.now() - startTime }))

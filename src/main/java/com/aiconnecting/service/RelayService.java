@@ -49,6 +49,9 @@ public class RelayService {
 
     @jakarta.annotation.PostConstruct
     void initHttpClient() {
+        // 禁用 HttpURLConnection 的 keep-alive，防止复用陈旧连接导致卡死
+        System.setProperty("http.keepAlive", "false");
+
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(120, TimeUnit.SECONDS)
@@ -172,60 +175,68 @@ public class RelayService {
 
             try {
                 String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
-                RequestBody body = RequestBody.create(modifiedBody, MediaType.parse("application/json"));
-                Request request = new Request.Builder()
-                        .url(url)
-                        .addHeader("Authorization", "Bearer " + channel.getApiKey())
-                        .addHeader("Content-Type", "application/json")
-                        .addHeader("Accept", "text/event-stream")
-                        .post(body)
-                        .build();
+                log.info("流式请求 OpenAI: url={}, channel={}", url, channel.getId());
+                // 使用 HttpURLConnection 避免 OkHttp 连接池问题
+                java.net.URL urlObj = new java.net.URL(url);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) urlObj.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(120000);
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Authorization", "Bearer " + channel.getApiKey());
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty("Accept", "text/event-stream");
+                conn.setRequestProperty("Connection", "close");
 
-                try (okhttp3.Response upstreamResponse = httpClient.newCall(request).execute()) {
-                    if (!upstreamResponse.isSuccessful()) {
-                        String errorBody = upstreamResponse.body() != null ? upstreamResponse.body().string() : "Unknown error";
-                        log.warn("渠道 {} 流式请求失败: {} - {}", channel.getId(), upstreamResponse.code(), errorBody);
-                        if (upstreamResponse.code() >= 500) {
-                            continue; // 服务端错误，尝试下一个渠道
-                        }
+                try {
+                    conn.getOutputStream().write(modifiedBody.getBytes(StandardCharsets.UTF_8));
+                    conn.getOutputStream().flush();
+                    int code = conn.getResponseCode();
+                    log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
+
+                    if (code >= 500) {
+                        conn.disconnect();
+                        continue; // 服务端错误，尝试下一个渠道
+                    }
+                    if (code != 200) {
+                        String errorBody = new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+                        log.warn("渠道 {} 流式请求失败: {} - {}", channel.getId(), code, errorBody);
                         // 客户端错误（4xx）直接返回
-                        httpResponse.setStatus(upstreamResponse.code());
+                        httpResponse.setStatus(code);
                         httpResponse.getWriter().write(errorBody);
+                        conn.disconnect();
                         return;
                     }
 
                     usedChannel = channel;
-
-                    // 逐行读取 SSE 流并转发，同时捕获 usage 数据
-                    ResponseBody responseBody = upstreamResponse.body();
-                    if (responseBody != null) {
-                        try (BufferedReader reader = new BufferedReader(
-                                new InputStreamReader(responseBody.byteStream(), StandardCharsets.UTF_8))) {
-                            var writer = httpResponse.getWriter();
-                            String line;
-                            while ((line = reader.readLine()) != null) {
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                        var writer = httpResponse.getWriter();
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            if (line.isEmpty()) {
+                                // 上游 SSE 的空行分隔符，直接透传
+                                writer.write("\n");
+                            } else {
                                 writer.write(line);
                                 writer.write("\n");
-                                writer.flush();
-
-                                // 捕获包含 usage 的 SSE data 行
-                                if (line.startsWith("data: ") && !line.equals("data: [DONE]")) {
-                                    String data = line.substring(6);
-                                    if (data.contains("\"usage\"")) {
-                                        lastUsageData = data;
-                                    }
+                            }
+                            writer.flush();
+                            // 捕获包含 usage 的 SSE data 行
+                            if (line.startsWith("data: ") && !line.equals("data: [DONE]")) {
+                                String data = line.substring(6);
+                                if (data.contains("\"usage\"")) {
+                                    lastUsageData = data;
                                 }
                             }
                         }
                     }
-                    break; // 成功，退出渠道循环
-
-                } catch (IOException e) {
-                    log.warn("渠道 {} 流式请求异常: {}", channel.getId(), e.getMessage());
-                    continue; // 网络异常，尝试下一个渠道
+                } finally {
+                    conn.disconnect();
                 }
+                break; // 成功，退出渠道循环
             } catch (Exception e) {
-                log.warn("渠道 {} 处理异常: {}", channel.getId(), e.getMessage());
+                log.warn("渠道 {} 流式请求异常: {}", channel.getId(), e.getMessage());
                 continue;
             }
         }
@@ -348,7 +359,9 @@ public class RelayService {
     public void claudeRelayStreamRequest(String tokenKey, String requestBody,
                                           String model, HttpServletRequest httpRequest,
                                           HttpServletResponse httpResponse) throws IOException {
+        log.info("[Claude流式] 开始处理, model={}", model);
         Token token = tokenService.validateTokenKey(tokenKey);
+        log.info("[Claude流式] Token验证通过, id={}", token.getId());
         if (token.getQuota() != -1 && token.getUsedQuota() >= token.getQuota()) {
             throw new BusinessException(429, "Token 额度已用完");
         }
@@ -356,6 +369,7 @@ public class RelayService {
 
         String channelModelId = resolveToChannelModelId(model);
         List<Channel> allChannels = channelService.getActiveChannelsByModel(channelModelId);
+        log.info("[Claude流式] 找到 {} 个渠道", allChannels.size());
         if (allChannels.isEmpty()) {
             throw new BusinessException(503, "没有可用的渠道支持模型: " + model);
         }
@@ -369,12 +383,13 @@ public class RelayService {
                 .toList();
 
         if (!claudeChannels.isEmpty()) {
-            // 有 Claude 渠道，直接用 Claude 协议流式发送
+            log.info("[Claude流式] 使用 Claude 渠道直接发送, {} 个Claude渠道", claudeChannels.size());
             forwardClaudeStreamDirect(claudeChannels, requestBody, model, token, httpRequest, httpResponse);
         } else {
-            // 没有 Claude 渠道，转换为 OpenAI 格式
+            log.info("[Claude流式] 无 Claude 渠道，转 OpenAI 格式发送");
             forwardOpenAiStreamAsClaude(requestBody, model, token, allChannels, httpRequest, httpResponse);
         }
+        log.info("[Claude流式] 处理完成");
     }
 
     /**
@@ -403,46 +418,72 @@ public class RelayService {
             }
             try {
                 String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1/messages";
-                RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
-                Request.Builder reqBuilder = new Request.Builder()
-                        .url(url)
-                        .addHeader("Content-Type", "application/json")
-                        .addHeader("Accept", "text/event-stream")
-                        .post(body);
-                applyChannelAuth(reqBuilder, channel);
+                log.info("流式请求 Claude: url={}, channel={}", url, channel.getId());
+                java.net.URL urlObj = new java.net.URL(url);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) urlObj.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(120000);
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty("Accept", "text/event-stream");
+                conn.setRequestProperty("Connection", "close");
+                // 设置渠道认证
+                if ("claude".equalsIgnoreCase(channel.getType()) || "anthropic".equalsIgnoreCase(channel.getType())) {
+                    conn.setRequestProperty("x-api-key", channel.getApiKey());
+                    conn.setRequestProperty("anthropic-version", "2023-06-01");
+                } else {
+                    conn.setRequestProperty("Authorization", "Bearer " + channel.getApiKey());
+                }
 
-                try (okhttp3.Response upstreamResponse = httpClient.newCall(reqBuilder.build()).execute()) {
-                    if (!upstreamResponse.isSuccessful()) {
-                        String errorBody = upstreamResponse.body() != null ? upstreamResponse.body().string() : "Unknown error";
-                        log.warn("渠道 {} Claude 流式请求失败: {} - {}", channel.getId(), upstreamResponse.code(), errorBody);
-                        if (upstreamResponse.code() >= 500) continue;
-                        httpResponse.setStatus(upstreamResponse.code());
+                try {
+                    conn.getOutputStream().write(requestBody.getBytes(StandardCharsets.UTF_8));
+                    conn.getOutputStream().flush();
+                    int code = conn.getResponseCode();
+                    log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
+
+                    if (code >= 500) {
+                        conn.disconnect();
+                        continue;
+                    }
+                    if (code != 200) {
+                        String errorBody = new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+                        log.warn("渠道 {} Claude 流式请求失败: {} - {}", channel.getId(), code, errorBody);
+                        httpResponse.setStatus(code);
                         httpResponse.getWriter().write(errorBody);
+                        conn.disconnect();
                         return;
                     }
                     usedChannel = channel;
-                    ResponseBody responseBody = upstreamResponse.body();
-                    if (responseBody != null) {
-                        try (BufferedReader reader = new BufferedReader(
-                                new InputStreamReader(responseBody.byteStream(), StandardCharsets.UTF_8))) {
-                            var writer = httpResponse.getWriter();
-                            String line;
-                            while ((line = reader.readLine()) != null) {
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                        var writer = httpResponse.getWriter();
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            if (line.isEmpty()) {
+                                writer.write("\n");
+                            } else {
                                 writer.write(line);
                                 writer.write("\n");
-                                writer.flush();
-                                if (line.startsWith("data: ") && line.contains("\"usage\"")) {
-                                    String data = line.substring(6);
-                                    if (data.contains("\"output_tokens\"")) {
-                                        lastUsageData = data;
-                                    }
+                            }
+                            writer.flush();
+                            if (line.startsWith("data: ") && line.contains("\"usage\"")) {
+                                String data = line.substring(6);
+                                if (data.contains("\"output_tokens\"")) {
+                                    lastUsageData = data;
                                 }
                             }
                         }
+                        // 发送 [DONE] 标记以兼容前端 SSE 解析
+                        writer.write("data: [DONE]");
+                        writer.write("\n\n");
+                        writer.flush();
                     }
-                    break;
+                } finally {
+                    conn.disconnect();
                 }
-            } catch (IOException e) {
+                break;
+            } catch (Exception e) {
                 log.warn("渠道 {} Claude 流式请求异常: {}", channel.getId(), e.getMessage());
                 continue;
             }
@@ -525,61 +566,71 @@ public class RelayService {
             }
             try {
                 String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1/chat/completions";
-                RequestBody body = RequestBody.create(openAiBody, MediaType.parse("application/json"));
-                Request request = new Request.Builder()
-                        .url(url)
-                        .addHeader("Authorization", "Bearer " + channel.getApiKey())
-                        .addHeader("Content-Type", "application/json")
-                        .addHeader("Accept", "text/event-stream")
-                        .post(body)
-                        .build();
+                log.info("流式请求 OpenAI-as-Claude: url={}, channel={}", url, channel.getId());
+                java.net.URL urlObj = new java.net.URL(url);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) urlObj.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(120000);
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Authorization", "Bearer " + channel.getApiKey());
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty("Accept", "text/event-stream");
+                conn.setRequestProperty("Connection", "close");
 
-                try (okhttp3.Response upstreamResponse = httpClient.newCall(request).execute()) {
-                    if (!upstreamResponse.isSuccessful()) {
-                        String errorBody = upstreamResponse.body() != null ? upstreamResponse.body().string() : "Unknown error";
-                        log.warn("渠道 {} OpenAI-as-Claude 流式请求失败: {} - {}", channel.getId(), upstreamResponse.code(), errorBody);
-                        if (upstreamResponse.code() >= 500) continue;
+                try {
+                    conn.getOutputStream().write(openAiBody.getBytes(StandardCharsets.UTF_8));
+                    conn.getOutputStream().flush();
+                    int code = conn.getResponseCode();
+                    log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
+
+                    if (code >= 500) {
+                        conn.disconnect();
+                        continue;
+                    }
+                    if (code != 200) {
+                        log.warn("渠道 {} OpenAI-as-Claude 流式请求失败: {}", channel.getId(), code);
                         writer.write("data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"上游错误\"}}");
                         writer.write("\n\n");
                         writer.flush();
+                        conn.disconnect();
                         return;
                     }
                     usedChannel = channel;
-                    ResponseBody responseBody = upstreamResponse.body();
-                    if (responseBody != null) {
-                        try (BufferedReader reader = new BufferedReader(
-                                new InputStreamReader(responseBody.byteStream(), StandardCharsets.UTF_8))) {
-                            String line;
-                            while ((line = reader.readLine()) != null) {
-                                if (line.startsWith("data: ")) {
-                                    String data = line.substring(6).trim();
-                                    if ("[DONE]".equals(data)) continue;
-                                    try {
-                                        JsonNode json = objectMapper.readTree(data);
-                                        if (json.has("usage")) {
-                                            JsonNode usage = json.get("usage");
-                                            promptTokens = usage.path("prompt_tokens").asInt(0);
-                                            completionTokens = usage.path("completion_tokens").asInt(0);
-                                        }
-                                        String content = json.path("choices").path(0).path("delta").path("content").asText("");
-                                        String reasoningContent = json.path("choices").path(0).path("delta").path("reasoning_content").asText("");
-                                        String text = content.isEmpty() ? reasoningContent : content;
-                                        if (!text.isEmpty()) {
-                                            String claudeEvt = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + objectMapper.writeValueAsString(text) + "}}";
-                                            writer.write("data: " + claudeEvt);
-                                            writer.write("\n\n");
-                                            writer.flush();
-                                        }
-                                    } catch (Exception parseEx) {
-                                        log.warn("转换 OpenAI SSE 为 Claude 格式失败: {}", data);
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            if (line.startsWith("data: ")) {
+                                String data = line.substring(6).trim();
+                                if ("[DONE]".equals(data)) continue;
+                                try {
+                                    JsonNode json = objectMapper.readTree(data);
+                                    if (json.has("usage")) {
+                                        JsonNode usage = json.get("usage");
+                                        promptTokens = usage.path("prompt_tokens").asInt(0);
+                                        completionTokens = usage.path("completion_tokens").asInt(0);
                                     }
+                                    String content = json.path("choices").path(0).path("delta").path("content").asText("");
+                                    String reasoningContent = json.path("choices").path(0).path("delta").path("reasoning_content").asText("");
+                                    String text = content.isEmpty() ? reasoningContent : content;
+                                    if (!text.isEmpty()) {
+                                        String claudeEvt = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + objectMapper.writeValueAsString(text) + "}}";
+                                        writer.write("data: " + claudeEvt);
+                                        writer.write("\n\n");
+                                        writer.flush();
+                                    }
+                                } catch (Exception parseEx) {
+                                    log.warn("转换 OpenAI SSE 为 Claude 格式失败: {}", data);
                                 }
                             }
                         }
                     }
-                    break;
+                } finally {
+                    conn.disconnect();
                 }
-            } catch (IOException e) {
+                break;
+            } catch (Exception e) {
                 log.warn("渠道 {} OpenAI-as-Claude 流式请求异常: {}", channel.getId(), e.getMessage());
                 continue;
             }
@@ -597,6 +648,9 @@ public class RelayService {
         writer.write("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":" + completionTokens + "}}");
         writer.write("\n\n");
         writer.write("data: {\"type\":\"message_stop\"}");
+        writer.write("\n\n");
+        // 发送 [DONE] 标记以兼容前端 SSE 解析
+        writer.write("data: [DONE]");
         writer.write("\n\n");
         writer.flush();
 
