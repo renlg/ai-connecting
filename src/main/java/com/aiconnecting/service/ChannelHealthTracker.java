@@ -33,9 +33,9 @@ public class ChannelHealthTracker {
     private static final long WEIGHT_DECREMENT = 20L;
     private static final long WEIGHT_INCREMENT = 5L;
 
-    /** 10 分钟内失败 10 次则封禁 */
-    private static final long FAILURE_WINDOW_MS = 10 * 60 * 1000L;
-    private static final long FAILURE_THRESHOLD = 10L;
+    /** 3 分钟内失败 3 次则封禁 */
+    private static final long FAILURE_WINDOW_MS = 3 * 60 * 1000L;
+    private static final long FAILURE_THRESHOLD = 3L;
 
     /** 封禁时长：1 小时 */
     private static final long BLOCK_DURATION_MS = 60 * 60 * 1000L;
