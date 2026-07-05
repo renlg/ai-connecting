@@ -167,6 +167,7 @@ export const batchCreateModels = (names) => api.post('/api/admin/models/batch', 
 
 // Admin
 export const getDashboard = () => api.get('/api/admin/dashboard');
+export const getBlockedChannels = () => api.get('/api/admin/channels/blocked');
 export const getUsers = (search) => api.get('/api/admin/users', { params: search ? { search } : {} });
 export const updateUserStatus = (id, status) => api.put(`/api/admin/users/${id}/status`, { status });
 export const resetUserPassword = (id) => api.put(`/api/admin/users/${id}/reset-password`);

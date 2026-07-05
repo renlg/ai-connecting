@@ -91,7 +91,7 @@ public class ChannelRouter {
     }
 
     /**
-     * 加权随机选择算法（使用本地缓存权重，避免逐渠道 Redis 调用）
+     * 加权随机选择算法（健康权重 × 优先级，使用本地缓存权重，避免逐渠道 Redis 调用）
      */
     private Channel weightedSelect(List<Channel> channels) {
         if (channels.size() == 1) {
@@ -100,7 +100,7 @@ public class ChannelRouter {
 
         long totalWeight = 0;
         for (Channel c : channels) {
-            totalWeight += getCachedWeight(c.getId());
+            totalWeight += getEffectiveWeight(c);
         }
 
         if (totalWeight <= 0) {
@@ -110,12 +110,23 @@ public class ChannelRouter {
         long random = ThreadLocalRandom.current().nextLong(totalWeight);
         long cumulative = 0;
         for (Channel c : channels) {
-            cumulative += getCachedWeight(c.getId());
+            cumulative += getEffectiveWeight(c);
             if (random < cumulative) {
                 return c;
             }
         }
         return channels.get(channels.size() - 1);
+    }
+
+    /**
+     * 计算渠道有效权重 = 健康权重 × 优先级系数
+     * priority 为渠道配置的优先级（数字越大越优先），最低为 0
+     * 优先级系数 = priority + 1（保证 priority=0 时系数为 1，不被完全忽略）
+     */
+    private long getEffectiveWeight(Channel c) {
+        long healthWeight = getCachedWeight(c.getId());
+        int priorityCoeff = (c.getPriority() != null ? c.getPriority() : 0) + 1;
+        return healthWeight * priorityCoeff;
     }
 
     /**

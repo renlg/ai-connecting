@@ -382,6 +382,44 @@ public class ChannelHealthTracker {
     }
 
     /**
+     * 获取所有被封禁的渠道 ID 及封禁截止时间
+     * @return Map<channelId, blockUntilTimestamp>
+     */
+    public Map<Long, Long> getBlockedChannelDetails() {
+        Map<Long, Long> result = new HashMap<>();
+        try {
+            if (isRedisAvailable()) {
+                Set<String> keys = new HashSet<>();
+                var scanOptions = org.springframework.data.redis.core.ScanOptions.scanOptions()
+                        .match(BLOCK_PREFIX + "*").count(100).build();
+                try (var cursor = redisTemplate.scan(scanOptions)) {
+                    while (cursor.hasNext()) {
+                        keys.add(cursor.next());
+                    }
+                }
+                for (String key : keys) {
+                    try {
+                        Long id = Long.parseLong(key.substring(BLOCK_PREFIX.length()));
+                        Long until = redisTemplate.opsForValue().get(key);
+                        if (until != null && System.currentTimeMillis() < until) {
+                            result.put(id, until);
+                        }
+                    } catch (NumberFormatException ignored) {}
+                }
+                return result;
+            }
+        } catch (Exception e) {
+            log.warn("Redis 获取封禁渠道详情失败: {}", e.getMessage());
+        }
+        // 内存回退
+        long now = System.currentTimeMillis();
+        memBlockUntil.forEach((id, until) -> {
+            if (now < until) result.put(id, until);
+        });
+        return result;
+    }
+
+    /**
      * 获取渠道当前权重（供管理接口使用）
      */
     public Map<String, Object> getChannelHealth(Long channelId) {

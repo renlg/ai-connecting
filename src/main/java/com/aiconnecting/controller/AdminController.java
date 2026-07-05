@@ -17,6 +17,7 @@ import com.aiconnecting.service.UsageLogService;
 import com.aiconnecting.service.CouponService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.ChannelService;
+import com.aiconnecting.service.ChannelHealthTracker;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -25,6 +26,7 @@ import org.springframework.web.bind.annotation.*;
 import jakarta.validation.Valid;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin")
@@ -40,6 +42,7 @@ public class AdminController {
     private final TokenService tokenService;
     private final CouponService couponService;
     private final DashboardService dashboardService;
+    private final ChannelHealthTracker channelHealthTracker;
 
     /**
      * 仪表盘统计 - admin 看全局，普通用户看自己的数据
@@ -130,5 +133,30 @@ public class AdminController {
     @PutMapping("/coupons/{id}/status")
     public ApiResponse<Coupon> updateCouponStatus(@PathVariable Long id, @Valid @RequestBody StatusRequest request) {
         return ApiResponse.success(couponService.toggleStatus(id, request.getStatus()));
+    }
+
+    /**
+     * 获取封禁渠道列表（含渠道名称和封禁截止时间）
+     */
+    @GetMapping("/channels/blocked")
+    public ApiResponse<List<Map<String, Object>>> getBlockedChannels() {
+        Map<Long, Long> blockedDetails = channelHealthTracker.getBlockedChannelDetails();
+        if (blockedDetails.isEmpty()) {
+            return ApiResponse.success(List.of());
+        }
+        List<Channel> allChannels = channelService.listAll();
+        List<Map<String, Object>> result = new java.util.ArrayList<>();
+        for (Channel channel : allChannels) {
+            Long blockUntil = blockedDetails.get(channel.getId());
+            if (blockUntil != null) {
+                Map<String, Object> item = new java.util.LinkedHashMap<>();
+                item.put("id", channel.getId());
+                item.put("name", channel.getName());
+                item.put("type", channel.getType());
+                item.put("blockedUntil", blockUntil);
+                result.add(item);
+            }
+        }
+        return ApiResponse.success(result);
     }
 }
