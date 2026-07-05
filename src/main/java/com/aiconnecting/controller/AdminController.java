@@ -7,10 +7,12 @@ import com.aiconnecting.dto.CouponRedemptionDTO;
 import com.aiconnecting.dto.CreditsRequest;
 import com.aiconnecting.dto.DashboardStats;
 import com.aiconnecting.dto.StatusRequest;
+import com.aiconnecting.dto.AnnouncementRequest;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Coupon;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.entity.UsageLog;
+import com.aiconnecting.entity.Announcement;
 import com.aiconnecting.service.DashboardService;
 import com.aiconnecting.service.UserService;
 import com.aiconnecting.service.UsageLogService;
@@ -18,6 +20,7 @@ import com.aiconnecting.service.CouponService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.ChannelHealthTracker;
+import com.aiconnecting.repository.AnnouncementRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -43,6 +46,7 @@ public class AdminController {
     private final CouponService couponService;
     private final DashboardService dashboardService;
     private final ChannelHealthTracker channelHealthTracker;
+    private final AnnouncementRepository announcementRepository;
 
     /**
      * 仪表盘统计 - admin 看全局，普通用户看自己的数据
@@ -158,5 +162,55 @@ public class AdminController {
             }
         }
         return ApiResponse.success(result);
+    }
+
+    // ==================== 公告管理 ====================
+
+    /**
+     * 创建公告
+     */
+    @PostMapping("/announcements")
+    public ApiResponse<Announcement> createAnnouncement(@AuthenticationPrincipal User currentUser,
+                                                        @Valid @RequestBody AnnouncementRequest request) {
+        Announcement announcement = Announcement.builder()
+                .title(request.getTitle())
+                .content(request.getContent())
+                .status(request.getStatus() != null ? request.getStatus() : 1)
+                .createdBy(currentUser.getId())
+                .build();
+        return ApiResponse.success(announcementRepository.save(announcement));
+    }
+
+    /**
+     * 获取所有公告列表
+     */
+    @GetMapping("/announcements")
+    public ApiResponse<List<Announcement>> listAnnouncements() {
+        return ApiResponse.success(announcementRepository.findAllByOrderByCreatedAtDesc());
+    }
+
+    /**
+     * 更新公告
+     */
+    @PutMapping("/announcements/{id}")
+    public ApiResponse<Announcement> updateAnnouncement(@PathVariable Long id,
+                                                        @Valid @RequestBody AnnouncementRequest request) {
+        Announcement announcement = announcementRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(404, "公告不存在"));
+        announcement.setTitle(request.getTitle());
+        announcement.setContent(request.getContent());
+        if (request.getStatus() != null) {
+            announcement.setStatus(request.getStatus());
+        }
+        return ApiResponse.success(announcementRepository.save(announcement));
+    }
+
+    /**
+     * 删除公告
+     */
+    @DeleteMapping("/announcements/{id}")
+    public ApiResponse<Void> deleteAnnouncement(@PathVariable Long id) {
+        announcementRepository.deleteById(id);
+        return ApiResponse.success();
     }
 }

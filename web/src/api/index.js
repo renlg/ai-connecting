@@ -173,6 +173,13 @@ export const updateUserStatus = (id, status) => api.put(`/api/admin/users/${id}/
 export const resetUserPassword = (id) => api.put(`/api/admin/users/${id}/reset-password`);
 export const updateUserCredits = (id, credits) => api.put(`/api/admin/users/${id}/credits`, { credits });
 
+// Announcements
+export const getLatestAnnouncements = (limit = 5) => api.get('/api/announcements/latest', { params: { limit } });
+export const getAnnouncements = () => api.get('/api/admin/announcements');
+export const createAnnouncement = (data) => api.post('/api/admin/announcements', data);
+export const updateAnnouncement = (id, data) => api.put(`/api/admin/announcements/${id}`, data);
+export const deleteAnnouncement = (id) => api.delete(`/api/admin/announcements/${id}`);
+
 // Coupons
 export const redeemCoupon = (code) => api.post('/api/user/coupons/redeem', { code });
 export const getCoupons = () => api.get('/api/admin/coupons');
