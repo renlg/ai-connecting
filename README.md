@@ -61,6 +61,4 @@ java -jar target/ai-connecting-1.0.0.jar
 | `REDIS_HOST` | Redis 地址 | 限流功能需要 |
 | `REDIS_PASSWORD` | Redis 密码 | 否 |
 
-## 部署
 
-参考 `deploy/` 目录下的脚本自行配置部署流程。
