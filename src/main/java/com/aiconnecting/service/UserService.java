@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.annotation.PostConstruct;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
@@ -29,6 +30,16 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    /** 用户缓存，转发请求验证时避免每次查库，缓存 30 秒 */
+    private final ConcurrentHashMap<Long, CachedUser> userCache = new ConcurrentHashMap<>();
+    private static final long USER_CACHE_TTL_MS = 30 * 1000L;
+
+    private record CachedUser(User user, long cachedAt) {
+        boolean isExpired() {
+            return System.currentTimeMillis() - cachedAt > USER_CACHE_TTL_MS;
+        }
+    }
 
     @Value("${app.admin.default-password}")
     private String adminDefaultPassword;
@@ -99,6 +110,30 @@ public class UserService {
     }
 
     /**
+     * 获取用户（带缓存，供转发链路使用，避免每次请求查库）
+     * 缓存 30 秒，积分/状态变更时主动清除
+     */
+    public User getByIdCached(Long id) {
+        CachedUser cached = userCache.get(id);
+        if (cached != null && !cached.isExpired()) {
+            return cached.user();
+        }
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new BusinessException("用户不存在"));
+        userCache.put(id, new CachedUser(user, System.currentTimeMillis()));
+        return user;
+    }
+
+    /**
+     * 清除用户缓存（积分/状态变更时调用）
+     */
+    public void evictUserCache(Long userId) {
+        if (userId != null) {
+            userCache.remove(userId);
+        }
+    }
+
+    /**
      * 获取用户总数
      */
     public long count() {
@@ -143,6 +178,7 @@ public class UserService {
         userRepository.save(user);
         // 清除用户缓存，使角色/状态变更立即生效
         jwtAuthenticationFilter.evictUserCache(user.getUsername());
+        evictUserCache(userId);
     }
 
     /**
@@ -155,6 +191,7 @@ public class UserService {
         userRepository.save(user);
         // 清除用户缓存，使密码变更立即生效
         jwtAuthenticationFilter.evictUserCache(user.getUsername());
+        evictUserCache(userId);
     }
 
     /**
@@ -167,6 +204,7 @@ public class UserService {
         userRepository.save(user);
         // 清除用户缓存，使积分变更尽快生效
         jwtAuthenticationFilter.evictUserCache(user.getUsername());
+        evictUserCache(userId);
     }
 
     /**

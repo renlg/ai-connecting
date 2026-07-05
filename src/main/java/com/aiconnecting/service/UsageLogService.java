@@ -29,9 +29,9 @@ public class UsageLogService {
     /** 积分计算除数：每千 token */
     private static final double CREDIT_RATE_DIVISOR = 1000.0;
 
-    /** 模型积分比例缓存，避免每次请求查库，缓存 5 分钟 */
+    /** 模型积分比例缓存，避免每次请求查库，缓存 2 分钟 */
     private final ConcurrentHashMap<String, CachedCreditRate> creditRateCache = new ConcurrentHashMap<>();
-    private static final long CREDIT_RATE_CACHE_TTL_MS = 5 * 60 * 1000L;
+    private static final long CREDIT_RATE_CACHE_TTL_MS = 2 * 60 * 1000L;
 
     private record CachedCreditRate(int inputRate, int outputRate, long cachedAt) {
         boolean isExpired() {

@@ -107,6 +107,18 @@ public class ChannelService {
     }
 
     /**
+     * 禁用渠道（自动禁用或手动操作）
+     */
+    public void disableChannel(Long id) {
+        Channel channel = getById(id);
+        if (channel.getStatus() != 0) {
+            channel.setStatus(0);
+            channelRepository.save(channel);
+            log.warn("渠道 {} ({}) 已被禁用", id, channel.getName());
+        }
+    }
+
+    /**
      * 原子增加渠道已用额度
      */
     public void addUsedQuota(Long channelId, long quota) {
