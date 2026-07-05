@@ -63,8 +63,4 @@ java -jar target/ai-connecting-1.0.0.jar
 
 ## 部署
 
-```bash
-bash deploy/deploy.sh
-```
-
-部署前会自动运行单元测试，测试通过后构建并上传到远程服务器。
+参考 `deploy/` 目录下的脚本自行配置部署流程。
