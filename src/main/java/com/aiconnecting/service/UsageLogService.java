@@ -153,7 +153,7 @@ public class UsageLogService {
     /**
      * 查询指定 Token 的每日消耗积分
      */
-    public List<Object[]> getDailyCreditCost(Long tokenId, LocalDateTime since) {
-        return usageLogRepository.findDailyCreditCostByTokenIdSince(tokenId, since);
+    public List<Object[]> getDailyCreditCost(Long tokenId, long sinceMillis) {
+        return usageLogRepository.findDailyCreditCostByTokenIdSince(tokenId, sinceMillis);
     }
 }
