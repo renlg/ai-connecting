@@ -3,6 +3,7 @@ package com.aiconnecting.controller;
 import com.aiconnecting.common.ApiResponse;
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.dto.ModelConfigRequest;
+import com.aiconnecting.dto.StatusRequest;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.service.ModelConfigService;
@@ -10,6 +11,7 @@ import com.aiconnecting.service.RelayService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
 
 import java.util.List;
 import java.util.Map;
@@ -116,9 +118,9 @@ public class ModelConfigController {
      * 更新模型状态
      */
     @PutMapping("/{id}/status")
-    public ApiResponse<Void> updateStatus(@PathVariable Long id, @RequestBody Map<String, Integer> body) {
+    public ApiResponse<Void> updateStatus(@PathVariable Long id, @Valid @RequestBody StatusRequest request) {
         ModelConfig config = modelConfigService.getById(id);
-        config.setStatus(body.get("status"));
+        config.setStatus(request.getStatus());
         modelConfigService.save(config);
         relayService.clearModelNameCache();
         return ApiResponse.success();

@@ -3,6 +3,7 @@ package com.aiconnecting.controller;
 import com.aiconnecting.common.ApiResponse;
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.SseUtils;
+import com.aiconnecting.dto.StatusRequest;
 import com.aiconnecting.dto.TokenRequest;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
@@ -19,8 +20,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.MediaType;
-
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -92,10 +93,10 @@ public class TokenController {
 
     @PutMapping("/{id}/status")
     public ApiResponse<Void> updateStatus(@AuthenticationPrincipal User user,
-                                          @PathVariable Long id, @RequestBody Map<String, Integer> body) {
+                                          @PathVariable Long id, @Valid @RequestBody StatusRequest request) {
         Token token = tokenService.getById(id);
         checkTokenOwner(user, token);
-        tokenService.updateStatus(id, body.get("status"));
+        tokenService.updateStatus(id, request.getStatus());
         return ApiResponse.success();
     }
 

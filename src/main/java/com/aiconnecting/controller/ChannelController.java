@@ -2,6 +2,7 @@ package com.aiconnecting.controller;
 
 import com.aiconnecting.common.ApiResponse;
 import com.aiconnecting.dto.ChannelRequest;
+import com.aiconnecting.dto.StatusRequest;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.service.ChannelService;
 import lombok.RequiredArgsConstructor;
@@ -9,6 +10,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
 
 import java.util.List;
 import java.util.Map;
@@ -47,8 +49,8 @@ public class ChannelController {
     }
 
     @PutMapping("/{id}/status")
-    public ApiResponse<Void> updateStatus(@PathVariable Long id, @RequestBody Map<String, Integer> body) {
-        channelService.updateStatus(id, body.get("status"));
+    public ApiResponse<Void> updateStatus(@PathVariable Long id, @Valid @RequestBody StatusRequest request) {
+        channelService.updateStatus(id, request.getStatus());
         return ApiResponse.success();
     }
 

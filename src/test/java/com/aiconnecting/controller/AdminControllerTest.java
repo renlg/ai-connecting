@@ -8,6 +8,7 @@ import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.service.CouponService;
+import com.aiconnecting.service.DashboardService;
 import com.aiconnecting.service.UsageLogService;
 import com.aiconnecting.service.UserService;
 import com.aiconnecting.service.TokenService;
@@ -30,6 +31,8 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+
+import com.aiconnecting.dto.DashboardStats;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -56,6 +59,7 @@ class AdminControllerTest {
     @MockBean private UsageLogService usageLogService;
     @MockBean private TokenService tokenService;
     @MockBean private CouponService couponService;
+    @MockBean private DashboardService dashboardService;
     @MockBean private JwtUtils jwtUtils;
     @MockBean private JwtAuthenticationFilter jwtAuthenticationFilter;
 
@@ -87,20 +91,10 @@ class AdminControllerTest {
     void dashboard_asAdmin() throws Exception {
         setAuthentication(adminUser);
 
-        Channel ch1 = Channel.builder().id(1L).status(1).usedQuota(100L).build();
-        Channel ch2 = Channel.builder().id(2L).status(0).usedQuota(50L).build();
-        when(channelService.listAll()).thenReturn(List.of(ch1, ch2));
-        when(tokenService.count()).thenReturn(10L);
-        when(userService.count()).thenReturn(5L);
-        when(usageLogService.getTotalRequests()).thenReturn(1000L);
-        when(usageLogService.getRequestsToday()).thenReturn(50L);
-        when(usageLogService.getTokensUsedToday()).thenReturn(5000L);
-        when(usageLogService.getTotalInputTokens()).thenReturn(50000L);
-        when(usageLogService.getTotalOutputTokens()).thenReturn(30000L);
-        when(usageLogService.getInputTokensToday()).thenReturn(2000L);
-        when(usageLogService.getOutputTokensToday()).thenReturn(1000L);
-        when(usageLogService.getTotalCreditsConsumed()).thenReturn(99.9);
-        when(usageLogService.getCreditsConsumedToday()).thenReturn(5.0);
+        DashboardStats stats = DashboardStats.builder()
+                .totalChannels(2L).activeChannels(1L).totalTokens(10L)
+                .totalUsers(5L).totalRequests(1000L).build();
+        when(dashboardService.buildDashboardStats(adminUser)).thenReturn(stats);
 
         mockMvc.perform(get("/api/admin/dashboard"))
                 .andExpect(status().isOk())
@@ -116,14 +110,11 @@ class AdminControllerTest {
     void dashboard_asRegularUser() throws Exception {
         setAuthentication(regularUser);
 
-        Token t = Token.builder().id(1L).usedQuota(200L).build();
-        when(tokenService.listByUser(2L)).thenReturn(List.of(t));
-        // 聚合查询：全部时间 [count, totalTokens, promptTokens, completionTokens, creditCost]
-        when(usageLogService.sumAllMetricsByTokenIds(List.of(1L)))
-                .thenReturn(new Object[]{50L, 1000L, 3000L, 2000L, 25.5});
-        // 聚合查询：今日
-        when(usageLogService.sumAllMetricsByTokenIdsSince(eq(List.of(1L)), any(LocalDateTime.class)))
-                .thenReturn(new Object[]{10L, 500L, 500L, 300L, 3.0});
+        DashboardStats stats = DashboardStats.builder()
+                .totalChannels(0L).activeChannels(0L).totalTokens(1L)
+                .totalUsers(1L).totalRequests(50L).requestsToday(10L)
+                .myCredits(50.0).build();
+        when(dashboardService.buildDashboardStats(regularUser)).thenReturn(stats);
 
         mockMvc.perform(get("/api/admin/dashboard"))
                 .andExpect(status().isOk())

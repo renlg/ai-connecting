@@ -44,6 +44,8 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
+                // ⚠️ 注意：Spring Security 的规则是按顺序匹配的，先匹配的规则优先生效
+                // 因此必须将更具体的路径放在前面，更通用的路径放在后面
                 // 公开接口
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/v1/chat/completions").permitAll()
@@ -54,14 +56,13 @@ public class SecurityConfig {
                 .requestMatchers("/v1/audio/**").permitAll()
                 .requestMatchers("/v1/messages").permitAll()
                 .requestMatchers("/v1/messages/**").permitAll()
-                // 仪表盘接口允许所有已认证用户访问（控制器内部按角色返回数据）
+                // 仪表盘和模型列表接口允许所有已认证用户访问（控制器内部按角色返回数据）
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/dashboard").authenticated()
-                // 模型列表接口允许所有已认证用户访问（控制器内部按角色过滤）
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/models").authenticated()
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/models/enabled").authenticated()
                 // Actuator 端点需要认证
                 .requestMatchers("/actuator/**").authenticated()
-                // 管理接口需要 admin 角色
+                // 管理接口需要 admin 角色（必须在 /api/** 之前，否则会被通用规则拦截）
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 // 其他 API 需要认证
                 .requestMatchers("/api/**").authenticated()

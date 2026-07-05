@@ -1,6 +1,8 @@
 package com.aiconnecting.controller;
 
 import com.aiconnecting.common.ApiResponse;
+import com.aiconnecting.dto.ChangePasswordRequest;
+import com.aiconnecting.dto.ProfileRequest;
 import com.aiconnecting.entity.Coupon;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.service.UserService;
@@ -8,6 +10,7 @@ import com.aiconnecting.service.CouponService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -22,23 +25,20 @@ public class UserController {
 
     @GetMapping("/profile")
     public ApiResponse<User> getProfile(@AuthenticationPrincipal User user) {
-        User profile = userService.getById(user.getId());
-        profile.setPassword(null);
-        return ApiResponse.success(profile);
+        return ApiResponse.success(userService.getById(user.getId()));
     }
 
     @PutMapping("/profile")
     public ApiResponse<User> updateProfile(@AuthenticationPrincipal User user,
-                                           @RequestBody Map<String, String> body) {
-        User updated = userService.updateProfile(user.getId(), body.get("nickname"), body.get("email"));
-        updated.setPassword(null);
+                                           @RequestBody ProfileRequest request) {
+        User updated = userService.updateProfile(user.getId(), request.getNickname(), request.getEmail());
         return ApiResponse.success(updated);
     }
 
     @PutMapping("/password")
     public ApiResponse<Void> changePassword(@AuthenticationPrincipal User user,
-                                            @RequestBody Map<String, String> body) {
-        userService.changePassword(user.getId(), body.get("oldPassword"), body.get("newPassword"));
+                                            @Valid @RequestBody ChangePasswordRequest request) {
+        userService.changePassword(user.getId(), request.getOldPassword(), request.getNewPassword());
         return ApiResponse.success();
     }
 

@@ -24,8 +24,6 @@ public class AuthController {
 
     @PostMapping("/register")
     public ApiResponse<User> register(@Valid @RequestBody RegisterRequest request) {
-        User user = userService.register(request);
-        user.setPassword(null); // 不返回密码
-        return ApiResponse.success(user);
+        return ApiResponse.success(userService.register(request));
     }
 }
