@@ -15,6 +15,7 @@ import java.util.List;
 public class DashboardService {
 
     private final ChannelService channelService;
+    private final ChannelHealthTracker channelHealthTracker;
     private final TokenService tokenService;
     private final UserService userService;
     private final UsageLogService usageLogService;
@@ -33,10 +34,12 @@ public class DashboardService {
     private DashboardStats buildAdminStats() {
         List<Channel> channels = channelService.listAll();
         long activeChannels = channels.stream().filter(c -> c.getStatus() == 1).count();
+        long blockedChannels = channelHealthTracker.getBlockedChannelIds().size();
 
         return DashboardStats.builder()
                 .totalChannels((long) channels.size())
                 .activeChannels(activeChannels)
+                .blockedChannels(blockedChannels)
                 .totalTokens(tokenService.count())
                 .totalUsers(userService.count())
                 .totalRequests(usageLogService.getTotalRequests())

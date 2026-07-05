@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Card, Row, Col, Statistic, Spin, message } from 'antd'
 import { KeyOutlined, SendOutlined, NumberOutlined, DollarOutlined } from '@ant-design/icons'
-import { ApiOutlined, CloudServerOutlined, UserOutlined, WalletOutlined } from '@ant-design/icons'
+import { ApiOutlined, CloudServerOutlined, UserOutlined, WalletOutlined, StopOutlined } from '@ant-design/icons'
 import { getDashboard } from '../api'
 
 export default function Dashboard() {
@@ -66,6 +66,7 @@ export default function Dashboard() {
       { title: '用户数量', value: stats?.totalUsers || 0, icon: <UserOutlined />, color: '#fa8c16' },
       { title: '总渠道数', value: stats?.totalChannels || 0, icon: <ApiOutlined />, color: '#1677ff' },
       { title: '活跃渠道', value: stats?.activeChannels || 0, icon: <CloudServerOutlined />, color: '#52c41a' },
+      { title: '封禁渠道', value: stats?.blockedChannels || 0, icon: <StopOutlined />, color: '#ff4d4f' },
     ]
   } else {
     otherCards = [

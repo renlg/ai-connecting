@@ -7,6 +7,7 @@ import lombok.*;
 public class DashboardStats {
     private Long totalChannels;
     private Long activeChannels;
+    private Long blockedChannels;
     private Long totalTokens;
     private Long totalUsers;
     private Long totalRequests;
