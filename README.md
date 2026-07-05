@@ -32,11 +32,13 @@ OpenAI 协议中转站管理面板。支持多渠道管理、模型配置、Toke
 
 ### 本地运行
 
+**方式一：完整构建运行**
+
 ```bash
 # 构建前端
 cd web && npm install && npm run build && cd ..
 
-# 拷贝前端产物
+# 拷贝前端产物到后端静态目录
 rm -rf src/main/resources/static
 mkdir -p src/main/resources/static
 cp -r web/dist/* src/main/resources/static/
@@ -44,11 +46,23 @@ cp -r web/dist/* src/main/resources/static/
 # 构建后端
 mvn clean package -DskipTests
 
-# 启动
-java -jar target/ai-connecting-1.0.0.jar
+# 启动（需设置环境变量）
+JWT_SECRET=your-secret ADMIN_DEFAULT_PASSWORD=your-password java -jar target/ai-connecting-1.0.0.jar
 ```
 
-访问 `http://localhost:8080`
+**方式二：前后端分离开发**
+
+```bash
+# 终端1：启动后端
+JWT_SECRET=your-secret ADMIN_DEFAULT_PASSWORD=your-password mvn spring-boot:run
+
+# 终端2：启动前端开发服务器（支持热更新）
+cd web && npm install && npm run dev
+```
+
+前端开发服务器默认运行在 `http://localhost:5173`，API 请求代理到后端 `http://localhost:8080`。
+
+访问 `http://localhost:8080` 或 `http://localhost:5173`
 
 首次启动会自动创建 admin 用户，密码通过环境变量 `ADMIN_DEFAULT_PASSWORD` 设置。
 
