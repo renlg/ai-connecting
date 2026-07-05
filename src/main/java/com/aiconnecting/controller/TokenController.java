@@ -224,8 +224,6 @@ public class TokenController {
     @PostMapping(value = "/test-chat-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public void testChatStream(@AuthenticationPrincipal User user,
                                @RequestBody Map<String, String> request, HttpServletResponse response) throws Exception {
-        SseUtils.setSseHeaders(response);
-
         String tokenKey = request.get("tokenKey");
         String protocol = request.get("protocol"); // "openai" or "claude"
         String model = request.get("model");
@@ -237,6 +235,8 @@ public class TokenController {
         if (model == null || model.isBlank()) {
             throw new BusinessException("请选择模型");
         }
+
+        SseUtils.setSseHeaders(response);
 
         // 校验当前用户对该 Token 的所有权
         Token tokenEntity = tokenService.validateTokenKey(tokenKey);
