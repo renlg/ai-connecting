@@ -34,6 +34,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.aiconnecting.dto.DashboardStats;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -72,10 +73,10 @@ class AdminControllerTest {
 
         adminUser = User.builder()
                 .id(1L).username("admin").password("encoded").role("admin")
-                .credits(100.0).status(1).build();
+                .credits(BigDecimal.valueOf(100)).status(1).build();
         regularUser = User.builder()
                 .id(2L).username("user").password("encoded").role("user")
-                .credits(50.0).status(1).build();
+                .credits(BigDecimal.valueOf(50)).status(1).build();
     }
 
     private void setAuthentication(User user) {
@@ -113,7 +114,7 @@ class AdminControllerTest {
         DashboardStats stats = DashboardStats.builder()
                 .totalChannels(0L).activeChannels(0L).totalTokens(1L)
                 .totalUsers(1L).totalRequests(50L).requestsToday(10L)
-                .myCredits(50.0).build();
+                .myCredits(BigDecimal.valueOf(50)).build();
         when(dashboardService.buildDashboardStats(regularUser)).thenReturn(stats);
 
         mockMvc.perform(get("/api/admin/dashboard"))
@@ -186,7 +187,7 @@ class AdminControllerTest {
     @Test
     void updateUserCredits() throws Exception {
         setAuthentication(adminUser);
-        doNothing().when(userService).updateCredits(2L, 200.0);
+        doNothing().when(userService).updateCredits(2L, BigDecimal.valueOf(200));
 
         mockMvc.perform(put("/api/admin/users/2/credits")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -215,8 +216,8 @@ class AdminControllerTest {
     @Test
     void generateCoupon() throws Exception {
         setAuthentication(adminUser);
-        Coupon coupon = Coupon.builder().id(1L).code("ABC123").credits(50.0).maxUses(10).build();
-        when(couponService.generateCoupon(any(User.class), anyDouble(), anyInt(), any()))
+        Coupon coupon = Coupon.builder().id(1L).code("ABC123").credits(BigDecimal.valueOf(50)).maxUses(10).build();
+        when(couponService.generateCoupon(any(User.class), any(BigDecimal.class), anyInt(), any()))
                 .thenReturn(coupon);
 
         mockMvc.perform(post("/api/admin/coupons")
@@ -229,7 +230,7 @@ class AdminControllerTest {
     @Test
     void listCoupons() throws Exception {
         setAuthentication(adminUser);
-        Coupon coupon = Coupon.builder().id(1L).code("ABC123").credits(50.0).build();
+        Coupon coupon = Coupon.builder().id(1L).code("ABC123").credits(BigDecimal.valueOf(50)).build();
         when(couponService.listCoupons()).thenReturn(List.of(coupon));
 
         mockMvc.perform(get("/api/admin/coupons"))
@@ -242,7 +243,7 @@ class AdminControllerTest {
     void getCouponRedemptions() throws Exception {
         setAuthentication(adminUser);
         CouponRedemptionDTO dto = CouponRedemptionDTO.builder()
-                .userId(2L).username("user").credits(50.0).build();
+                .userId(2L).username("user").credits(BigDecimal.valueOf(50)).build();
         when(couponService.getRedemptionsByCouponId(1L)).thenReturn(List.of(dto));
 
         mockMvc.perform(get("/api/admin/coupons/1/redemptions"))

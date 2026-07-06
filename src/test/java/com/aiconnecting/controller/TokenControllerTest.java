@@ -29,6 +29,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -92,10 +93,10 @@ class TokenControllerTest {
 
         adminUser = User.builder()
                 .id(1L).username("admin").password("encoded").role("admin")
-                .credits(100.0).status(1).build();
+                .credits(BigDecimal.valueOf(100)).status(1).build();
         regularUser = User.builder()
                 .id(2L).username("user").password("encoded").role("user")
-                .credits(50.0).status(1).build();
+                .credits(BigDecimal.valueOf(50)).status(1).build();
     }
 
     private void setAuthentication(User user) {

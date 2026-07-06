@@ -7,6 +7,7 @@ import com.aiconnecting.entity.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -65,14 +66,14 @@ public class DashboardService {
 
         // 聚合查询：全部时间
         long totalRequests = 0, totalTokensUsedLog = 0, totalInputTokens = 0, totalOutputTokens = 0;
-        double totalCreditsConsumed = 0;
+        BigDecimal totalCreditsConsumed = BigDecimal.ZERO;
         if (!tokenIds.isEmpty()) {
             Object[] allMetrics = usageLogService.sumAllMetricsByTokenIds(tokenIds);
             totalRequests = ((Number) allMetrics[0]).longValue();
             totalTokensUsedLog = ((Number) allMetrics[1]).longValue();
             totalInputTokens = ((Number) allMetrics[2]).longValue();
             totalOutputTokens = ((Number) allMetrics[3]).longValue();
-            totalCreditsConsumed = ((Number) allMetrics[4]).doubleValue();
+            totalCreditsConsumed = BigDecimal.valueOf(((Number) allMetrics[4]).doubleValue());
         }
 
         // 聚合查询：今日
@@ -101,9 +102,9 @@ public class DashboardService {
                 .totalOutputTokens(totalOutputTokens)
                 .inputTokensToday(inputTokensToday)
                 .outputTokensToday(outputTokensToday)
-                .totalCreditsConsumed(totalCreditsConsumed)
-                .creditsConsumedToday(creditsConsumedToday)
-                .myCredits(currentUser.getCredits() != null ? currentUser.getCredits().doubleValue() : 0.0)
+                .totalCreditsConsumed(BigDecimal.valueOf(totalCreditsConsumed))
+                .creditsConsumedToday(BigDecimal.valueOf(creditsConsumedToday))
+                .myCredits(currentUser.getCredits() != null ? currentUser.getCredits() : BigDecimal.ZERO)
                 .build();
     }
 }

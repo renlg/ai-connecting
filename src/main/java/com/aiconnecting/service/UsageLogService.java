@@ -79,13 +79,13 @@ public class UsageLogService {
         return usageLogRepository.sumCompletionTokensSince(startOfDay);
     }
 
-    public double getTotalCreditsConsumed() {
-        return usageLogRepository.sumCreditCost();
+    public BigDecimal getTotalCreditsConsumed() {
+        return BigDecimal.valueOf(usageLogRepository.sumCreditCost());
     }
 
-    public double getCreditsConsumedToday() {
+    public BigDecimal getCreditsConsumedToday() {
         LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
-        return usageLogRepository.sumCreditCostSince(startOfDay);
+        return BigDecimal.valueOf(usageLogRepository.sumCreditCostSince(startOfDay));
     }
 
     /**

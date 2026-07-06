@@ -20,6 +20,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.*;
@@ -57,7 +58,7 @@ class UserControllerTest {
 
         regularUser = User.builder()
                 .id(2L).username("user").password("encoded").nickname("TestUser")
-                .email("test@example.com").role("user").credits(50.0).status(1).build();
+                .email("test@example.com").role("user").credits(BigDecimal.valueOf(50)).status(1).build();
     }
 
     private void setAuthentication(User user) {
@@ -74,7 +75,7 @@ class UserControllerTest {
         setAuthentication(regularUser);
         User profile = User.builder()
                 .id(2L).username("user").password("encoded").nickname("TestUser")
-                .email("test@example.com").role("user").credits(50.0).build();
+                .email("test@example.com").role("user").credits(BigDecimal.valueOf(50)).build();
         when(userService.getById(2L)).thenReturn(profile);
 
         mockMvc.perform(get("/api/user/profile"))
@@ -103,7 +104,7 @@ class UserControllerTest {
         setAuthentication(regularUser);
         User updated = User.builder()
                 .id(2L).username("user").password("encoded").nickname("NewNick")
-                .email("new@example.com").role("user").credits(50.0).build();
+                .email("new@example.com").role("user").credits(BigDecimal.valueOf(50)).build();
         when(userService.updateProfile(eq(2L), eq("NewNick"), eq("new@example.com")))
                 .thenReturn(updated);
 
@@ -121,7 +122,7 @@ class UserControllerTest {
         setAuthentication(regularUser);
         User updated = User.builder()
                 .id(2L).username("user").password("encoded").nickname("OnlyNick")
-                .email("test@example.com").role("user").credits(50.0).build();
+                .email("test@example.com").role("user").credits(BigDecimal.valueOf(50)).build();
         when(userService.updateProfile(eq(2L), eq("OnlyNick"), isNull()))
                 .thenReturn(updated);
 
@@ -164,7 +165,7 @@ class UserControllerTest {
     @Test
     void redeemCoupon_success() throws Exception {
         setAuthentication(regularUser);
-        Coupon coupon = Coupon.builder().id(1L).code("ABC123").credits(50.0).build();
+        Coupon coupon = Coupon.builder().id(1L).code("ABC123").credits(BigDecimal.valueOf(50)).build();
         when(couponService.redeemCoupon(any(User.class), eq("ABC123"))).thenReturn(coupon);
 
         mockMvc.perform(post("/api/user/coupons/redeem")
@@ -173,7 +174,7 @@ class UserControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.credits").value(50.0))
-                .andExpect(jsonPath("$.data.message").value("兑换成功，获得50.0积分"));
+                .andExpect(jsonPath("$.data.message").value("兑换成功，获得50积分"));
     }
 
     @Test
