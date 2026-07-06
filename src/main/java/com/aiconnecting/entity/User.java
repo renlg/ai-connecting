@@ -3,6 +3,7 @@ package com.aiconnecting.entity;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
@@ -43,8 +44,9 @@ public class User {
     private Long usedQuota;
 
     /** 积分 (支持小数，精确计费) */
-    @Column(nullable = false)
-    private Double credits;
+    @Builder.Default
+    @Column(nullable = false, precision = 19, scale = 4)
+    private BigDecimal credits = BigDecimal.ZERO;
 
     /** 状态: 1=启用, 0=禁用 */
     @Column(nullable = false)
@@ -62,7 +64,7 @@ public class User {
         if (role == null) role = "user";
         if (quota == null) quota = -1L;
         if (usedQuota == null) usedQuota = 0L;
-        if (credits == null) credits = 0.0;
+        if (credits == null) credits = BigDecimal.ZERO;
         if (status == null) status = 1;
     }
 

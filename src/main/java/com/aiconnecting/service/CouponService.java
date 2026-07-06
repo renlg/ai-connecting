@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -31,7 +32,7 @@ public class CouponService {
     private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    public Coupon generateCoupon(User admin, Double credits, Integer maxUses, LocalDateTime expiryDate) {
+    public Coupon generateCoupon(User admin, BigDecimal credits, Integer maxUses, LocalDateTime expiryDate) {
         if (!"admin".equalsIgnoreCase(admin.getRole())) {
             throw new BusinessException("无权限创建积分券");
         }
@@ -88,7 +89,7 @@ public class CouponService {
 
         User freshUser = userRepository.findById(user.getId())
                 .orElseThrow(() -> new BusinessException("用户不存在"));
-        freshUser.setCredits((freshUser.getCredits() != null ? freshUser.getCredits() : 0.0) + coupon.getCredits());
+        freshUser.setCredits((freshUser.getCredits() != null ? freshUser.getCredits() : BigDecimal.ZERO).add(coupon.getCredits()));
         userRepository.save(freshUser);
 
         // 记录兑换日志
@@ -109,7 +110,7 @@ public class CouponService {
     public List<CouponRedemptionDTO> getRedemptionsByCouponId(Long couponId) {
         List<CouponRedemptionLog> logs = redemptionLogRepository.findByCouponIdOrderByRedeemedAtDesc(couponId);
         Coupon coupon = couponRepository.findById(couponId).orElse(null);
-        Double credits = coupon != null ? coupon.getCredits() : 0.0;
+        BigDecimal credits = coupon != null ? coupon.getCredits() : BigDecimal.ZERO;
 
         // 批量查询用户，避免 N+1 查询
         var userIds = logs.stream().map(CouponRedemptionLog::getUserId).distinct().toList();

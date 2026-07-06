@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.math.BigDecimal;
 import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -103,7 +104,7 @@ public class RelayService {
         }
         // 校验用户积分（admin 用户不受限制，使用缓存避免每次查库）
         User tokenUser = userService.getByIdCached(token.getUserId());
-        if (!"admin".equals(tokenUser.getRole()) && tokenUser.getCredits() != null && tokenUser.getCredits() <= 0) {
+        if (!"admin".equals(tokenUser.getRole()) && tokenUser.getCredits() != null && tokenUser.getCredits().compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(402, "用户积分不足，请先充值");
         }
         checkModelPermission(token, model);
@@ -142,14 +143,13 @@ public class RelayService {
                                     int promptTokens, int completionTokens,
                                     long duration, HttpServletRequest httpRequest, String path) {
         int totalTokens = promptTokens + completionTokens;
-        double creditCost = usageLogService.calculateCreditCost(model, promptTokens, completionTokens);
+        BigDecimal creditCost = usageLogService.calculateCreditCost(model, promptTokens, completionTokens);
         UsageLog usageLog = UsageLog.builder()
                 .tokenId(token.getId()).channelId(channel.getId()).model(model)
                 .promptTokens(promptTokens).completionTokens(completionTokens).totalTokens(totalTokens)
                 .creditCost(creditCost).ip(getClientIp(httpRequest)).duration(duration)
                 .requestPath(path).build();
         usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(), totalTokens, token.getUserId());
-        tokenService.addUsedQuota(token.getId(), totalTokens);
     }
 
     /**
@@ -828,7 +828,7 @@ public class RelayService {
             log.warn("Failed to parse usage from response");
         }
 
-        double creditCost = usageLogService.calculateCreditCost(model, promptTokens, completionTokens);
+        BigDecimal creditCost = usageLogService.calculateCreditCost(model, promptTokens, completionTokens);
 
         UsageLog usageLog = UsageLog.builder()
                 .tokenId(token.getId())
@@ -845,7 +845,6 @@ public class RelayService {
 
         // 事务性记录日志并更新额度
         usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(), totalTokens, token.getUserId());
-        tokenService.addUsedQuota(token.getId(), totalTokens);
     }
 
     private String getClientIp(HttpServletRequest request) {

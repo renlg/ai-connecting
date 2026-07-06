@@ -107,9 +107,8 @@ public class TokenController {
         if (!"admin".equals(user.getRole()) && !token.getUserId().equals(user.getId())) {
             throw new BusinessException(403, "无权查看该 Token 的消耗记录");
         }
-        long sinceMillis = LocalDateTime.now().minusDays(90)
-                .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
-        List<Object[]> rows = usageLogService.getDailyCreditCost(id, sinceMillis);
+        LocalDateTime since = LocalDateTime.now().minusDays(90);
+        List<Object[]> rows = usageLogService.getDailyCreditCost(id, since);
         List<Map<String, Object>> result = new ArrayList<>();
         for (Object[] row : rows) {
             Map<String, Object> item = new HashMap<>();

@@ -7,6 +7,7 @@ import com.aiconnecting.repository.TokenRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -49,7 +50,7 @@ public class TokenService {
                 .userId(userId)
                 .quota(request.getQuota() != null ? request.getQuota() : -1L)
                 .usedQuota(0L)
-                .credits(request.getCredits() != null ? request.getCredits() : -1.0)
+                .credits(request.getCredits() != null ? request.getCredits() : BigDecimal.valueOf(-1))
                 .expiredAt(request.getExpiredAt())
                 .allowedModels(request.getAllowedModels())
                 .rateLimit(request.getRateLimit() != null ? request.getRateLimit() : 0)

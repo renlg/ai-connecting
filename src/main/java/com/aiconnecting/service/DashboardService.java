@@ -103,7 +103,7 @@ public class DashboardService {
                 .outputTokensToday(outputTokensToday)
                 .totalCreditsConsumed(totalCreditsConsumed)
                 .creditsConsumedToday(creditsConsumedToday)
-                .myCredits(currentUser.getCredits() != null ? currentUser.getCredits() : 0.0)
+                .myCredits(currentUser.getCredits() != null ? currentUser.getCredits().doubleValue() : 0.0)
                 .build();
     }
 }

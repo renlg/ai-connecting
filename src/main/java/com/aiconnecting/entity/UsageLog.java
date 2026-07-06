@@ -2,6 +2,7 @@ package com.aiconnecting.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -51,7 +52,9 @@ public class UsageLog {
     private Long duration;
 
     /** 本次请求消耗的积分 (支持小数) */
-    private Double creditCost;
+    @Builder.Default
+    @Column(precision = 19, scale = 6)
+    private BigDecimal creditCost = BigDecimal.ZERO;
 
     /** 请求路径 */
     @Column(length = 500)
@@ -63,5 +66,6 @@ public class UsageLog {
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
+        if (creditCost == null) creditCost = BigDecimal.ZERO;
     }
 }

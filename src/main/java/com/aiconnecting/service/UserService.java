@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.PostConstruct;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -198,7 +199,7 @@ public class UserService {
      * 更新用户积分
      */
     @Transactional
-    public void updateCredits(Long userId, Double credits) {
+    public void updateCredits(Long userId, BigDecimal credits) {
         User user = getById(userId);
         user.setCredits(credits);
         userRepository.save(user);

@@ -2,6 +2,7 @@ package com.aiconnecting.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
@@ -19,8 +20,9 @@ public class Coupon {
     @Column(unique = true, nullable = false, length = 32)
     private String code;
 
-    @Column(nullable = false)
-    private Double credits;
+    @Builder.Default
+    @Column(nullable = false, precision = 19, scale = 4)
+    private BigDecimal credits = BigDecimal.ZERO;
 
     @Column(nullable = false)
     private Integer maxUses;
@@ -45,6 +47,7 @@ public class Coupon {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
+        if (credits == null) credits = BigDecimal.ZERO;
         if (usedCount == null) usedCount = 0;
         if (status == null) status = 1;
     }

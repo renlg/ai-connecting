@@ -1,6 +1,7 @@
 package com.aiconnecting.dto;
 
 import lombok.*;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -12,5 +13,5 @@ public class CouponRedemptionDTO {
     private String username;
     private String nickname;
     private LocalDateTime redeemedAt;
-    private Double credits;
+    private BigDecimal credits;
 }

@@ -11,6 +11,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -25,9 +27,10 @@ public class UsageLogService {
     private final ChannelService channelService;
     private final ModelConfigService modelConfigService;
     private final UserRepository userRepository;
+    private final TokenService tokenService;
 
     /** 积分计算除数：每千 token */
-    private static final double CREDIT_RATE_DIVISOR = 1000.0;
+    private static final BigDecimal CREDIT_RATE_DIVISOR = new BigDecimal("1000");
 
     /** 模型积分比例缓存，避免每次请求查库，缓存 2 分钟 */
     private final ConcurrentHashMap<String, CachedCreditRate> creditRateCache = new ConcurrentHashMap<>();
@@ -96,16 +99,18 @@ public class UsageLogService {
             channelService.addUsedQuota(channelId, totalTokens);
         }
         // 扣减用户积分
-        if (usageLog.getCreditCost() != null && usageLog.getCreditCost() > 0 && userId != null) {
+        if (usageLog.getCreditCost() != null && usageLog.getCreditCost().compareTo(BigDecimal.ZERO) > 0 && userId != null) {
             userRepository.deductCredits(userId, usageLog.getCreditCost());
         }
+        // 更新 token 已用额度
+        tokenService.addUsedQuota(tokenId, totalTokens);
     }
 
     /**
      * 计算积分消耗
      */
-    public double calculateCreditCost(String model, int promptTokens, int completionTokens) {
-        if (promptTokens == 0 && completionTokens == 0) return 0.0;
+    public BigDecimal calculateCreditCost(String model, int promptTokens, int completionTokens) {
+        if (promptTokens == 0 && completionTokens == 0) return BigDecimal.ZERO;
 
         CachedCreditRate cached = creditRateCache.get(model);
         int inputRate, outputRate;
@@ -115,15 +120,15 @@ public class UsageLogService {
         } else {
             List<com.aiconnecting.entity.ModelConfig> models = modelConfigService.findByName(model);
             com.aiconnecting.entity.ModelConfig modelConfig = models.isEmpty() ? null : models.get(0);
-            if (modelConfig == null) return 0.0;
+            if (modelConfig == null) return BigDecimal.ZERO;
             inputRate = modelConfig.getInputCreditRate();
             outputRate = modelConfig.getOutputCreditRate();
             creditRateCache.put(model, new CachedCreditRate(inputRate, outputRate, System.currentTimeMillis()));
         }
 
-        double inputCost = (promptTokens / CREDIT_RATE_DIVISOR) * inputRate;
-        double outputCost = (completionTokens / CREDIT_RATE_DIVISOR) * outputRate;
-        return inputCost + outputCost;
+        BigDecimal inputCost = BigDecimal.valueOf(promptTokens).divide(CREDIT_RATE_DIVISOR, 10, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(inputRate));
+        BigDecimal outputCost = BigDecimal.valueOf(completionTokens).divide(CREDIT_RATE_DIVISOR, 10, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(outputRate));
+        return inputCost.add(outputCost);
     }
 
     /**
@@ -153,7 +158,7 @@ public class UsageLogService {
     /**
      * 查询指定 Token 的每日消耗积分
      */
-    public List<Object[]> getDailyCreditCost(Long tokenId, long sinceMillis) {
-        return usageLogRepository.findDailyCreditCostByTokenIdSince(tokenId, sinceMillis);
+    public List<Object[]> getDailyCreditCost(Long tokenId, LocalDateTime since) {
+        return usageLogRepository.findDailyCreditCostByTokenIdSince(tokenId, since);
     }
 }

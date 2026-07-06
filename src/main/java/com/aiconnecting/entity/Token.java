@@ -2,6 +2,7 @@ package com.aiconnecting.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -40,8 +41,9 @@ public class Token {
     private Long usedQuota;
 
     /** Token 积分 (-1=无限，与用户积分独立) */
-    @Column(nullable = false)
-    private Double credits;
+    @Builder.Default
+    @Column(nullable = false, precision = 19, scale = 4)
+    private BigDecimal credits = BigDecimal.valueOf(-1);
 
     /** 过期时间 (null=永不过期) */
     private LocalDateTime expiredAt;
@@ -73,7 +75,7 @@ public class Token {
         updatedAt = LocalDateTime.now();
         if (quota == null) quota = -1L;
         if (usedQuota == null) usedQuota = 0L;
-        if (credits == null) credits = -1.0;
+        if (credits == null) credits = BigDecimal.valueOf(-1);
         if (status == null) status = 1;
         if (rateLimit == null) rateLimit = 0;
     }
