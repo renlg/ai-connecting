@@ -78,7 +78,7 @@ public class DashboardService {
 
         // 聚合查询：今日
         long requestsToday = 0, tokensUsedToday = 0, inputTokensToday = 0, outputTokensToday = 0;
-        double creditsConsumedToday = 0;
+        BigDecimal creditsConsumedToday = BigDecimal.ZERO;
         if (!tokenIds.isEmpty()) {
             Object[] todayMetrics = usageLogService.sumAllMetricsByTokenIdsSince(
                     tokenIds, LocalDate.now().atStartOfDay());
@@ -86,7 +86,7 @@ public class DashboardService {
             tokensUsedToday = ((Number) todayMetrics[1]).longValue();
             inputTokensToday = ((Number) todayMetrics[2]).longValue();
             outputTokensToday = ((Number) todayMetrics[3]).longValue();
-            creditsConsumedToday = ((Number) todayMetrics[4]).doubleValue();
+            creditsConsumedToday = BigDecimal.valueOf(((Number) todayMetrics[4]).doubleValue());
         }
 
         return DashboardStats.builder()
@@ -102,9 +102,9 @@ public class DashboardService {
                 .totalOutputTokens(totalOutputTokens)
                 .inputTokensToday(inputTokensToday)
                 .outputTokensToday(outputTokensToday)
-                .totalCreditsConsumed(BigDecimal.valueOf(totalCreditsConsumed))
-                .creditsConsumedToday(BigDecimal.valueOf(creditsConsumedToday))
-                .myCredits(currentUser.getCredits() != null ? currentUser.getCredits() : BigDecimal.ZERO)
+                .totalCreditsConsumed(totalCreditsConsumed)
+                .creditsConsumedToday(creditsConsumedToday)
+                .myCredits(currentUser.getCredits())
                 .build();
     }
 }
