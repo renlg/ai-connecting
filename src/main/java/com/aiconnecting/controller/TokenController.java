@@ -132,11 +132,8 @@ public class TokenController {
         }
         if (value instanceof String) {
             String str = ((String) value).trim();
-            if (str.length() == 10) {
-                return str + " 00:00:00";
-            }
             if (str.length() >= 19) {
-                return str.substring(0, 19);
+                return str.substring(0, 10);
             }
             return str;
         }
