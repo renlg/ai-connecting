@@ -36,7 +36,7 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
     @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, " +
             "COALESCE(SUM(credit_cost), 0) as credits " +
             "FROM usage_logs WHERE token_id = ?1 AND created_at >= ?2 " +
-            "GROUP BY DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) ORDER BY date ASC", nativeQuery = true)
+            "GROUP BY DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) ORDER BY date DESC", nativeQuery = true)
     List<Object[]> findDailyCreditCostByTokenIdSince(Long tokenId, LocalDateTime since);
 
     // Dashboard 聚合查询：一次查询获取所有指标
