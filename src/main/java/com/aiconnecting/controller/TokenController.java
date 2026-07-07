@@ -23,7 +23,10 @@ import org.springframework.http.MediaType;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -31,6 +34,9 @@ import java.util.stream.Collectors;
 @RequestMapping("/api/tokens")
 @RequiredArgsConstructor
 public class TokenController {
+
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final ZoneId BEIJING_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final TokenService tokenService;
     private final UsageLogService usageLogService;
@@ -112,11 +118,39 @@ public class TokenController {
         List<Map<String, Object>> result = new ArrayList<>();
         for (Object[] row : rows) {
             Map<String, Object> item = new HashMap<>();
-            item.put("date", row[0]);
+            item.put("date", formatDateValue(row[0]));
             item.put("credits", row[1]);
             result.add(item);
         }
         return ApiResponse.success(result);
+    }
+
+    private String formatDateValue(Object value) {
+        if (value == null) return null;
+        if (value instanceof LocalDateTime) {
+            return ((LocalDateTime) value).format(DATE_TIME_FORMATTER);
+        }
+        if (value instanceof String) {
+            String str = ((String) value).trim();
+            if (str.length() == 10) {
+                return str + " 00:00:00";
+            }
+            if (str.length() >= 19) {
+                return str.substring(0, 19);
+            }
+            return str;
+        }
+        if (value instanceof Number) {
+            long num = ((Number) value).longValue();
+            LocalDateTime ldt;
+            if (num > 1_000_000_000_000L) {
+                ldt = LocalDateTime.ofInstant(Instant.ofEpochMilli(num), BEIJING_ZONE);
+            } else {
+                ldt = LocalDateTime.ofInstant(Instant.ofEpochSecond(num), BEIJING_ZONE);
+            }
+            return ldt.format(DATE_TIME_FORMATTER);
+        }
+        return value.toString();
     }
 
     /**
