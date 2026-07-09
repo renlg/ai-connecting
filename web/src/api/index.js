@@ -33,6 +33,7 @@ export const register = (data) => api.post('/api/auth/register', data);
 export const getProfile = () => api.get('/api/user/profile');
 export const updateProfile = (data) => api.put('/api/user/profile', data);
 export const changePassword = (data) => api.put('/api/user/password', data);
+export const getInviteCode = () => api.get('/api/user/invite-code');
 
 // Channels (Admin)
 export const getChannels = () => api.get('/api/admin/channels');

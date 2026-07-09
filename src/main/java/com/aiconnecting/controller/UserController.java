@@ -51,4 +51,12 @@ public class UserController {
         result.put("message", "兑换成功，获得" + coupon.getCredits() + "积分");
         return ApiResponse.success(result);
     }
+
+    @GetMapping("/invite-code")
+    public ApiResponse<Map<String, String>> getInviteCode(@AuthenticationPrincipal User user) {
+        String code = userService.getInviteCode(user.getId());
+        Map<String, String> result = new HashMap<>();
+        result.put("inviteCode", code);
+        return ApiResponse.success(result);
+    }
 }

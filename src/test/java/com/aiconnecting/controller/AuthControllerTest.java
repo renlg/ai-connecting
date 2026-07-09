@@ -144,7 +144,8 @@ class AuthControllerTest {
                     "username": "newuser",
                     "password": "password123",
                     "nickname": "New User",
-                    "email": "new@example.com"
+                    "email": "new@example.com",
+                    "inviteCode": "TESTCODE"
                 }
                 """;
 
@@ -166,7 +167,8 @@ class AuthControllerTest {
                 {
                     "username": "admin",
                     "password": "password123",
-                    "email": "test@example.com"
+                    "email": "test@example.com",
+                    "inviteCode": "TESTCODE"
                 }
                 """;
 
@@ -223,12 +225,29 @@ class AuthControllerTest {
     }
 
     @Test
+    void register_missingInviteCode() throws Exception {
+        String body = """
+                {
+                    "username": "newuser",
+                    "password": "password123",
+                    "email": "test@example.com"
+                }
+                """;
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void register_invalidEmail() throws Exception {
         String body = """
                 {
                     "username": "newuser",
                     "password": "password123",
-                    "email": "not-an-email"
+                    "email": "not-an-email",
+                    "inviteCode": "TESTCODE"
                 }
                 """;
 

@@ -12,6 +12,8 @@ import java.util.Optional;
 public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByUsername(String username);
     boolean existsByUsername(String username);
+    Optional<User> findByInviteCode(String inviteCode);
+    boolean existsByInviteCode(String inviteCode);
 
     @Modifying
     @Query("UPDATE User u SET u.credits = CASE WHEN u.credits - :amount < 0 THEN 0 ELSE u.credits - :amount END WHERE u.id = :userId")

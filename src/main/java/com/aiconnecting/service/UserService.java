@@ -16,7 +16,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.PostConstruct;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import java.math.BigDecimal;
+import java.security.SecureRandom;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -64,6 +67,14 @@ public class UserService {
         }
     }
 
+    /**
+     * 应用完全启动后（Hibernate schema 已更新），为缺少邀请码的用户补生邀请码
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void onApplicationReady() {
+        ensureAllUsersHaveInviteCode();
+    }
+
     public LoginResponse login(LoginRequest request) {
         User user = userRepository.findByUsername(request.getUsername())
                 .orElseThrow(() -> new BusinessException("用户名或密码错误"));
@@ -83,12 +94,21 @@ public class UserService {
                 .username(user.getUsername())
                 .nickname(user.getNickname())
                 .role(user.getRole())
+                .inviteCode(user.getInviteCode())
                 .build();
     }
 
     public User register(RegisterRequest request) {
         if (userRepository.existsByUsername(request.getUsername())) {
             throw new BusinessException("用户名已存在");
+        }
+
+        // 验证邀请码
+        if (request.getInviteCode() == null || request.getInviteCode().isBlank()) {
+            throw new BusinessException("邀请码不能为空");
+        }
+        if (!userRepository.existsByInviteCode(request.getInviteCode().trim())) {
+            throw new BusinessException("邀请码无效");
         }
 
         User user = User.builder()
@@ -100,6 +120,7 @@ public class UserService {
                 .quota(-1L)
                 .usedQuota(0L)
                 .status(1)
+                .inviteCode(generateInviteCode())
                 .build();
 
         return userRepository.save(user);
@@ -224,5 +245,40 @@ public class UserService {
         if (userIds == null || userIds.isEmpty()) return Map.of();
         return userRepository.findAllById(userIds).stream()
                 .collect(Collectors.toMap(User::getId, User::getUsername));
+    }
+
+    /**
+     * 获取用户邀请码
+     */
+    public String getInviteCode(Long userId) {
+        User user = getById(userId);
+        return user.getInviteCode();
+    }
+
+    private static final String INVITE_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    private static final int INVITE_CODE_LENGTH = 8;
+    private final SecureRandom secureRandom = new SecureRandom();
+
+    private String generateInviteCode() {
+        StringBuilder sb = new StringBuilder(INVITE_CODE_LENGTH);
+        for (int i = 0; i < INVITE_CODE_LENGTH; i++) {
+            sb.append(INVITE_CODE_CHARS.charAt(secureRandom.nextInt(INVITE_CODE_CHARS.length())));
+        }
+        String code = sb.toString();
+        if (userRepository.existsByInviteCode(code)) {
+            return generateInviteCode();
+        }
+        return code;
+    }
+
+    private void ensureAllUsersHaveInviteCode() {
+        List<User> usersWithoutCode = userRepository.findAll().stream()
+                .filter(u -> u.getInviteCode() == null || u.getInviteCode().isBlank())
+                .toList();
+        for (User u : usersWithoutCode) {
+            u.setInviteCode(generateInviteCode());
+            userRepository.save(u);
+            log.info("为用户 {} 生成邀请码: {}", u.getUsername(), u.getInviteCode());
+        }
     }
 }

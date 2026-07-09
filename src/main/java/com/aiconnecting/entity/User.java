@@ -52,6 +52,10 @@ public class User {
     @Column(nullable = false)
     private Integer status;
 
+    /** 邀请码（唯一，每个用户一个） */
+    @Column(unique = true, length = 16)
+    private String inviteCode;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Form, Input, Button, Card, message, Tabs, Typography } from 'antd'
-import { UserOutlined, LockOutlined, MailOutlined } from '@ant-design/icons'
+import { UserOutlined, LockOutlined, MailOutlined, KeyOutlined } from '@ant-design/icons'
 import { login, register } from '../api'
 
 const { Title } = Typography
@@ -50,7 +50,7 @@ export default function Login() {
       <Card style={{ width: 420, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
           <Title level={3} style={{ marginBottom: 4 }}>AI Connecting</Title>
-          <p style={{ color: '#999' }}>OpenAI 协议中转站管理面板</p>
+          <p style={{ color: '#999' }}>AI Token 聚合管理面板</p>
         </div>
         <Tabs
           centered
@@ -88,6 +88,9 @@ export default function Login() {
                   </Form.Item>
                   <Form.Item name="nickname">
                     <Input prefix={<UserOutlined />} placeholder="昵称 (可选)" />
+                  </Form.Item>
+                  <Form.Item name="inviteCode" rules={[{ required: true, message: '请输入邀请码' }]}>
+                    <Input prefix={<KeyOutlined />} placeholder="邀请码" />
                   </Form.Item>
                   <Form.Item>
                     <Button type="primary" htmlType="submit" loading={loading} block>注册</Button>
