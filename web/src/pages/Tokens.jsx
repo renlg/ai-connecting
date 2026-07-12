@@ -241,11 +241,7 @@ export default function Tokens() {
             {modelOptions.map(m => {
               const stat = modelStats?.find(s => s.model === m.label || s.model.includes(m.label.split('/')[0]))
               const tooltipContent = stat ? (
-                <div style={{ fontSize: 13, lineHeight: '24px' }}>
-                  <div>输入 Token：{(stat.inputTokens || 0).toLocaleString()}</div>
-                  <div>输出 Token：{(stat.outputTokens || 0).toLocaleString()}</div>
-                  <div>缓存命中：{(stat.cachedTokens || 0).toLocaleString()}</div>
-                  <div>缓存未命中：{(stat.cacheMissTokens || 0).toLocaleString()}</div>
+                <div style={{ fontSize: 13, lineHeight: '28px' }}>
                   <div>输入输出比：{stat.inputOutputRatio} : 1</div>
                   <div>缓存命中率：{stat.cacheHitRate}%</div>
                 </div>
