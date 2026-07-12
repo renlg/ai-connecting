@@ -242,8 +242,9 @@ export default function Tokens() {
               const stat = modelStats?.find(s => s.model === m.label || s.model.includes(m.label.split('/')[0]))
               const tooltipContent = stat ? (
                 <div style={{ fontSize: 13, lineHeight: '28px' }}>
-                  <div>输入输出比：{stat.inputOutputRatio} : 1</div>
-                  <div>缓存命中率：{stat.cacheHitRate}%</div>
+                  <div>输入占比：{stat.totalTokens ? (stat.inputTokens / stat.totalTokens * 100).toFixed(1) : '0.0'}%</div>
+                  <div>输出占比：{stat.totalTokens ? (stat.outputTokens / stat.totalTokens * 100).toFixed(1) : '0.0'}%</div>
+                  <div>缓存占比：{stat.inputTokens ? (stat.cachedTokens / stat.inputTokens * 100).toFixed(1) : '0.0'}%</div>
                 </div>
               ) : (
                 <span>加载中...</span>
