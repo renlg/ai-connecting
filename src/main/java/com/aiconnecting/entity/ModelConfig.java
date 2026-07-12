@@ -2,6 +2,7 @@ package com.aiconnecting.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -48,6 +49,11 @@ public class ModelConfig {
     @Column(nullable = false)
     private Boolean adminOnly = false;
 
+    /** 积分倍率，默认 1.0 */
+    @Builder.Default
+    @Column(nullable = false, precision = 10, scale = 2)
+    private BigDecimal multiplier = BigDecimal.ONE;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -61,6 +67,7 @@ public class ModelConfig {
         if (inputCreditRate == null) inputCreditRate = 0;
         if (outputCreditRate == null) outputCreditRate = 0;
         if (adminOnly == null) adminOnly = false;
+        if (multiplier == null) multiplier = BigDecimal.ONE;
     }
 
     @PreUpdate

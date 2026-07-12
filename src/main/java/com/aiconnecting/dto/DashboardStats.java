@@ -21,5 +21,7 @@ public class DashboardStats {
     private Long outputTokensToday;
     private BigDecimal totalCreditsConsumed;
     private BigDecimal creditsConsumedToday;
+    private Long totalCachedPromptTokens;
+    private Long cachedPromptTokensToday;
     private BigDecimal myCredits;
 }
