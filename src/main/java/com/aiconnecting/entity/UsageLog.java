@@ -44,6 +44,21 @@ public class UsageLog {
     /** 总 tokens */
     private Integer totalTokens;
 
+    /** 命中的缓存 prompt token 数量 */
+    @Builder.Default
+    @Column(nullable = false)
+    private Integer promptTokensCacheHit = 0;
+
+    /** cache creation 部分的 token */
+    @Builder.Default
+    @Column(nullable = false)
+    private Integer cachedTokensCacheCreation = 0;
+
+    /** cache read 部分的 token */
+    @Builder.Default
+    @Column(nullable = false)
+    private Integer cachedTokensCacheRead = 0;
+
     /** 请求 IP */
     @Column(length = 50)
     private String ip;
@@ -67,5 +82,8 @@ public class UsageLog {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
         if (creditCost == null) creditCost = BigDecimal.ZERO;
+        if (promptTokensCacheHit == null) promptTokensCacheHit = 0;
+        if (cachedTokensCacheCreation == null) cachedTokensCacheCreation = 0;
+        if (cachedTokensCacheRead == null) cachedTokensCacheRead = 0;
     }
 }
