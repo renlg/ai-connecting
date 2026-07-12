@@ -157,6 +157,7 @@ export const updateTokenStatus = (id, status) => api.put(`/api/tokens/${id}/stat
 export const getTokenCreditHistory = (id) => api.get(`/api/tokens/${id}/credit-history`);
 export const getTokenCacheStats = (id) => api.get(`/api/tokens/${id}/cache-stats`);
 export const getTokenModels = () => api.get('/api/tokens/models');
+export const getModelStats = () => api.get('/api/tokens/models/stats');
 
 // Models (Admin)
 export const getModels = () => api.get('/api/admin/models');

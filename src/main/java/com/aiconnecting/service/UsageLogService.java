@@ -17,7 +17,10 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
@@ -270,5 +273,47 @@ public class UsageLogService {
                 .dailyCredits(dailyCredits)
                 .dailyTokensByModel(dailyTokensByModel)
                 .build();
+    }
+
+    /**
+     * 按 model 聚合统计（admin 看全局，普通用户看自己 token 的数据）
+     */
+    public List<Map<String, Object>> getModelStats(User currentUser) {
+        List<Long> tokenIds = null;
+        if (!"admin".equalsIgnoreCase(currentUser.getRole())) {
+            tokenIds = tokenService.getUserTokenIds(currentUser.getId());
+            if (tokenIds.isEmpty()) {
+                return List.of();
+            }
+        }
+        List<Object[]> rows = tokenIds == null
+                ? usageLogRepository.sumByModelGlobal()
+                : usageLogRepository.sumByModelByTokenIds(tokenIds);
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object[] row : rows) {
+            String model = (String) row[0];
+            long inputTokens = ((Number) row[1]).longValue();
+            long outputTokens = ((Number) row[2]).longValue();
+            long cachedTokens = ((Number) row[3]).longValue();
+            long totalTokens = ((Number) row[4]).longValue();
+            long cacheMissTokens = inputTokens - cachedTokens;
+            double inputOutputRatio = outputTokens > 0
+                    ? Math.round((double) inputTokens / outputTokens * 10.0) / 10.0
+                    : inputTokens;
+            double cacheHitRate = inputTokens > 0
+                    ? Math.round((double) cachedTokens / inputTokens * 1000.0) / 10.0
+                    : 0.0;
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("model", model);
+            item.put("inputTokens", inputTokens);
+            item.put("outputTokens", outputTokens);
+            item.put("cachedTokens", cachedTokens);
+            item.put("cacheMissTokens", cacheMissTokens);
+            item.put("totalTokens", totalTokens);
+            item.put("inputOutputRatio", inputOutputRatio);
+            item.put("cacheHitRate", cacheHitRate);
+            result.add(item);
+        }
+        return result;
     }
 }

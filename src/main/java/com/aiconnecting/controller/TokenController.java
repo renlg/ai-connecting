@@ -343,6 +343,14 @@ public class TokenController {
     }
 
     /**
+     * 获取各模型的统计数据（输入/输出/cache 等），admin 看全局，普通用户看自己的
+     */
+    @GetMapping("/models/stats")
+    public ApiResponse<List<Map<String, Object>>> getModelStats(@AuthenticationPrincipal User user) {
+        return ApiResponse.success(usageLogService.getModelStats(user));
+    }
+
+    /**
      * 获取当前 Token 可用的模型列表（仅返回 id 和 displayName）
      */
     @GetMapping("/models")

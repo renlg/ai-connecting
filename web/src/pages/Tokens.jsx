@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography } from 'antd'
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography, Tooltip } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
-import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCacheStats, testTokenChatStream, getTokenModels } from '../api'
+import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCacheStats, testTokenChatStream, getTokenModels, getModelStats } from '../api'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
@@ -27,6 +27,7 @@ export default function Tokens() {
   const [testLoading, setTestLoading] = useState(false)
   const [modelOptions, setModelOptions] = useState([])
   const [streamContent, setStreamContent] = useState('')
+  const [modelStats, setModelStats] = useState(null)
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const isAdmin = user.role === 'admin'
 
@@ -51,6 +52,11 @@ export default function Tokens() {
   }
 
   useEffect(() => { loadModels() }, [])
+
+  // 加载模型统计数据
+  useEffect(() => {
+    getModelStats().then(res => { if (res.code === 200) setModelStats(res.data) }).catch(() => {})
+  }, [])
 
   const handleSearch = (value) => {
     setSearchText(value)
@@ -232,9 +238,26 @@ export default function Tokens() {
         <div style={{ marginBottom: 16, padding: '12px 16px', background: '#fafafa', borderRadius: 8, border: '1px solid #f0f0f0' }}>
           <div style={{ marginBottom: 8, fontSize: 13, color: '#888' }}>可用模型（{modelOptions.length}）</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {modelOptions.map(m => (
-              <Tag key={m.value} color="blue" style={{ margin: 0 }}>{m.label}</Tag>
-            ))}
+            {modelOptions.map(m => {
+              const stat = modelStats?.find(s => s.model === m.label || s.model.includes(m.label.split('/')[0]))
+              const tooltipContent = stat ? (
+                <div style={{ fontSize: 13, lineHeight: '24px' }}>
+                  <div>输入 Token：{(stat.inputTokens || 0).toLocaleString()}</div>
+                  <div>输出 Token：{(stat.outputTokens || 0).toLocaleString()}</div>
+                  <div>缓存命中：{(stat.cachedTokens || 0).toLocaleString()}</div>
+                  <div>缓存未命中：{(stat.cacheMissTokens || 0).toLocaleString()}</div>
+                  <div>输入输出比：{stat.inputOutputRatio} : 1</div>
+                  <div>缓存命中率：{stat.cacheHitRate}%</div>
+                </div>
+              ) : (
+                <span>加载中...</span>
+              )
+              return (
+                <Tooltip key={m.value} title={tooltipContent} color="#fff" overlayInnerStyle={{ color: '#333', maxWidth: 300 }}>
+                  <Tag color="blue" style={{ margin: 0, cursor: 'pointer' }}>{m.label}</Tag>
+                </Tooltip>
+              )
+            })}
           </div>
         </div>
       )}
