@@ -40,10 +40,6 @@ export default function Dashboard() {
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '100px auto' }} />
 
   // ── Top: Today's data (prominent) ──
-  const cacheHitRateToday = stats?.inputTokensToday > 0
-    ? ((stats?.cachedPromptTokensToday || 0) / stats.inputTokensToday * 100).toFixed(1)
-    : null
-
   const todayCards = [
     {
       title: '今日消耗积分',
@@ -60,18 +56,9 @@ export default function Dashboard() {
       value: stats?.outputTokensToday || 0,
       icon: <KeyOutlined />, color: '#52c41a', suffix: 'tokens', prominent: true,
     },
-    {
-      title: '今日缓存 Token',
-      value: stats?.cachedPromptTokensToday || 0,
-      icon: <KeyOutlined />, color: '#722ed1', suffix: cacheHitRateToday != null ? `tokens (${cacheHitRateToday}%)` : 'tokens', prominent: true,
-    },
   ]
 
   // ── Middle: Cumulative data ──
-  const cacheHitRateTotal = stats?.totalInputTokens > 0
-    ? ((stats?.totalCachedPromptTokens || 0) / stats.totalInputTokens * 100).toFixed(1)
-    : null
-
   const cumulativeCards = [
     {
       title: '总消耗积分',
@@ -87,11 +74,6 @@ export default function Dashboard() {
       title: '总输出 Token',
       value: stats?.totalOutputTokens || 0,
       icon: <KeyOutlined />, color: '#52c41a', suffix: 'tokens',
-    },
-    {
-      title: '总缓存 Token',
-      value: stats?.totalCachedPromptTokens || 0,
-      icon: <KeyOutlined />, color: '#722ed1', suffix: cacheHitRateTotal != null ? `tokens (${cacheHitRateTotal}%)` : 'tokens',
     },
   ]
 

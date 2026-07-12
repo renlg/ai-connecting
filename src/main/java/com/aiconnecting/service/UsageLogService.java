@@ -36,7 +36,7 @@ public class UsageLogService {
     private final ConcurrentHashMap<String, CachedCreditRate> creditRateCache = new ConcurrentHashMap<>();
     private static final long CREDIT_RATE_CACHE_TTL_MS = 2 * 60 * 1000L;
 
-    private record CachedCreditRate(int inputRate, int outputRate, java.math.BigDecimal multiplier, long cachedAt) {
+    private record CachedCreditRate(int inputRate, int outputRate, long cachedAt) {
         boolean isExpired() {
             return System.currentTimeMillis() - cachedAt > CREDIT_RATE_CACHE_TTL_MS;
         }
@@ -79,15 +79,6 @@ public class UsageLogService {
         return usageLogRepository.sumCompletionTokensSince(startOfDay);
     }
 
-    public long getTotalCachedPromptTokens() {
-        return usageLogRepository.sumCachedPromptTokens();
-    }
-
-    public long getCachedPromptTokensToday() {
-        LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
-        return usageLogRepository.sumCachedPromptTokensSince(startOfDay);
-    }
-
     public BigDecimal getTotalCreditsConsumed() {
         return BigDecimal.valueOf(usageLogRepository.sumCreditCost());
     }
@@ -116,35 +107,28 @@ public class UsageLogService {
     }
 
     /**
-     * 计算积分消耗（含缓存折扣和倍率）
+     * 计算积分消耗
      */
-    public BigDecimal calculateCreditCost(String model, int promptTokens, int completionTokens, int cachedTokens) {
+    public BigDecimal calculateCreditCost(String model, int promptTokens, int completionTokens) {
         if (promptTokens == 0 && completionTokens == 0) return BigDecimal.ZERO;
 
         CachedCreditRate cached = creditRateCache.get(model);
         int inputRate, outputRate;
-        BigDecimal multiplier;
         if (cached != null && !cached.isExpired()) {
             inputRate = cached.inputRate();
             outputRate = cached.outputRate();
-            multiplier = cached.multiplier();
         } else {
             List<com.aiconnecting.entity.ModelConfig> models = modelConfigService.findByName(model);
             com.aiconnecting.entity.ModelConfig modelConfig = models.isEmpty() ? null : models.get(0);
             if (modelConfig == null) return BigDecimal.ZERO;
             inputRate = modelConfig.getInputCreditRate();
             outputRate = modelConfig.getOutputCreditRate();
-            multiplier = modelConfig.getMultiplier() != null ? modelConfig.getMultiplier() : BigDecimal.ONE;
-            creditRateCache.put(model, new CachedCreditRate(inputRate, outputRate, multiplier, System.currentTimeMillis()));
+            creditRateCache.put(model, new CachedCreditRate(inputRate, outputRate, System.currentTimeMillis()));
         }
 
-        int clampedCachedTokens = Math.min(cachedTokens, promptTokens);
-        int effectivePromptTokens = promptTokens - clampedCachedTokens;
-        BigDecimal cachedDiscount = BigDecimal.valueOf(clampedCachedTokens).divide(BigDecimal.TEN, 10, RoundingMode.HALF_UP);
-        BigDecimal adjustedPromptTokens = BigDecimal.valueOf(effectivePromptTokens).add(cachedDiscount);
-        BigDecimal inputCost = adjustedPromptTokens.divide(CREDIT_RATE_DIVISOR, 10, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(inputRate));
+        BigDecimal inputCost = BigDecimal.valueOf(promptTokens).divide(CREDIT_RATE_DIVISOR, 10, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(inputRate));
         BigDecimal outputCost = BigDecimal.valueOf(completionTokens).divide(CREDIT_RATE_DIVISOR, 10, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(outputRate));
-        return inputCost.add(outputCost).multiply(multiplier);
+        return inputCost.add(outputCost);
     }
 
     /**
@@ -160,7 +144,7 @@ public class UsageLogService {
      */
     public Object[] sumAllMetricsByTokenIds(List<Long> tokenIds) {
         List<Object[]> result = usageLogRepository.sumAllMetricsByTokenIds(tokenIds);
-        return result.isEmpty() ? new Object[]{0L, 0L, 0L, 0L, 0.0, 0L} : result.get(0);
+        return result.isEmpty() ? new Object[]{0L, 0L, 0L, 0L, 0.0} : result.get(0);
     }
 
     /**
@@ -168,7 +152,7 @@ public class UsageLogService {
      */
     public Object[] sumAllMetricsByTokenIdsSince(List<Long> tokenIds, LocalDateTime since) {
         List<Object[]> result = usageLogRepository.sumAllMetricsByTokenIdsSince(tokenIds, since);
-        return result.isEmpty() ? new Object[]{0L, 0L, 0L, 0L, 0.0, 0L} : result.get(0);
+        return result.isEmpty() ? new Object[]{0L, 0L, 0L, 0L, 0.0} : result.get(0);
     }
 
     /**

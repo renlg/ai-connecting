@@ -141,16 +141,12 @@ public class RelayService {
      */
     private void recordStreamUsage(Token token, Channel channel, String model,
                                     int promptTokens, int completionTokens,
-                                    int cachedTokens, int cacheCreationTokens, int cacheReadTokens,
                                     long duration, HttpServletRequest httpRequest, String path) {
         int totalTokens = promptTokens + completionTokens;
-        BigDecimal creditCost = usageLogService.calculateCreditCost(model, promptTokens, completionTokens, cachedTokens);
+        BigDecimal creditCost = usageLogService.calculateCreditCost(model, promptTokens, completionTokens);
         UsageLog usageLog = UsageLog.builder()
                 .tokenId(token.getId()).channelId(channel.getId()).model(model)
                 .promptTokens(promptTokens).completionTokens(completionTokens).totalTokens(totalTokens)
-                .promptTokensCacheHit(cachedTokens)
-                .cachedTokensCacheCreation(cacheCreationTokens)
-                .cachedTokensCacheRead(cacheReadTokens)
                 .creditCost(creditCost).ip(getClientIp(httpRequest)).duration(duration)
                 .requestPath(path).build();
         usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(), totalTokens, token.getUserId());
@@ -297,24 +293,19 @@ public class RelayService {
                 conn.disconnect();
 
                 long duration = System.currentTimeMillis() - startTime;
-                int promptTokens = 0, completionTokens = 0, cachedTokens = 0;
+                int promptTokens = 0, completionTokens = 0;
                 if (lastUsageData != null) {
                     try {
                         JsonNode usageNode = objectMapper.readTree(lastUsageData).get("usage");
                         if (usageNode != null) {
                             promptTokens = usageNode.has("prompt_tokens") ? usageNode.get("prompt_tokens").asInt() : 0;
                             completionTokens = usageNode.has("completion_tokens") ? usageNode.get("completion_tokens").asInt() : 0;
-                            JsonNode promptDetails = usageNode.path("prompt_tokens_details");
-                            if (!promptDetails.isMissingNode()) {
-                                cachedTokens = promptDetails.has("cached_tokens") ? promptDetails.get("cached_tokens").asInt() : 0;
-                            }
                         }
                     } catch (Exception e) {
                         log.warn("解析流式响应 usage 数据失败: {}", e.getMessage());
                     }
                 }
-                recordStreamUsage(ctx.token(), channel, model, promptTokens, completionTokens,
-                        cachedTokens, 0, cachedTokens, duration, httpRequest, path);
+                recordStreamUsage(ctx.token(), channel, model, promptTokens, completionTokens, duration, httpRequest, path);
                 channelHealthTracker.recordSuccess(channel.getId());
                 return; // 成功，退出
             } catch (Exception e) {
@@ -367,22 +358,17 @@ public class RelayService {
 
                 long duration = System.currentTimeMillis() - startTime;
                 int promptTokens = 0, completionTokens = 0;
-                int cacheCreationTokens = 0, cacheReadTokens = 0;
                 try {
                     JsonNode jsonNode = objectMapper.readTree(response);
                     JsonNode usage = jsonNode.get("usage");
                     if (usage != null) {
-                        int inputTokens = usage.has("input_tokens") ? usage.get("input_tokens").asInt() : 0;
+                        promptTokens = usage.has("input_tokens") ? usage.get("input_tokens").asInt() : 0;
                         completionTokens = usage.has("output_tokens") ? usage.get("output_tokens").asInt() : 0;
-                        cacheCreationTokens = usage.has("cache_creation_input_tokens") ? usage.get("cache_creation_input_tokens").asInt() : 0;
-                        cacheReadTokens = usage.has("cache_read_input_tokens") ? usage.get("cache_read_input_tokens").asInt() : 0;
-                        promptTokens = inputTokens + cacheReadTokens;
                     }
                 } catch (Exception e) {
                     log.warn("解析 Claude 响应 usage 失败: {}", e.getMessage());
                 }
-                recordStreamUsage(ctx.token(), channel, model, promptTokens, completionTokens,
-                        cacheReadTokens, cacheCreationTokens, cacheReadTokens, duration, httpRequest, "/v1/messages");
+                recordStreamUsage(ctx.token(), channel, model, promptTokens, completionTokens, duration, httpRequest, "/v1/messages");
                 channelHealthTracker.recordSuccess(channel.getId());
                 return response;
             } catch (BusinessException e) {
@@ -532,7 +518,7 @@ public class RelayService {
                 return;
             }
             String lastUsageData = streamSseResponse(conn, httpResponse,
-                    data -> data.contains("\"input_tokens\"") || data.contains("\"output_tokens\""));
+                    data -> data.contains("\"output_tokens\""));
             // 发送 [DONE] 标记以兼容前端 SSE 解析
             var writer = httpResponse.getWriter();
             writer.write("data: [DONE]\n\n");
@@ -541,34 +527,17 @@ public class RelayService {
 
             long duration = System.currentTimeMillis() - startTime;
             int promptTokens = 0, completionTokens = 0;
-            int cacheCreationTokens = 0, cacheReadTokens = 0;
             if (lastUsageData != null) {
                 try {
-                    JsonNode lastJson = objectMapper.readTree(lastUsageData);
-                    JsonNode usageNode = lastJson.get("usage");
+                    JsonNode usageNode = objectMapper.readTree(lastUsageData).get("usage");
                     if (usageNode != null) {
                         completionTokens = usageNode.has("output_tokens") ? usageNode.get("output_tokens").asInt() : 0;
-                        cacheCreationTokens = usageNode.has("cache_creation_input_tokens") ? usageNode.get("cache_creation_input_tokens").asInt() : 0;
-                        cacheReadTokens = usageNode.has("cache_read_input_tokens") ? usageNode.get("cache_read_input_tokens").asInt() : 0;
                     }
-                    if (lastJson.has("message") && lastJson.get("message").has("usage")) {
-                        JsonNode msgUsage = lastJson.get("message").get("usage");
-                        int msgInputTokens = msgUsage.has("input_tokens") ? msgUsage.get("input_tokens").asInt() : 0;
-                        promptTokens = msgInputTokens;
-                        if (cacheReadTokens == 0) {
-                            cacheReadTokens = msgUsage.has("cache_read_input_tokens") ? msgUsage.get("cache_read_input_tokens").asInt() : 0;
-                        }
-                        if (cacheCreationTokens == 0) {
-                            cacheCreationTokens = msgUsage.has("cache_creation_input_tokens") ? msgUsage.get("cache_creation_input_tokens").asInt() : 0;
-                        }
-                    }
-                    promptTokens += cacheReadTokens;
                 } catch (Exception e) {
                     log.warn("解析 Claude 流式 usage 失败: {}", e.getMessage());
                 }
             }
-            recordStreamUsage(token, channel, model, promptTokens, completionTokens,
-                    cacheReadTokens, cacheCreationTokens, cacheReadTokens, duration, httpRequest, "/v1/messages");
+            recordStreamUsage(token, channel, model, promptTokens, completionTokens, duration, httpRequest, "/v1/messages");
         } catch (Exception e) {
             conn.disconnect();
             log.error("渠道 {} Claude 流式请求异常: {}", channel.getId(), e.getMessage());
@@ -603,7 +572,7 @@ public class RelayService {
         writer.flush();
 
         long startTime = System.currentTimeMillis();
-        int promptTokens = 0, completionTokens = 0, cachedTokens = 0;
+        int promptTokens = 0, completionTokens = 0;
 
         HttpURLConnection conn = createSseConnection(channel, "/v1/chat/completions", openAiBody);
         try {
@@ -629,10 +598,6 @@ public class RelayService {
                                 JsonNode usage = json.get("usage");
                                 promptTokens = usage.path("prompt_tokens").asInt(0);
                                 completionTokens = usage.path("completion_tokens").asInt(0);
-                                JsonNode promptDetails = usage.path("prompt_tokens_details");
-                                if (!promptDetails.isMissingNode()) {
-                                    cachedTokens = promptDetails.path("cached_tokens").asInt(0);
-                                }
                             }
                             String content = json.path("choices").path(0).path("delta").path("content").asText("");
                             String reasoningContent = json.path("choices").path(0).path("delta").path("reasoning_content").asText("");
@@ -664,8 +629,7 @@ public class RelayService {
         writer.flush();
 
         long duration = System.currentTimeMillis() - startTime;
-        recordStreamUsage(token, channel, model, promptTokens, completionTokens,
-                cachedTokens, 0, cachedTokens, duration, httpRequest, "/v1/messages");
+        recordStreamUsage(token, channel, model, promptTokens, completionTokens, duration, httpRequest, "/v1/messages");
     }
 
     // ==================== 渠道认证 ====================
@@ -851,9 +815,6 @@ public class RelayService {
         int promptTokens = 0;
         int completionTokens = 0;
         int totalTokens = 0;
-        int cachedTokens = 0;
-        int cacheCreationTokens = 0;
-        int cacheReadTokens = 0;
 
         try {
             JsonNode jsonNode = objectMapper.readTree(response);
@@ -862,23 +823,12 @@ public class RelayService {
                 promptTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt() : 0;
                 completionTokens = usage.has("completion_tokens") ? usage.get("completion_tokens").asInt() : 0;
                 totalTokens = usage.has("total_tokens") ? usage.get("total_tokens").asInt() : 0;
-                // OpenAI format: prompt_tokens_details.cached_tokens
-                JsonNode promptDetails = usage.path("prompt_tokens_details");
-                if (!promptDetails.isMissingNode()) {
-                    cachedTokens = promptDetails.has("cached_tokens") ? promptDetails.get("cached_tokens").asInt() : 0;
-                }
-                // Claude format: cache_read_input_tokens, cache_creation_input_tokens
-                cacheCreationTokens = usage.has("cache_creation_input_tokens") ? usage.get("cache_creation_input_tokens").asInt() : 0;
-                cacheReadTokens = usage.has("cache_read_input_tokens") ? usage.get("cache_read_input_tokens").asInt() : 0;
-                if (cachedTokens == 0 && cacheReadTokens > 0) {
-                    cachedTokens = cacheReadTokens;
-                }
             }
         } catch (Exception e) {
             log.warn("Failed to parse usage from response");
         }
 
-        BigDecimal creditCost = usageLogService.calculateCreditCost(model, promptTokens, completionTokens, cachedTokens);
+        BigDecimal creditCost = usageLogService.calculateCreditCost(model, promptTokens, completionTokens);
 
         UsageLog usageLog = UsageLog.builder()
                 .tokenId(token.getId())
@@ -887,9 +837,6 @@ public class RelayService {
                 .promptTokens(promptTokens)
                 .completionTokens(completionTokens)
                 .totalTokens(totalTokens)
-                .promptTokensCacheHit(cachedTokens)
-                .cachedTokensCacheCreation(cacheCreationTokens)
-                .cachedTokensCacheRead(cacheReadTokens)
                 .creditCost(creditCost)
                 .ip(getClientIp(httpRequest))
                 .duration(duration)

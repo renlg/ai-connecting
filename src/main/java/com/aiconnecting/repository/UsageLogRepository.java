@@ -33,12 +33,6 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
     @Query("SELECT COALESCE(SUM(u.creditCost), 0.0) FROM UsageLog u WHERE u.createdAt >= :since")
     double sumCreditCostSince(LocalDateTime since);
 
-    @Query("SELECT COALESCE(SUM(u.promptTokensCacheHit), 0) FROM UsageLog u")
-    long sumCachedPromptTokens();
-
-    @Query("SELECT COALESCE(SUM(u.promptTokensCacheHit), 0) FROM UsageLog u WHERE u.createdAt >= :since")
-    long sumCachedPromptTokensSince(LocalDateTime since);
-
     @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, " +
             "COALESCE(SUM(credit_cost), 0) as credits " +
             "FROM usage_logs WHERE token_id = ?1 AND created_at >= ?2 " +
@@ -47,14 +41,12 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
 
     // Dashboard 聚合查询：一次查询获取所有指标
     @Query("SELECT COALESCE(COUNT(u), 0), COALESCE(SUM(u.totalTokens), 0), " +
-           "COALESCE(SUM(u.promptTokens), 0), COALESCE(SUM(u.completionTokens), 0), COALESCE(SUM(u.creditCost), 0.0), " +
-           "COALESCE(SUM(u.promptTokensCacheHit), 0) " +
+           "COALESCE(SUM(u.promptTokens), 0), COALESCE(SUM(u.completionTokens), 0), COALESCE(SUM(u.creditCost), 0.0) " +
            "FROM UsageLog u WHERE u.tokenId IN :tokenIds")
     List<Object[]> sumAllMetricsByTokenIds(@Param("tokenIds") List<Long> tokenIds);
 
     @Query("SELECT COALESCE(COUNT(u), 0), COALESCE(SUM(u.totalTokens), 0), " +
-           "COALESCE(SUM(u.promptTokens), 0), COALESCE(SUM(u.completionTokens), 0), COALESCE(SUM(u.creditCost), 0.0), " +
-           "COALESCE(SUM(u.promptTokensCacheHit), 0) " +
+           "COALESCE(SUM(u.promptTokens), 0), COALESCE(SUM(u.completionTokens), 0), COALESCE(SUM(u.creditCost), 0.0) " +
            "FROM UsageLog u WHERE u.tokenId IN :tokenIds AND u.createdAt >= :since")
     List<Object[]> sumAllMetricsByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 }

@@ -1,7 +1,6 @@
 package com.aiconnecting.dto;
 
 import lombok.Data;
-import java.math.BigDecimal;
 
 /**
  * 模型配置请求 DTO
@@ -22,6 +21,4 @@ public class ModelConfigRequest {
     private Boolean adminOnly;
 
     private Integer status;
-
-    private BigDecimal multiplier;
 }

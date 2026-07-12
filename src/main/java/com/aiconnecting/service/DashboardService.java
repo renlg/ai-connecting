@@ -53,8 +53,6 @@ public class DashboardService {
                 .outputTokensToday(usageLogService.getOutputTokensToday())
                 .totalCreditsConsumed(usageLogService.getTotalCreditsConsumed())
                 .creditsConsumedToday(usageLogService.getCreditsConsumedToday())
-                .totalCachedPromptTokens(usageLogService.getTotalCachedPromptTokens())
-                .cachedPromptTokensToday(usageLogService.getCachedPromptTokensToday())
                 .build();
     }
 
@@ -68,7 +66,6 @@ public class DashboardService {
 
         // 聚合查询：全部时间
         long totalRequests = 0, totalTokensUsedLog = 0, totalInputTokens = 0, totalOutputTokens = 0;
-        long totalCachedPromptTokens = 0;
         BigDecimal totalCreditsConsumed = BigDecimal.ZERO;
         if (!tokenIds.isEmpty()) {
             Object[] allMetrics = usageLogService.sumAllMetricsByTokenIds(tokenIds);
@@ -77,12 +74,10 @@ public class DashboardService {
             totalInputTokens = ((Number) allMetrics[2]).longValue();
             totalOutputTokens = ((Number) allMetrics[3]).longValue();
             totalCreditsConsumed = BigDecimal.valueOf(((Number) allMetrics[4]).doubleValue());
-            totalCachedPromptTokens = ((Number) allMetrics[5]).longValue();
         }
 
         // 聚合查询：今日
         long requestsToday = 0, tokensUsedToday = 0, inputTokensToday = 0, outputTokensToday = 0;
-        long cachedPromptTokensToday = 0;
         BigDecimal creditsConsumedToday = BigDecimal.ZERO;
         if (!tokenIds.isEmpty()) {
             Object[] todayMetrics = usageLogService.sumAllMetricsByTokenIdsSince(
@@ -92,7 +87,6 @@ public class DashboardService {
             inputTokensToday = ((Number) todayMetrics[2]).longValue();
             outputTokensToday = ((Number) todayMetrics[3]).longValue();
             creditsConsumedToday = BigDecimal.valueOf(((Number) todayMetrics[4]).doubleValue());
-            cachedPromptTokensToday = ((Number) todayMetrics[5]).longValue();
         }
 
         return DashboardStats.builder()
@@ -110,8 +104,6 @@ public class DashboardService {
                 .outputTokensToday(outputTokensToday)
                 .totalCreditsConsumed(totalCreditsConsumed)
                 .creditsConsumedToday(creditsConsumedToday)
-                .totalCachedPromptTokens(totalCachedPromptTokens)
-                .cachedPromptTokensToday(cachedPromptTokensToday)
                 .myCredits(currentUser.getCredits())
                 .build();
     }
