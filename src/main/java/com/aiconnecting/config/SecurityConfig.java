@@ -58,6 +58,7 @@ public class SecurityConfig {
                 .requestMatchers("/v1/messages/**").permitAll()
                 // 仪表盘和模型列表接口允许所有已认证用户访问（控制器内部按角色返回数据）
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/dashboard").authenticated()
+                .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/dashboard/daily-stats").authenticated()
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/models").authenticated()
                 .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/admin/models/enabled").authenticated()
                 // Actuator 端点需要认证

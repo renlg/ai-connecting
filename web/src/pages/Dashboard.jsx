@@ -286,27 +286,45 @@ export default function Dashboard() {
         )}
       </Card>
 
-      <Card title="每日 Token 消耗（按模型）" style={{ borderRadius: 8 }} loading={dailyStatsLoading}>
-        {tokenChartData.length === 0 ? (
-          <Empty description="暂无数据" />
-        ) : (
-          <ResponsiveContainer width="100%" height={400}>
-            <BarChart data={tokenChartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e1e0d9" />
-              <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} label={{ value: 'tokens', angle: -90, position: 'insideLeft' }} />
-              <Tooltip />
-              <Legend />
-              {models.map(model => (
-                <React.Fragment key={model}>
-                  <Bar dataKey={model + '_miss'} stackId={model} fill={MISS_COLOR} name={`${model} 缓存未命中`} barSize={24} />
-                  <Bar dataKey={model + '_hit'} stackId={model} fill={HIT_COLOR} name={`${model} 缓存命中`} barSize={24} radius={[4, 4, 0, 0]} />
-                </React.Fragment>
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </Card>
+      {/* ── Section 5: 每日 Token 消耗（每个模型单独一个柱状图） ── */}
+      <h3 style={{ fontSize: 18, marginBottom: 12, marginTop: 32, color: '#595959', fontWeight: 600 }}>
+        🔤 每日 Token 消耗（按模型）
+      </h3>
+      {dailyStatsLoading ? (
+        <Spin style={{ display: 'block', margin: '40px auto' }} />
+      ) : models.length === 0 ? (
+        <Card style={{ borderRadius: 8 }}><Empty description="暂无 Token 数据" /></Card>
+      ) : (
+        <Row gutter={[16, 16]}>
+          {models.map(model => {
+            const modelData = (dailyStats?.dailyTokensByModel || [])
+              .filter(d => d.model === model)
+              .map(d => ({ date: d.date, cacheMiss: d.cacheMissTokens, cacheHit: d.cachedTokens }))
+              .sort((a, b) => a.date.localeCompare(b.date))
+            return (
+              <Col xs={24} sm={24} md={12} key={model}>
+                <Card
+                  title={<span style={{ fontSize: 14 }}>{model}</span>}
+                  size="small"
+                  style={{ borderRadius: 8 }}
+                >
+                  <ResponsiveContainer width="100%" height={250}>
+                    <BarChart data={modelData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e1e0d9" />
+                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} />
+                      <Tooltip />
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      <Bar dataKey="cacheMiss" name="缓存未命中" fill={MISS_COLOR} stackId="a" barSize={20} />
+                      <Bar dataKey="cacheHit" name="缓存命中" fill={HIT_COLOR} stackId="a" barSize={20} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </Card>
+              </Col>
+            )
+          })}
+        </Row>
+      )}
 
       <Modal
         title="封禁渠道列表"
