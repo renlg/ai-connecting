@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography, Tooltip } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
-import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCacheStats, testTokenChatStream, getTokenModels, getModelStats } from '../api'
+import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCacheStats, testTokenChatStream, getTokenModels } from '../api'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
@@ -27,7 +27,6 @@ export default function Tokens() {
   const [testLoading, setTestLoading] = useState(false)
   const [modelOptions, setModelOptions] = useState([])
   const [streamContent, setStreamContent] = useState('')
-  const [modelStats, setModelStats] = useState(null)
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const isAdmin = user.role === 'admin'
 
@@ -45,18 +44,16 @@ export default function Tokens() {
       if (res.code === 200) {
         setModelOptions((res.data || []).map(m => ({
           value: m.displayName,
-          label: m.displayName
+          label: m.displayName,
+          inputRate: m.inputCreditRate,
+          outputRate: m.outputCreditRate,
+          cacheRate: m.cacheCreditRate
         })))
       }
     })
   }
 
   useEffect(() => { loadModels() }, [])
-
-  // 加载模型统计数据
-  useEffect(() => {
-    getModelStats().then(res => { if (res.code === 200) setModelStats(res.data) }).catch(() => {})
-  }, [])
 
   const handleSearch = (value) => {
     setSearchText(value)
@@ -239,15 +236,12 @@ export default function Tokens() {
           <div style={{ marginBottom: 8, fontSize: 13, color: '#888' }}>可用模型（{modelOptions.length}）</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {modelOptions.map(m => {
-              const stat = modelStats?.find(s => s.model === m.label || s.model.includes(m.label.split('/')[0]))
-              const tooltipContent = stat ? (
+              const tooltipContent = (
                 <div style={{ fontSize: 13, lineHeight: '28px' }}>
-                  <div>输入占比：{stat.totalTokens ? (stat.inputTokens / stat.totalTokens * 100).toFixed(1) : '0.0'}%</div>
-                  <div>输出占比：{stat.totalTokens ? (stat.outputTokens / stat.totalTokens * 100).toFixed(1) : '0.0'}%</div>
-                  <div>缓存占比：{stat.inputTokens ? (stat.cachedTokens / stat.inputTokens * 100).toFixed(1) : '0.0'}%</div>
+                  <div>输入比例：{m.inputRate || 0} 积分/百万token</div>
+                  <div>输出比例：{m.outputRate || 0} 积分/百万token</div>
+                  <div>缓存比例：{m.cacheRate || 0} 积分/百万token</div>
                 </div>
-              ) : (
-                <span>加载中...</span>
               )
               return (
                 <Tooltip key={m.value} title={tooltipContent} color="#fff" overlayInnerStyle={{ color: '#333', maxWidth: 300 }}>

@@ -71,9 +71,9 @@ export default function Models() {
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '模型名称', dataIndex: 'name', width: 180, render: v => <Tag color="blue">{v}</Tag> },
     { title: '显示名称', dataIndex: 'displayName', width: 150, render: v => v || '-' },
-    { title: '输入比例（积分/千token）', dataIndex: 'inputCreditRate', width: 130, render: v => v || 0 },
-    { title: '输出比例（积分/千token）', dataIndex: 'outputCreditRate', width: 130, render: v => v || 0 },
-    { title: '缓存折扣', dataIndex: 'cacheCreditRate', width: 100, render: v => v != null ? (v * 100) + '%' : '10%' },
+    { title: '输入比例（积分/百万token）', dataIndex: 'inputCreditRate', width: 130, render: v => v || 0 },
+    { title: '输出比例（积分/百万token）', dataIndex: 'outputCreditRate', width: 130, render: v => v || 0 },
+    { title: '缓存比例（积分/百万token）', dataIndex: 'cacheCreditRate', width: 130, render: v => v != null ? v : '0' },
     { title: '描述', dataIndex: 'description', ellipsis: true, render: v => v || '-' },
     {
       title: '仅管理员', dataIndex: 'adminOnly', width: 100,
@@ -129,14 +129,14 @@ export default function Models() {
           <Form.Item name="displayName" label="显示名称">
             <Input placeholder="例如: GPT-4o（用于 Token 管理展示）" />
           </Form.Item>
-          <Form.Item name="inputCreditRate" label="输入积分比例（每1000 token）" initialValue={0}>
-            <InputNumber min={0} style={{ width: '100%' }} placeholder="每 1000 输入 token 消耗的积分数" />
+          <Form.Item name="inputCreditRate" label="输入积分比例（每百万token）" initialValue={0}>
+            <InputNumber min={0} style={{ width: '100%' }} placeholder="每 百万 输入 token 消耗的积分数" />
           </Form.Item>
-          <Form.Item name="outputCreditRate" label="输出积分比例（每1000 token）" initialValue={0}>
-            <InputNumber min={0} style={{ width: '100%' }} placeholder="每 1000 输出 token 消耗的积分数" />
+          <Form.Item name="outputCreditRate" label="输出积分比例（每百万token）" initialValue={0}>
+            <InputNumber min={0} style={{ width: '100%' }} placeholder="每 百万 输出 token 消耗的积分数" />
           </Form.Item>
-          <Form.Item name="cacheCreditRate" label="缓存折扣比例（0-1）" initialValue={0.1}>
-            <InputNumber min={0} max={1} step={0.05} style={{ width: '100%' }} placeholder="缓存 token 按此比例计费，默认 0.1（10%）" />
+          <Form.Item name="cacheCreditRate" label="缓存比例（积分/百万token）" initialValue={0}>
+            <InputNumber min={0} step={100} style={{ width: '100%' }} placeholder="每 百万 缓存 token 消耗的积分数" />
           </Form.Item>
           <Form.Item name="description" label="描述">
             <Input placeholder="模型描述（可选）" />

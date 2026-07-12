@@ -70,14 +70,6 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
     @Query("SELECT COALESCE(SUM(u.cachedTokensCacheCreation), 0), COALESCE(SUM(u.cachedTokensCacheRead), 0) FROM UsageLog u WHERE u.createdAt >= :since")
     List<Object[]> sumCacheTokensGlobalSince(@Param("since") LocalDateTime since);
 
-    // 按 model 聚合统计数据（给定 tokenIds）
-    @Query(value = "SELECT model, COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) FROM usage_logs WHERE token_id IN :tokenIds GROUP BY model ORDER BY model", nativeQuery = true)
-    List<Object[]> sumByModelByTokenIds(@Param("tokenIds") List<Long> tokenIds);
-
-    // 全局按 model 聚合
-    @Query(value = "SELECT model, COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) FROM usage_logs GROUP BY model ORDER BY model", nativeQuery = true)
-    List<Object[]> sumByModelGlobal();
-
     // 全局每日消耗积分（created_at 以 epoch 毫秒存储，需转换为北京时间日期）
     @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, " +
             "COALESCE(SUM(credit_cost), 0) as credits " +

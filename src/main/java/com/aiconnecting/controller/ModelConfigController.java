@@ -66,7 +66,7 @@ public class ModelConfigController {
                 .inputCreditRate(request.getInputCreditRate() != null ? request.getInputCreditRate() : 0)
                 .outputCreditRate(request.getOutputCreditRate() != null ? request.getOutputCreditRate() : 0)
                 .adminOnly(Boolean.TRUE.equals(request.getAdminOnly()))
-                .cacheCreditRate(request.getCacheCreditRate() != null ? request.getCacheCreditRate() : new BigDecimal("0.1"))
+                .cacheCreditRate(request.getCacheCreditRate() != null ? request.getCacheCreditRate() : BigDecimal.ZERO)
                 .status(1)
                 .build();
         ModelConfig saved = modelConfigService.save(config);
