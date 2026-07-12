@@ -69,4 +69,28 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
 
     @Query("SELECT COALESCE(SUM(u.cachedTokensCacheCreation), 0), COALESCE(SUM(u.cachedTokensCacheRead), 0) FROM UsageLog u WHERE u.createdAt >= :since")
     List<Object[]> sumCacheTokensGlobalSince(@Param("since") LocalDateTime since);
+
+    // 全局每日消耗积分（created_at 以 epoch 毫秒存储，需转换为北京时间日期）
+    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, " +
+            "COALESCE(SUM(credit_cost), 0) as credits " +
+            "FROM usage_logs WHERE created_at >= :since GROUP BY date ORDER BY date ASC", nativeQuery = true)
+    List<Object[]> findDailyCreditCostSince(@Param("since") LocalDateTime since);
+
+    // 按 Token ID 列表统计每日消耗积分
+    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, " +
+            "COALESCE(SUM(credit_cost), 0) as credits " +
+            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since GROUP BY date ORDER BY date ASC", nativeQuery = true)
+    List<Object[]> findDailyCreditCostByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
+
+    // 全局每日按模型统计 token 数
+    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, " +
+            "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) " +
+            "FROM usage_logs WHERE created_at >= :since GROUP BY date, model ORDER BY date ASC, model ASC", nativeQuery = true)
+    List<Object[]> findDailyTokenByModelSince(@Param("since") LocalDateTime since);
+
+    // 按 Token ID 列表统计每日按模型 token 数
+    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, " +
+            "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) " +
+            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since GROUP BY date, model ORDER BY date ASC, model ASC", nativeQuery = true)
+    List<Object[]> findDailyTokenByModelByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 }

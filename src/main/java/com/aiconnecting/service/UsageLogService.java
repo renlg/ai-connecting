@@ -1,6 +1,8 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.dto.DashboardDailyStats;
 import com.aiconnecting.entity.UsageLog;
+import com.aiconnecting.entity.User;
 import com.aiconnecting.repository.UsageLogRepository;
 import com.aiconnecting.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -216,5 +218,57 @@ public class UsageLogService {
         if (result.isEmpty()) return new long[]{0, 0};
         Object[] row = result.get(0);
         return new long[]{((Number) row[0]).longValue(), ((Number) row[1]).longValue()};
+    }
+
+    /**
+     * 仪表盘每日统计 - admin 看全局，普通用户看自己的数据
+     */
+    public DashboardDailyStats getDailyStats(User currentUser, int days) {
+        LocalDateTime since = LocalDate.now().minusDays(days).atStartOfDay();
+        List<Long> tokenIds = null;
+        if (!"admin".equalsIgnoreCase(currentUser.getRole())) {
+            tokenIds = tokenService.getUserTokenIds(currentUser.getId());
+            if (tokenIds.isEmpty()) {
+                return DashboardDailyStats.builder()
+                        .dailyCredits(List.of())
+                        .dailyTokensByModel(List.of())
+                        .build();
+            }
+        }
+
+        List<Object[]> creditRows = tokenIds == null
+                ? usageLogRepository.findDailyCreditCostSince(since)
+                : usageLogRepository.findDailyCreditCostByTokenIdsSince(tokenIds, since);
+        List<Object[]> tokenRows = tokenIds == null
+                ? usageLogRepository.findDailyTokenByModelSince(since)
+                : usageLogRepository.findDailyTokenByModelByTokenIdsSince(tokenIds, since);
+
+        List<DashboardDailyStats.DailyCreditStat> dailyCredits = creditRows.stream()
+                .map(row -> DashboardDailyStats.DailyCreditStat.builder()
+                        .date((String) row[0])
+                        .credits(BigDecimal.valueOf(((Number) row[1]).doubleValue()))
+                        .build())
+                .toList();
+
+        List<DashboardDailyStats.DailyTokenByModelStat> dailyTokensByModel = tokenRows.stream()
+                .map(row -> {
+                    long inputTokens = ((Number) row[2]).longValue();
+                    long cachedTokens = ((Number) row[3]).longValue();
+                    long totalTokens = ((Number) row[4]).longValue();
+                    return DashboardDailyStats.DailyTokenByModelStat.builder()
+                            .date((String) row[0])
+                            .model((String) row[1])
+                            .inputTokens(inputTokens)
+                            .cachedTokens(cachedTokens)
+                            .cacheMissTokens(inputTokens - cachedTokens)
+                            .totalTokens(totalTokens)
+                            .build();
+                })
+                .toList();
+
+        return DashboardDailyStats.builder()
+                .dailyCredits(dailyCredits)
+                .dailyTokensByModel(dailyTokensByModel)
+                .build();
     }
 }

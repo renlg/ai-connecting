@@ -5,6 +5,7 @@ import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.dto.CouponGenerateRequest;
 import com.aiconnecting.dto.CouponRedemptionDTO;
 import com.aiconnecting.dto.CreditsRequest;
+import com.aiconnecting.dto.DashboardDailyStats;
 import com.aiconnecting.dto.DashboardStats;
 import com.aiconnecting.dto.StatusRequest;
 import com.aiconnecting.dto.AnnouncementRequest;
@@ -54,6 +55,16 @@ public class AdminController {
     @GetMapping("/dashboard")
     public ApiResponse<DashboardStats> dashboard(@AuthenticationPrincipal User currentUser) {
         return ApiResponse.success(dashboardService.buildDashboardStats(currentUser));
+    }
+
+    /**
+     * 仪表盘每日统计（积分消耗 + 按模型 token 消耗）- admin 看全局，普通用户看自己的数据
+     */
+    @GetMapping("/dashboard/daily-stats")
+    public ApiResponse<DashboardDailyStats> getDailyStats(
+            @AuthenticationPrincipal User currentUser,
+            @RequestParam(defaultValue = "7") int days) {
+        return ApiResponse.success(usageLogService.getDailyStats(currentUser, Math.min(days, 90)));
     }
 
     /**

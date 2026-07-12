@@ -169,6 +169,7 @@ export const batchCreateModels = (names) => api.post('/api/admin/models/batch', 
 
 // Admin
 export const getDashboard = () => api.get('/api/admin/dashboard');
+export const getDailyStats = (days = 7) => api.get('/api/admin/dashboard/daily-stats', { params: { days } });
 export const getBlockedChannels = () => api.get('/api/admin/channels/blocked');
 export const getUsers = (search) => api.get('/api/admin/users', { params: search ? { search } : {} });
 export const updateUserStatus = (id, status) => api.put(`/api/admin/users/${id}/status`, { status });

@@ -32,6 +32,10 @@ public class TokenService {
         return tokenRepository.findByUserId(userId);
     }
 
+    public List<Long> getUserTokenIds(Long userId) {
+        return tokenRepository.findIdsByUserId(userId);
+    }
+
     public List<Token> listAll() {
         return tokenRepository.findAll();
     }

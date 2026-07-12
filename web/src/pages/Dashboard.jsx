@@ -1,8 +1,30 @@
-import React, { useEffect, useState } from 'react'
-import { Card, Row, Col, Statistic, Spin, message, Modal, Table, Tag } from 'antd'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Card, Row, Col, Statistic, Spin, message, Modal, Table, Tag, Segmented, Empty } from 'antd'
 import { KeyOutlined, SendOutlined, NumberOutlined, DollarOutlined } from '@ant-design/icons'
 import { ApiOutlined, CloudServerOutlined, UserOutlined, WalletOutlined, StopOutlined } from '@ant-design/icons'
-import { getDashboard, getBlockedChannels } from '../api'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { getDashboard, getBlockedChannels, getDailyStats } from '../api'
+
+// 缓存未命中 / 命中固定用两种颜色区分状态，模型身份由图例文案与横轴分组承载
+const MISS_COLOR = '#1677ff'
+const HIT_COLOR = '#722ed1'
+
+function buildTokenChartData(data) {
+  if (!data || !data.dailyTokensByModel || data.dailyTokensByModel.length === 0) {
+    return { chartData: [], models: [] }
+  }
+  const models = [...new Set(data.dailyTokensByModel.map(d => d.model))]
+  const grouped = {}
+  data.dailyTokensByModel.forEach(item => {
+    if (!grouped[item.date]) grouped[item.date] = { date: item.date }
+    grouped[item.date][item.model + '_miss'] = item.cacheMissTokens
+    grouped[item.date][item.model + '_hit'] = item.cachedTokens
+  })
+  return {
+    chartData: Object.values(grouped).sort((a, b) => a.date.localeCompare(b.date)),
+    models,
+  }
+}
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
@@ -10,6 +32,9 @@ export default function Dashboard() {
   const [blockedModalOpen, setBlockedModalOpen] = useState(false)
   const [blockedChannels, setBlockedChannels] = useState([])
   const [blockedLoading, setBlockedLoading] = useState(false)
+  const [dailyStats, setDailyStats] = useState(null)
+  const [dailyStatsLoading, setDailyStatsLoading] = useState(true)
+  const [days, setDays] = useState(7)
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const isAdmin = user.role === 'admin'
 
@@ -18,6 +43,16 @@ export default function Dashboard() {
       if (res.code === 200) setStats(res.data)
     }).catch(() => message.error('加载仪表盘数据失败')).finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    setDailyStatsLoading(true)
+    getDailyStats(days).then(res => {
+      if (res.code === 200) setDailyStats(res.data)
+    }).catch(() => message.error('加载每日统计数据失败')).finally(() => setDailyStatsLoading(false))
+  }, [days])
+
+  const { chartData: tokenChartData, models } = useMemo(() => buildTokenChartData(dailyStats), [dailyStats])
+  const creditChartData = dailyStats?.dailyCredits || []
 
   const handleBlockedClick = () => {
     setBlockedModalOpen(true)
@@ -214,6 +249,64 @@ export default function Dashboard() {
           </Col>
         ))}
       </Row>
+
+      {/* ── Section 4: 每日消耗趋势 ── */}
+      <Row align="middle" justify="space-between" style={{ marginTop: 32, marginBottom: 12 }}>
+        <Col>
+          <h3 style={{ fontSize: 18, color: '#595959', fontWeight: 600, margin: 0 }}>
+            📅 每日消耗趋势
+          </h3>
+        </Col>
+        <Col>
+          <Segmented
+            value={days}
+            onChange={setDays}
+            options={[
+              { label: '7 天', value: 7 },
+              { label: '14 天', value: 14 },
+              { label: '30 天', value: 30 },
+            ]}
+          />
+        </Col>
+      </Row>
+
+      <Card title="每日消耗积分" style={{ borderRadius: 8, marginBottom: 16 }} loading={dailyStatsLoading}>
+        {creditChartData.length === 0 ? (
+          <Empty description="暂无数据" />
+        ) : (
+          <ResponsiveContainer width="100%" height={400}>
+            <BarChart data={creditChartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e1e0d9" />
+              <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+              <YAxis unit="积分" tick={{ fontSize: 12 }} />
+              <Tooltip />
+              <Bar dataKey="credits" name="消耗积分" fill={MISS_COLOR} barSize={24} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </Card>
+
+      <Card title="每日 Token 消耗（按模型）" style={{ borderRadius: 8 }} loading={dailyStatsLoading}>
+        {tokenChartData.length === 0 ? (
+          <Empty description="暂无数据" />
+        ) : (
+          <ResponsiveContainer width="100%" height={400}>
+            <BarChart data={tokenChartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e1e0d9" />
+              <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} label={{ value: 'tokens', angle: -90, position: 'insideLeft' }} />
+              <Tooltip />
+              <Legend />
+              {models.map(model => (
+                <React.Fragment key={model}>
+                  <Bar dataKey={model + '_miss'} stackId={model} fill={MISS_COLOR} name={`${model} 缓存未命中`} barSize={24} />
+                  <Bar dataKey={model + '_hit'} stackId={model} fill={HIT_COLOR} name={`${model} 缓存命中`} barSize={24} radius={[4, 4, 0, 0]} />
+                </React.Fragment>
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </Card>
 
       <Modal
         title="封禁渠道列表"
