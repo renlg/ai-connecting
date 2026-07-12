@@ -57,4 +57,16 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
            "COALESCE(SUM(u.promptTokensCacheHit), 0) " +
            "FROM UsageLog u WHERE u.tokenId IN :tokenIds AND u.createdAt >= :since")
     List<Object[]> sumAllMetricsByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
+
+    @Query("SELECT COALESCE(SUM(u.cachedTokensCacheCreation), 0), COALESCE(SUM(u.cachedTokensCacheRead), 0) FROM UsageLog u WHERE u.tokenId IN :tokenIds")
+    List<Object[]> sumCacheTokensByTokenIds(@Param("tokenIds") List<Long> tokenIds);
+
+    @Query("SELECT COALESCE(SUM(u.cachedTokensCacheCreation), 0), COALESCE(SUM(u.cachedTokensCacheRead), 0) FROM UsageLog u WHERE u.tokenId IN :tokenIds AND u.createdAt >= :since")
+    List<Object[]> sumCacheTokensByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
+
+    @Query("SELECT COALESCE(SUM(u.cachedTokensCacheCreation), 0), COALESCE(SUM(u.cachedTokensCacheRead), 0) FROM UsageLog u")
+    List<Object[]> sumCacheTokensGlobal();
+
+    @Query("SELECT COALESCE(SUM(u.cachedTokensCacheCreation), 0), COALESCE(SUM(u.cachedTokensCacheRead), 0) FROM UsageLog u WHERE u.createdAt >= :since")
+    List<Object[]> sumCacheTokensGlobalSince(@Param("since") LocalDateTime since);
 }

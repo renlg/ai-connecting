@@ -49,10 +49,10 @@ public class ModelConfig {
     @Column(nullable = false)
     private Boolean adminOnly = false;
 
-    /** 积分倍率，默认 1.0 */
+    /** 缓存 token 折扣比例，缓存 token 按此比例计入积分计算，默认 0.1（即 1/10） */
     @Builder.Default
-    @Column(nullable = false, precision = 10, scale = 2)
-    private BigDecimal multiplier = BigDecimal.ONE;
+    @Column(nullable = false, precision = 5, scale = 4)
+    private BigDecimal cacheCreditRate = new BigDecimal("0.1");
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -67,7 +67,7 @@ public class ModelConfig {
         if (inputCreditRate == null) inputCreditRate = 0;
         if (outputCreditRate == null) outputCreditRate = 0;
         if (adminOnly == null) adminOnly = false;
-        if (multiplier == null) multiplier = BigDecimal.ONE;
+        if (cacheCreditRate == null) cacheCreditRate = new BigDecimal("0.1");
     }
 
     @PreUpdate

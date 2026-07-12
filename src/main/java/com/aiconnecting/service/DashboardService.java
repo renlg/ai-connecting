@@ -37,6 +37,9 @@ public class DashboardService {
         long activeChannels = channels.stream().filter(c -> c.getStatus() == 1).count();
         long blockedChannels = channelHealthTracker.getBlockedChannelIds().size();
 
+        long[] cacheStats = usageLogService.getGlobalCacheStats();
+        long[] cacheStatsToday = usageLogService.getGlobalCacheStatsSince(LocalDate.now().atStartOfDay());
+
         return DashboardStats.builder()
                 .totalChannels((long) channels.size())
                 .activeChannels(activeChannels)
@@ -55,6 +58,10 @@ public class DashboardService {
                 .creditsConsumedToday(usageLogService.getCreditsConsumedToday())
                 .totalCachedPromptTokens(usageLogService.getTotalCachedPromptTokens())
                 .cachedPromptTokensToday(usageLogService.getCachedPromptTokensToday())
+                .totalCacheCreationTokens(cacheStats[0])
+                .totalCacheReadTokens(cacheStats[1])
+                .todayCacheCreationTokens(cacheStatsToday[0])
+                .todayCacheReadTokens(cacheStatsToday[1])
                 .build();
     }
 
@@ -95,6 +102,10 @@ public class DashboardService {
             cachedPromptTokensToday = ((Number) todayMetrics[5]).longValue();
         }
 
+        long[] cacheStats = tokenIds.isEmpty() ? new long[]{0, 0} : usageLogService.getCacheStats(tokenIds);
+        long[] cacheStatsToday = tokenIds.isEmpty() ? new long[]{0, 0}
+                : usageLogService.getCacheStatsSince(tokenIds, LocalDate.now().atStartOfDay());
+
         return DashboardStats.builder()
                 .totalChannels(0L)
                 .activeChannels(0L)
@@ -112,6 +123,10 @@ public class DashboardService {
                 .creditsConsumedToday(creditsConsumedToday)
                 .totalCachedPromptTokens(totalCachedPromptTokens)
                 .cachedPromptTokensToday(cachedPromptTokensToday)
+                .totalCacheCreationTokens(cacheStats[0])
+                .totalCacheReadTokens(cacheStats[1])
+                .todayCacheCreationTokens(cacheStatsToday[0])
+                .todayCacheReadTokens(cacheStatsToday[1])
                 .myCredits(currentUser.getCredits())
                 .build();
     }

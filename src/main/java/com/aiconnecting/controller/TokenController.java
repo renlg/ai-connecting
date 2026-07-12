@@ -125,6 +125,19 @@ public class TokenController {
         return ApiResponse.success(result);
     }
 
+    @GetMapping("/{id}/cache-stats")
+    public ApiResponse<Map<String, Object>> cacheStats(@AuthenticationPrincipal User user, @PathVariable Long id) {
+        Token token = tokenService.getById(id);
+        if (!"admin".equals(user.getRole()) && !token.getUserId().equals(user.getId())) {
+            throw new BusinessException(403, "无权查看该 Token 的缓存统计");
+        }
+        long[] cache = usageLogService.getCacheStats(List.of(id));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("cacheCreationTokens", cache[0]);
+        result.put("cacheReadTokens", cache[1]);
+        return ApiResponse.success(result);
+    }
+
     private String formatDateValue(Object value) {
         if (value == null) return null;
         if (value instanceof LocalDateTime) {

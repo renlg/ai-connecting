@@ -66,7 +66,7 @@ public class ModelConfigController {
                 .inputCreditRate(request.getInputCreditRate() != null ? request.getInputCreditRate() : 0)
                 .outputCreditRate(request.getOutputCreditRate() != null ? request.getOutputCreditRate() : 0)
                 .adminOnly(Boolean.TRUE.equals(request.getAdminOnly()))
-                .multiplier(request.getMultiplier() != null ? request.getMultiplier() : BigDecimal.ONE)
+                .cacheCreditRate(request.getCacheCreditRate() != null ? request.getCacheCreditRate() : new BigDecimal("0.1"))
                 .status(1)
                 .build();
         ModelConfig saved = modelConfigService.save(config);
@@ -98,8 +98,8 @@ public class ModelConfigController {
         if (request.getAdminOnly() != null) {
             config.setAdminOnly(request.getAdminOnly());
         }
-        if (request.getMultiplier() != null) {
-            config.setMultiplier(request.getMultiplier());
+        if (request.getCacheCreditRate() != null) {
+            config.setCacheCreditRate(request.getCacheCreditRate());
         }
         ModelConfig saved = modelConfigService.save(config);
         relayService.clearModelNameCache();

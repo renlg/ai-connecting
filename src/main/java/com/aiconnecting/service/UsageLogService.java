@@ -36,7 +36,7 @@ public class UsageLogService {
     private final ConcurrentHashMap<String, CachedCreditRate> creditRateCache = new ConcurrentHashMap<>();
     private static final long CREDIT_RATE_CACHE_TTL_MS = 2 * 60 * 1000L;
 
-    private record CachedCreditRate(int inputRate, int outputRate, java.math.BigDecimal multiplier, long cachedAt) {
+    private record CachedCreditRate(int inputRate, int outputRate, BigDecimal cacheCreditRate, long cachedAt) {
         boolean isExpired() {
             return System.currentTimeMillis() - cachedAt > CREDIT_RATE_CACHE_TTL_MS;
         }
@@ -116,35 +116,35 @@ public class UsageLogService {
     }
 
     /**
-     * 计算积分消耗（含缓存折扣和倍率）
+     * 计算积分消耗（含缓存折扣）
      */
     public BigDecimal calculateCreditCost(String model, int promptTokens, int completionTokens, int cachedTokens) {
         if (promptTokens == 0 && completionTokens == 0) return BigDecimal.ZERO;
 
         CachedCreditRate cached = creditRateCache.get(model);
         int inputRate, outputRate;
-        BigDecimal multiplier;
+        BigDecimal cacheCreditRate;
         if (cached != null && !cached.isExpired()) {
             inputRate = cached.inputRate();
             outputRate = cached.outputRate();
-            multiplier = cached.multiplier();
+            cacheCreditRate = cached.cacheCreditRate();
         } else {
             List<com.aiconnecting.entity.ModelConfig> models = modelConfigService.findByName(model);
             com.aiconnecting.entity.ModelConfig modelConfig = models.isEmpty() ? null : models.get(0);
             if (modelConfig == null) return BigDecimal.ZERO;
             inputRate = modelConfig.getInputCreditRate();
             outputRate = modelConfig.getOutputCreditRate();
-            multiplier = modelConfig.getMultiplier() != null ? modelConfig.getMultiplier() : BigDecimal.ONE;
-            creditRateCache.put(model, new CachedCreditRate(inputRate, outputRate, multiplier, System.currentTimeMillis()));
+            cacheCreditRate = modelConfig.getCacheCreditRate();
+            creditRateCache.put(model, new CachedCreditRate(inputRate, outputRate, cacheCreditRate, System.currentTimeMillis()));
         }
 
         int clampedCachedTokens = Math.min(cachedTokens, promptTokens);
         int effectivePromptTokens = promptTokens - clampedCachedTokens;
-        BigDecimal cachedDiscount = BigDecimal.valueOf(clampedCachedTokens).divide(BigDecimal.TEN, 10, RoundingMode.HALF_UP);
+        BigDecimal cachedDiscount = BigDecimal.valueOf(clampedCachedTokens).multiply(cacheCreditRate);
         BigDecimal adjustedPromptTokens = BigDecimal.valueOf(effectivePromptTokens).add(cachedDiscount);
         BigDecimal inputCost = adjustedPromptTokens.divide(CREDIT_RATE_DIVISOR, 10, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(inputRate));
         BigDecimal outputCost = BigDecimal.valueOf(completionTokens).divide(CREDIT_RATE_DIVISOR, 10, RoundingMode.HALF_UP).multiply(BigDecimal.valueOf(outputRate));
-        return inputCost.add(outputCost).multiply(multiplier);
+        return inputCost.add(outputCost);
     }
 
     /**
@@ -176,5 +176,45 @@ public class UsageLogService {
      */
     public List<Object[]> getDailyCreditCost(Long tokenId, LocalDateTime since) {
         return usageLogRepository.findDailyCreditCostByTokenIdSince(tokenId, since);
+    }
+
+    /**
+     * 按 Token ID 列表查询缓存创建/读取 token 统计（全部时间）
+     */
+    public long[] getCacheStats(List<Long> tokenIds) {
+        List<Object[]> result = usageLogRepository.sumCacheTokensByTokenIds(tokenIds);
+        if (result.isEmpty()) return new long[]{0, 0};
+        Object[] row = result.get(0);
+        return new long[]{((Number) row[0]).longValue(), ((Number) row[1]).longValue()};
+    }
+
+    /**
+     * 按 Token ID 列表查询缓存创建/读取 token 统计（指定时间起）
+     */
+    public long[] getCacheStatsSince(List<Long> tokenIds, LocalDateTime since) {
+        List<Object[]> result = usageLogRepository.sumCacheTokensByTokenIdsSince(tokenIds, since);
+        if (result.isEmpty()) return new long[]{0, 0};
+        Object[] row = result.get(0);
+        return new long[]{((Number) row[0]).longValue(), ((Number) row[1]).longValue()};
+    }
+
+    /**
+     * 全局缓存创建/读取 token 统计（全部时间）
+     */
+    public long[] getGlobalCacheStats() {
+        List<Object[]> result = usageLogRepository.sumCacheTokensGlobal();
+        if (result.isEmpty()) return new long[]{0, 0};
+        Object[] row = result.get(0);
+        return new long[]{((Number) row[0]).longValue(), ((Number) row[1]).longValue()};
+    }
+
+    /**
+     * 全局缓存创建/读取 token 统计（指定时间起）
+     */
+    public long[] getGlobalCacheStatsSince(LocalDateTime since) {
+        List<Object[]> result = usageLogRepository.sumCacheTokensGlobalSince(since);
+        if (result.isEmpty()) return new long[]{0, 0};
+        Object[] row = result.get(0);
+        return new long[]{((Number) row[0]).longValue(), ((Number) row[1]).longValue()};
     }
 }

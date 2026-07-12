@@ -1,6 +1,7 @@
 package com.aiconnecting.dto;
 
 import lombok.Data;
+
 import java.math.BigDecimal;
 
 /**
@@ -23,5 +24,5 @@ public class ModelConfigRequest {
 
     private Integer status;
 
-    private BigDecimal multiplier;
+    private BigDecimal cacheCreditRate;
 }

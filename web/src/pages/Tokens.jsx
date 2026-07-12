@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
-import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, testTokenChatStream, getTokenModels } from '../api'
+import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCacheStats, testTokenChatStream, getTokenModels } from '../api'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
@@ -17,6 +17,7 @@ export default function Tokens() {
   const [historyToken, setHistoryToken] = useState(null)
   const [historyData, setHistoryData] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [cacheStats, setCacheStats] = useState(null)
   const [testModalOpen, setTestModalOpen] = useState(false)
   const [testToken, setTestToken] = useState(null)
   const [testProtocol, setTestProtocol] = useState('openai')
@@ -87,9 +88,13 @@ export default function Tokens() {
     setHistoryToken(token)
     setHistoryModalOpen(true)
     setHistoryLoading(true)
+    setCacheStats(null)
     getTokenCreditHistory(token.id).then(res => {
       if (res.code === 200) setHistoryData(res.data || [])
     }).finally(() => setHistoryLoading(false))
+    getTokenCacheStats(token.id).then(res => {
+      if (res.code === 200) setCacheStats(res.data)
+    })
   }
 
   const copyToken = (key) => {
@@ -252,6 +257,18 @@ export default function Tokens() {
         footer={null}
         width={600}
       >
+        {cacheStats && (
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+            <div style={{ flex: 1, padding: '10px 16px', background: '#fafafa', borderRadius: 8, border: '1px solid #f0f0f0' }}>
+              <div style={{ fontSize: 12, color: '#888' }}>缓存创建 Token</div>
+              <div style={{ fontSize: 18, fontWeight: 600, color: '#fa8c16' }}>{cacheStats.cacheCreationTokens || 0}</div>
+            </div>
+            <div style={{ flex: 1, padding: '10px 16px', background: '#fafafa', borderRadius: 8, border: '1px solid #f0f0f0' }}>
+              <div style={{ fontSize: 12, color: '#888' }}>缓存读取 Token</div>
+              <div style={{ fontSize: 18, fontWeight: 600, color: '#13c2c2' }}>{cacheStats.cacheReadTokens || 0}</div>
+            </div>
+          </div>
+        )}
         <Table
           columns={[
             { title: '日期', dataIndex: 'date', key: 'date' },

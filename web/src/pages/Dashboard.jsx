@@ -65,6 +65,16 @@ export default function Dashboard() {
       value: stats?.cachedPromptTokensToday || 0,
       icon: <KeyOutlined />, color: '#722ed1', suffix: cacheHitRateToday != null ? `tokens (${cacheHitRateToday}%)` : 'tokens', prominent: true,
     },
+    {
+      title: '今日缓存创建 Token',
+      value: stats?.todayCacheCreationTokens || 0,
+      icon: <KeyOutlined />, color: '#fa8c16', suffix: 'tokens', prominent: true,
+    },
+    {
+      title: '今日缓存读取 Token',
+      value: stats?.todayCacheReadTokens || 0,
+      icon: <KeyOutlined />, color: '#13c2c2', suffix: 'tokens', prominent: true,
+    },
   ]
 
   // ── Middle: Cumulative data ──
@@ -92,6 +102,16 @@ export default function Dashboard() {
       title: '总缓存 Token',
       value: stats?.totalCachedPromptTokens || 0,
       icon: <KeyOutlined />, color: '#722ed1', suffix: cacheHitRateTotal != null ? `tokens (${cacheHitRateTotal}%)` : 'tokens',
+    },
+    {
+      title: '总缓存创建 Token',
+      value: stats?.totalCacheCreationTokens || 0,
+      icon: <KeyOutlined />, color: '#fa8c16', suffix: 'tokens',
+    },
+    {
+      title: '总缓存读取 Token',
+      value: stats?.totalCacheReadTokens || 0,
+      icon: <KeyOutlined />, color: '#13c2c2', suffix: 'tokens',
     },
   ]
 

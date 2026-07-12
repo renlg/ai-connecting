@@ -73,7 +73,7 @@ export default function Models() {
     { title: '显示名称', dataIndex: 'displayName', width: 150, render: v => v || '-' },
     { title: '输入比例（积分/千token）', dataIndex: 'inputCreditRate', width: 130, render: v => v || 0 },
     { title: '输出比例（积分/千token）', dataIndex: 'outputCreditRate', width: 130, render: v => v || 0 },
-    { title: '倍率', dataIndex: 'multiplier', width: 80, render: v => v != null ? v : '1.0' },
+    { title: '缓存折扣', dataIndex: 'cacheCreditRate', width: 100, render: v => v != null ? (v * 100) + '%' : '10%' },
     { title: '描述', dataIndex: 'description', ellipsis: true, render: v => v || '-' },
     {
       title: '仅管理员', dataIndex: 'adminOnly', width: 100,
@@ -135,8 +135,8 @@ export default function Models() {
           <Form.Item name="outputCreditRate" label="输出积分比例（每1000 token）" initialValue={0}>
             <InputNumber min={0} style={{ width: '100%' }} placeholder="每 1000 输出 token 消耗的积分数" />
           </Form.Item>
-          <Form.Item name="multiplier" label="积分倍率" initialValue={1.0}>
-            <InputNumber min={0.01} step={0.1} style={{ width: '100%' }} placeholder="最终积分 = (输入+输出) × 倍率，默认 1.0" />
+          <Form.Item name="cacheCreditRate" label="缓存折扣比例（0-1）" initialValue={0.1}>
+            <InputNumber min={0} max={1} step={0.05} style={{ width: '100%' }} placeholder="缓存 token 按此比例计费，默认 0.1（10%）" />
           </Form.Item>
           <Form.Item name="description" label="描述">
             <Input placeholder="模型描述（可选）" />
