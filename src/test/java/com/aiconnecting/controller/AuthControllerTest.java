@@ -49,7 +49,7 @@ class AuthControllerTest {
                 .nickname("Admin")
                 .role("admin")
                 .build();
-        when(userService.login(any(LoginRequest.class))).thenReturn(response);
+        when(userService.login(any(LoginRequest.class), any())).thenReturn(response);
 
         LoginRequest request = new LoginRequest();
         request.setUsername("admin");
@@ -67,7 +67,7 @@ class AuthControllerTest {
 
     @Test
     void login_invalidCredentials() throws Exception {
-        when(userService.login(any(LoginRequest.class)))
+        when(userService.login(any(LoginRequest.class), any()))
                 .thenThrow(new BusinessException("用户名或密码错误"));
 
         LoginRequest request = new LoginRequest();
@@ -83,7 +83,7 @@ class AuthControllerTest {
 
     @Test
     void login_disabledAccount() throws Exception {
-        when(userService.login(any(LoginRequest.class)))
+        when(userService.login(any(LoginRequest.class), any()))
                 .thenThrow(new BusinessException("账号已被禁用"));
 
         LoginRequest request = new LoginRequest();

@@ -10,7 +10,9 @@ import com.aiconnecting.security.JwtUtils;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +25,7 @@ import java.security.SecureRandom;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Service
@@ -34,6 +37,12 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @Autowired(required = false)
+    private RedisTemplate<String, Long> redisTemplate;
+
+    private static final int LOGIN_MAX_FAIL_ATTEMPTS = 5;
+    private static final long LOGIN_FAIL_LOCK_SECONDS = 3600;
 
     /** 用户缓存，转发请求验证时避免每次查库，缓存 30 秒 */
     private final ConcurrentHashMap<Long, CachedUser> userCache = new ConcurrentHashMap<>();
@@ -75,16 +84,28 @@ public class UserService {
         ensureAllUsersHaveInviteCode();
     }
 
-    public LoginResponse login(LoginRequest request) {
-        User user = userRepository.findByUsername(request.getUsername())
-                .orElseThrow(() -> new BusinessException("用户名或密码错误"));
+    public LoginResponse login(LoginRequest request, String clientIp) {
+        String loginFailKey = "login_fail:" + clientIp + ":" + request.getUsername();
 
-        if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+        if (redisTemplate != null) {
+            Long failCount = redisTemplate.opsForValue().get(loginFailKey);
+            if (failCount != null && failCount >= LOGIN_MAX_FAIL_ATTEMPTS) {
+                throw new BusinessException("该账号因登录失败次数过多已被锁定，请1小时后再试");
+            }
+        }
+
+        User user = userRepository.findByUsername(request.getUsername()).orElse(null);
+        if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+            recordLoginFailure(loginFailKey);
             throw new BusinessException("用户名或密码错误");
         }
 
         if (user.getStatus() != 1) {
             throw new BusinessException("账号已被禁用");
+        }
+
+        if (redisTemplate != null) {
+            redisTemplate.delete(loginFailKey);
         }
 
         String token = jwtUtils.generateToken(user.getUsername(), user.getRole());
@@ -96,6 +117,16 @@ public class UserService {
                 .role(user.getRole())
                 .inviteCode(user.getInviteCode())
                 .build();
+    }
+
+    private void recordLoginFailure(String loginFailKey) {
+        if (redisTemplate == null) {
+            return;
+        }
+        Long failCount = redisTemplate.opsForValue().increment(loginFailKey);
+        if (failCount != null && failCount == 1) {
+            redisTemplate.expire(loginFailKey, LOGIN_FAIL_LOCK_SECONDS, TimeUnit.SECONDS);
+        }
     }
 
     public User register(RegisterRequest request) {
