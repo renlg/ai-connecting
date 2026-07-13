@@ -25,9 +25,12 @@ import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -604,6 +607,7 @@ public class RelayService {
 
         long startTime = System.currentTimeMillis();
         int promptTokens = 0, completionTokens = 0, cachedTokens = 0;
+        List<Map<String, Object>> toolCalls = new ArrayList<>();
 
         HttpURLConnection conn = createSseConnection(channel, "/v1/chat/completions", openAiBody);
         try {
@@ -634,13 +638,34 @@ public class RelayService {
                                     cachedTokens = promptDetails.path("cached_tokens").asInt(0);
                                 }
                             }
-                            String content = json.path("choices").path(0).path("delta").path("content").asText("");
-                            String reasoningContent = json.path("choices").path(0).path("delta").path("reasoning_content").asText("");
+                            JsonNode delta = json.path("choices").path(0).path("delta");
+                            String content = delta.path("content").asText("");
+                            String reasoningContent = delta.path("reasoning_content").asText("");
                             String text = content.isEmpty() ? reasoningContent : content;
                             if (!text.isEmpty()) {
                                 String claudeEvt = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + objectMapper.writeValueAsString(text) + "}}";
                                 writer.write("data: " + claudeEvt + "\n\n");
                                 writer.flush();
+                            }
+                            // 处理 tool_calls 增量
+                            JsonNode tcArray = delta.get("tool_calls");
+                            if (tcArray != null && tcArray.isArray()) {
+                                for (JsonNode tc : tcArray) {
+                                    int idx = tc.path("index").asInt(0);
+                                    while (toolCalls.size() <= idx) {
+                                        toolCalls.add(new LinkedHashMap<>());
+                                    }
+                                    Map<String, Object> toolCall = toolCalls.get(idx);
+                                    if (tc.has("id")) toolCall.put("id", tc.get("id").asText(""));
+                                    if (tc.has("function")) {
+                                        JsonNode fn = tc.get("function");
+                                        if (fn.has("name")) toolCall.put("name", fn.get("name").asText(""));
+                                        if (fn.has("arguments")) {
+                                            String existing = (String) toolCall.getOrDefault("arguments", "");
+                                            toolCall.put("arguments", existing + fn.get("arguments").asText(""));
+                                        }
+                                    }
+                                }
                             }
                         } catch (Exception parseEx) {
                             log.warn("转换 OpenAI SSE 为 Claude 格式失败: {}", data);
@@ -658,7 +683,23 @@ public class RelayService {
         }
 
         writer.write("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");
-        writer.write("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":" + completionTokens + "}}\n\n");
+        // 发送未完成的 tool_calls
+        if (!toolCalls.isEmpty()) {
+            int tcIndex = 1;
+            for (Map<String, Object> tc : toolCalls) {
+                String tcId = (String) tc.getOrDefault("id", "call_" + tcIndex);
+                String tcName = (String) tc.getOrDefault("name", "unknown");
+                String tcArgs = (String) tc.getOrDefault("arguments", "{}");
+                writer.write("data: {\"type\":\"content_block_start\",\"index\":" + tcIndex + ",\"content_block\":{\"type\":\"tool_use\",\"id\":\"" + tcId + "\",\"name\":\"" + tcName + "\",\"input\":{}}}");
+                writer.write("\n\n");
+                writer.write("data: {\"type\":\"content_block_delta\",\"index\":" + tcIndex + ",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":" + objectMapper.writeValueAsString(tcArgs) + "}}");
+                writer.write("\n\n");
+                writer.write("data: {\"type\":\"content_block_stop\",\"index\":" + tcIndex + "}\n\n");
+                tcIndex++;
+            }
+        }
+        String stopReason = toolCalls.isEmpty() ? "end_turn" : "tool_use";
+        writer.write("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"" + stopReason + "\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":" + completionTokens + "}}\n\n");
         writer.write("data: {\"type\":\"message_stop\"}\n\n");
         writer.write("data: [DONE]\n\n");
         writer.flush();
