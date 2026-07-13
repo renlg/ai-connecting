@@ -85,10 +85,10 @@ public class UserService {
     }
 
     public LoginResponse login(LoginRequest request, String clientIp) {
-        String loginFailKey = "login_fail:" + clientIp + ":" + request.getUsername();
+        String loginFailKey = "login_fail:" + request.getUsername();
 
         if (redisTemplate != null) {
-            Long failCount = redisTemplate.opsForValue().get(loginFailKey);
+            Long failCount = redisTemplate.<String, Long>opsForHash().get(loginFailKey, clientIp);
             if (failCount != null && failCount >= LOGIN_MAX_FAIL_ATTEMPTS) {
                 throw new BusinessException("该账号因登录失败次数过多已被锁定，请1小时后再试");
             }
@@ -96,7 +96,7 @@ public class UserService {
 
         User user = userRepository.findByUsername(request.getUsername()).orElse(null);
         if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            recordLoginFailure(loginFailKey);
+            recordLoginFailure(loginFailKey, clientIp);
             throw new BusinessException("用户名或密码错误");
         }
 
@@ -105,7 +105,7 @@ public class UserService {
         }
 
         if (redisTemplate != null) {
-            redisTemplate.delete(loginFailKey);
+            redisTemplate.opsForHash().delete(loginFailKey, clientIp);
         }
 
         String token = jwtUtils.generateToken(user.getUsername(), user.getRole());
@@ -119,14 +119,24 @@ public class UserService {
                 .build();
     }
 
-    private void recordLoginFailure(String loginFailKey) {
+    private void recordLoginFailure(String loginFailKey, String clientIp) {
         if (redisTemplate == null) {
             return;
         }
-        Long failCount = redisTemplate.opsForValue().increment(loginFailKey);
+        Long failCount = redisTemplate.<String, Long>opsForHash().increment(loginFailKey, clientIp, 1);
         if (failCount != null && failCount == 1) {
             redisTemplate.expire(loginFailKey, LOGIN_FAIL_LOCK_SECONDS, TimeUnit.SECONDS);
         }
+    }
+
+    /**
+     * 清除该账号在所有IP维度下的登录失败记录
+     */
+    private void clearLoginFailRecords(String username) {
+        if (redisTemplate == null) {
+            return;
+        }
+        redisTemplate.delete("login_fail:" + username);
     }
 
     public User register(RegisterRequest request) {
@@ -209,6 +219,7 @@ public class UserService {
         }
         user.setPassword(passwordEncoder.encode(newPassword));
         userRepository.save(user);
+        clearLoginFailRecords(user.getUsername());
     }
 
     /**
@@ -245,6 +256,7 @@ public class UserService {
         // 清除用户缓存，使密码变更立即生效
         jwtAuthenticationFilter.evictUserCache(user.getUsername());
         evictUserCache(userId);
+        clearLoginFailRecords(user.getUsername());
     }
 
     /**
