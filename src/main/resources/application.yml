@@ -1,5 +1,6 @@
 server:
   port: 8080
+  shutdown: graceful
   tomcat:
     max-http-form-post-size: 10MB
   servlet:
@@ -9,6 +10,8 @@ server:
 spring:
   application:
     name: ai-connecting
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   datasource:
     url: jdbc:sqlite:./data/ai-connecting.db?busy_timeout=5000
     driver-class-name: org.sqlite.JDBC
