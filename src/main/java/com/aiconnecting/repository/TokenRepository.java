@@ -15,6 +15,9 @@ public interface TokenRepository extends JpaRepository<Token, Long> {
     @Query("SELECT t.id FROM Token t WHERE t.userId = :userId")
     List<Long> findIdsByUserId(@Param("userId") Long userId);
 
+    @Query("SELECT COALESCE(COUNT(t), 0), COALESCE(SUM(t.usedQuota), 0) FROM Token t WHERE t.userId = :userId")
+    List<Object[]> sumStatsByUserId(@Param("userId") Long userId);
+
     @Modifying
     @Query("UPDATE Token t SET t.usedQuota = t.usedQuota + :delta WHERE t.id = :tokenId")
     void addUsedQuota(@org.springframework.data.repository.query.Param("tokenId") Long tokenId, @org.springframework.data.repository.query.Param("delta") long delta);

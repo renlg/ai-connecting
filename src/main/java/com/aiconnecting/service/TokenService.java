@@ -36,6 +36,15 @@ public class TokenService {
         return tokenRepository.findIdsByUserId(userId);
     }
 
+    /**
+     * 聚合查询指定用户的 Token 数量与已用额度总和，避免加载全部 Token 实体
+     * @return Object[]{tokenCount, totalUsedQuota}
+     */
+    public Object[] getUserTokenStats(Long userId) {
+        List<Object[]> result = tokenRepository.sumStatsByUserId(userId);
+        return result.isEmpty() ? new Object[]{0L, 0L} : result.get(0);
+    }
+
     public List<Token> listAll() {
         return tokenRepository.findAll();
     }

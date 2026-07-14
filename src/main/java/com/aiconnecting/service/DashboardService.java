@@ -2,7 +2,6 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.dto.DashboardStats;
 import com.aiconnecting.entity.Channel;
-import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -66,12 +65,11 @@ public class DashboardService {
     }
 
     private DashboardStats buildUserStats(User currentUser) {
-        // 只看自己的 Token 和使用记录（优化为 2 次聚合查询）
-        List<Token> userTokens = tokenService.listByUser(currentUser.getId());
-        List<Long> tokenIds = userTokens.stream().map(Token::getId).toList();
-
-        long totalTokensUsed = userTokens.stream()
-                .mapToLong(t -> t.getUsedQuota() != null ? t.getUsedQuota() : 0).sum();
+        // 只看自己的 Token 和使用记录（Token 数量/已用额度通过聚合查询获取，避免加载全部实体）
+        List<Long> tokenIds = tokenService.getUserTokenIds(currentUser.getId());
+        Object[] tokenStats = tokenService.getUserTokenStats(currentUser.getId());
+        long tokenCount = ((Number) tokenStats[0]).longValue();
+        long totalTokensUsed = ((Number) tokenStats[1]).longValue();
 
         // 聚合查询：全部时间
         long totalRequests = 0, totalTokensUsedLog = 0, totalInputTokens = 0, totalOutputTokens = 0;
@@ -109,7 +107,7 @@ public class DashboardService {
         return DashboardStats.builder()
                 .totalChannels(0L)
                 .activeChannels(0L)
-                .totalTokens((long) userTokens.size())
+                .totalTokens(tokenCount)
                 .totalUsers(1L)
                 .totalRequests(totalRequests)
                 .totalTokensUsed(totalTokensUsed)
