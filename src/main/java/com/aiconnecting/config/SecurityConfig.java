@@ -105,8 +105,10 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
         // 支持通过环境变量配置允许的源，未配置时默认允许所有
+        // 统一使用 allowedOriginPatterns：setAllowedOrigins("*") 与 allowCredentials(true) 同时使用不合法，
+        // 而 patterns 会按实际请求 Origin 动态匹配返回，即使配置值本身就是 "*" 也不会违反 CORS 规范
         if (allowedOrigins != null && !allowedOrigins.isBlank()) {
-            config.setAllowedOrigins(Arrays.asList(allowedOrigins.split(",")));
+            config.setAllowedOriginPatterns(Arrays.asList(allowedOrigins.split(",")));
         } else {
             config.setAllowedOriginPatterns(List.of("*"));
         }
