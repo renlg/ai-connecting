@@ -15,6 +15,7 @@ import com.aiconnecting.service.UsageLogService;
 import com.aiconnecting.service.UserService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.ChannelService;
+import com.aiconnecting.service.OperationLogService;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -67,6 +68,7 @@ class AdminControllerTest {
     @MockBean private AnnouncementRepository announcementRepository;
     @MockBean private JwtUtils jwtUtils;
     @MockBean private JwtAuthenticationFilter jwtAuthenticationFilter;
+    @MockBean private OperationLogService operationLogService;
 
     private User adminUser;
     private User regularUser;
