@@ -180,6 +180,13 @@ public class RelayService {
         return "claude".equalsIgnoreCase(channel.getType()) || "anthropic".equalsIgnoreCase(channel.getType());
     }
 
+    /**
+     * 判断渠道是否为 Gemini 类型
+     */
+    private boolean isGeminiTypeChannel(Channel channel) {
+        return "gemini".equalsIgnoreCase(channel.getType());
+    }
+
     // ==================== 公开中转方法 ====================
 
     /**
@@ -211,7 +218,14 @@ public class RelayService {
             }
 
             try {
-                String response = forwardRequest(channel, path, requestBody);
+                String response;
+                if (isGeminiTypeChannel(channel)) {
+                    String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(requestBody);
+                    response = forwardGeminiRequest(channel, geminiBody);
+                    response = ProtocolConverter.convertGeminiToOpenAiResponse(response);
+                } else {
+                    response = forwardRequest(channel, path, requestBody);
+                }
                 long duration = System.currentTimeMillis() - startTime;
                 recordUsage(ctx.token(), channel, model, response, duration, httpRequest, path);
                 channelHealthTracker.recordSuccess(channel.getId());
@@ -266,7 +280,13 @@ public class RelayService {
 
             HttpURLConnection conn;
             try {
-                conn = createSseConnection(channel, path, modifiedBody);
+                if (isGeminiTypeChannel(channel)) {
+                    String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(modifiedBody);
+                    conn = createSseConnection(channel, "/v1/models/" +
+                            (model != null ? model : "default") + ":streamGenerateContent?alt=sse", geminiBody);
+                } else {
+                    conn = createSseConnection(channel, path, modifiedBody);
+                }
             } catch (IOException e) {
                 lastError = e.getMessage();
                 log.error("渠道 {} 流式连接失败 (尝试 {}/{}): {}", channel.getId(), attempt, MAX_RETRIES, e.getMessage());
@@ -296,7 +316,12 @@ public class RelayService {
                     return;
                 }
 
-                String lastUsageData = streamSseResponse(conn, httpResponse, null);
+                String lastUsageData;
+                if (isGeminiTypeChannel(channel)) {
+                    lastUsageData = streamGeminiResponseAsOpenAi(conn, httpResponse);
+                } else {
+                    lastUsageData = streamSseResponse(conn, httpResponse, null);
+                }
                 conn.disconnect();
 
                 long duration = System.currentTimeMillis() - startTime;
@@ -362,6 +387,10 @@ public class RelayService {
                 String response;
                 if (isClaudeTypeChannel(channel)) {
                     response = forwardClaudeRequest(channel, requestBody);
+                } else if (isGeminiTypeChannel(channel)) {
+                    String geminiBody = ProtocolConverter.convertClaudeToGeminiRequest(requestBody);
+                    response = forwardGeminiRequest(channel, geminiBody);
+                    response = ProtocolConverter.convertGeminiToClaudeResponse(response);
                 } else {
                     String openAiBody = ProtocolConverter.convertClaudeToOpenAiBody(requestBody);
                     String openAiResponse = forwardRequest(channel, "/v1/chat/completions", openAiBody);
@@ -430,6 +459,8 @@ public class RelayService {
             try {
                 if (isClaudeTypeChannel(channel)) {
                     forwardClaudeStreamSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
+                } else if (isGeminiTypeChannel(channel)) {
+                    forwardGeminiStreamAsClaudeSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
                 } else {
                     forwardOpenAiStreamAsClaudeSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
                 }
@@ -448,6 +479,128 @@ public class RelayService {
                 if (!httpResponse.isCommitted()) {
                     httpResponse.setStatus(502);
                     httpResponse.getWriter().write("{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"渠道请求失败\"}}");
+                }
+                return;
+            }
+        }
+    }
+
+    // ==================== Gemini 协议中转方法 ====================
+
+    /**
+     * Gemini API 中转 (非流式) - 最多重试 3 次
+     * 根据渠道类型自动转换协议：Gemini 渠道直接发送，Claude 渠道转为 Claude 格式，OpenAI 渠道转为 OpenAI 格式
+     */
+    public String geminiRelayRequest(String tokenKey, String requestBody,
+                                     String model, HttpServletRequest httpRequest) {
+        RelayContext ctx = validateAndPrepare(tokenKey, model);
+        Set<Long> triedChannels = new HashSet<>();
+        long startTime = System.currentTimeMillis();
+        String lastError = null;
+
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            Channel channel;
+            try {
+                channel = channelRouter.selectChannel(ctx.channelModelId(), triedChannels);
+            } catch (BusinessException e) {
+                if (lastError != null) {
+                    throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+                }
+                throw e;
+            }
+            triedChannels.add(channel.getId());
+
+            try {
+                String response;
+                if (isGeminiTypeChannel(channel)) {
+                    response = forwardGeminiRequest(channel, requestBody);
+                } else if (isClaudeTypeChannel(channel)) {
+                    String claudeBody = ProtocolConverter.convertGeminiToClaudeBody(requestBody);
+                    String claudeResponse = forwardClaudeRequest(channel, claudeBody);
+                    response = ProtocolConverter.convertClaudeToGeminiResponse(claudeResponse);
+                } else {
+                    String openAiBody = ProtocolConverter.convertGeminiToOpenAiBody(requestBody);
+                    String openAiResponse = forwardRequest(channel, "/v1/chat/completions", openAiBody);
+                    response = ProtocolConverter.convertOpenAiToGeminiResponse(openAiResponse);
+                }
+
+                long duration = System.currentTimeMillis() - startTime;
+                int promptTokens = 0, completionTokens = 0;
+                try {
+                    JsonNode jsonNode = objectMapper.readTree(response);
+                    JsonNode usage = jsonNode.get("usageMetadata");
+                    if (usage != null) {
+                        promptTokens = usage.has("promptTokenCount") ? usage.get("promptTokenCount").asInt() : 0;
+                        completionTokens = usage.has("candidatesTokenCount") ? usage.get("candidatesTokenCount").asInt() : 0;
+                    }
+                } catch (Exception e) {
+                    log.warn("解析 Gemini 响应 usage 失败: {}", e.getMessage());
+                }
+                recordStreamUsage(ctx.token(), channel, model, promptTokens, completionTokens,
+                        0, 0, 0, duration, httpRequest, "/v1/models/" + model + ":generateContent");
+                channelHealthTracker.recordSuccess(channel.getId());
+                return response;
+            } catch (BusinessException e) {
+                lastError = e.getMessage();
+                log.error("Gemini 渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, MAX_RETRIES, e.getMessage());
+                channelHealthTracker.recordFailure(channel.getId(), e.getMessage());
+                if (attempt == MAX_RETRIES) {
+                    throw new BusinessException(e.getCode(),
+                            "所有渠道均不可用，最后错误: " + lastError);
+                }
+            }
+        }
+        throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+    }
+
+    /**
+     * Gemini API 中转 (流式 SSE) - 最多重试 3 次
+     * 根据渠道类型自动转换协议，以 Gemini SSE 格式返回
+     */
+    public void geminiRelayStreamRequest(String tokenKey, String requestBody,
+                                          String model, HttpServletRequest httpRequest,
+                                          HttpServletResponse httpResponse) throws IOException {
+        log.info("[Gemini流式] 开始处理, model={}", model);
+        RelayContext ctx = validateAndPrepare(tokenKey, model);
+        Set<Long> triedChannels = new HashSet<>();
+        String lastError = null;
+
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            Channel channel;
+            try {
+                channel = channelRouter.selectChannel(ctx.channelModelId(), triedChannels);
+            } catch (BusinessException e) {
+                if (!httpResponse.isCommitted()) {
+                    httpResponse.setStatus(502);
+                    httpResponse.getWriter().write("{\"error\":{\"message\":\"所有渠道均不可用\"}}");
+                }
+                return;
+            }
+            triedChannels.add(channel.getId());
+            log.info("[Gemini流式] 尝试 {}/{}, channel={}", attempt, MAX_RETRIES, channel.getId());
+
+            try {
+                if (isGeminiTypeChannel(channel)) {
+                    forwardGeminiStreamSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
+                } else if (isClaudeTypeChannel(channel)) {
+                    forwardClaudeStreamAsGeminiSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
+                } else {
+                    forwardOpenAiStreamAsGeminiSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
+                }
+                channelHealthTracker.recordSuccess(channel.getId());
+                log.info("[Gemini流式] 处理完成, channel={}", channel.getId());
+                return;
+            } catch (Exception e) {
+                lastError = e.getMessage();
+                log.error("[Gemini流式] 渠道 {} 失败 (尝试 {}/{}): {}", channel.getId(), attempt, MAX_RETRIES, e.getMessage());
+                channelHealthTracker.recordFailure(channel.getId(), e.getMessage());
+                if (attempt < MAX_RETRIES && !httpResponse.isCommitted()) {
+                    log.info("[Gemini流式] 响应未提交，尝试下一个渠道");
+                    continue;
+                }
+                if (!httpResponse.isCommitted()) {
+                    httpResponse.setStatus(502);
+                    httpResponse.getWriter().write("{\"error\":{\"message\":\"渠道请求失败\"}}");
                 }
                 return;
             }
@@ -709,6 +862,422 @@ public class RelayService {
                 cachedTokens, 0, cachedTokens, duration, httpRequest, "/v1/messages");
     }
 
+    // ==================== Gemini 流式转发 ====================
+
+    /**
+     * 使用 Gemini 渠道直接流式发送（原生 Gemini 协议，单渠道不重试）
+     */
+    private void forwardGeminiStreamSingle(Channel channel, String requestBody,
+                                            String model, Token token,
+                                            HttpServletRequest httpRequest,
+                                            HttpServletResponse httpResponse) throws IOException {
+        if (isChannelRateLimited(channel)) {
+            throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
+        }
+
+        SseUtils.setSseHeaders(httpResponse);
+        long startTime = System.currentTimeMillis();
+
+        String url = channel.getBaseUrl().replaceAll("/+$", "")
+                + "/v1/models/" + model + ":streamGenerateContent?alt=sse&key=" + channel.getApiKey();
+        java.net.URL urlObj = new java.net.URL(url);
+        HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(15000);
+        conn.setReadTimeout(120000);
+        conn.setDoOutput(true);
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setRequestProperty("Accept", "text/event-stream");
+        conn.setRequestProperty("Connection", "close");
+        conn.getOutputStream().write(requestBody.getBytes(StandardCharsets.UTF_8));
+        conn.getOutputStream().flush();
+
+        try {
+            int code = conn.getResponseCode();
+            log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
+            if (code != 200) {
+                String errorBody = conn.getErrorStream() != null
+                        ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
+                httpResponse.setStatus(code);
+                httpResponse.getWriter().write(errorBody.isEmpty()
+                        ? "{\"error\":{\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
+                conn.disconnect();
+                return;
+            }
+
+            String lastUsageData = streamSseResponse(conn, httpResponse, null);
+            conn.disconnect();
+
+            long duration = System.currentTimeMillis() - startTime;
+            int promptTokens = 0, completionTokens = 0;
+            if (lastUsageData != null) {
+                try {
+                    JsonNode lastJson = objectMapper.readTree(lastUsageData);
+                    JsonNode usageNode = lastJson.has("usageMetadata") ? lastJson.get("usageMetadata") : null;
+                    if (usageNode != null) {
+                        promptTokens = usageNode.has("promptTokenCount") ? usageNode.get("promptTokenCount").asInt() : 0;
+                        completionTokens = usageNode.has("candidatesTokenCount") ? usageNode.get("candidatesTokenCount").asInt() : 0;
+                    }
+                } catch (Exception e) {
+                    log.warn("解析 Gemini 流式 usage 失败: {}", e.getMessage());
+                }
+            }
+            recordStreamUsage(token, channel, model, promptTokens, completionTokens,
+                    0, 0, 0, duration, httpRequest, "/v1/models/" + model + ":streamGenerateContent");
+        } catch (Exception e) {
+            conn.disconnect();
+            log.error("渠道 {} Gemini 流式请求异常: {}", channel.getId(), e.getMessage());
+            if (!httpResponse.isCommitted()) {
+                httpResponse.setStatus(502);
+                httpResponse.getWriter().write("{\"error\":{\"message\":\"渠道请求失败\"}}");
+            }
+        }
+    }
+
+    /**
+     * Gemini 渠道流式发送，Claude 请求 → Gemini SSE → Claude SSE（单渠道不重试）
+     */
+    private void forwardGeminiStreamAsClaudeSingle(Channel channel, String requestBody,
+                                                    String model, Token token,
+                                                    HttpServletRequest httpRequest,
+                                                    HttpServletResponse httpResponse) throws IOException {
+        if (isChannelRateLimited(channel)) {
+            throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
+        }
+
+        String geminiBody = ProtocolConverter.convertClaudeToGeminiRequest(requestBody);
+        SseUtils.setSseHeaders(httpResponse);
+        var writer = httpResponse.getWriter();
+        String msgId = "msg_" + System.currentTimeMillis();
+        writer.write("data: {\"type\":\"message_start\",\"message\":{\"id\":\"" + msgId + "\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"" + model + "\",\"stop_reason\":null,\"stop_sequence\":null}}");
+        writer.write("\n\n");
+        writer.write("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}");
+        writer.write("\n\n");
+        writer.flush();
+
+        long startTime = System.currentTimeMillis();
+        int promptTokens = 0, completionTokens = 0;
+
+        String url = channel.getBaseUrl().replaceAll("/+$", "")
+                + "/v1/models/" + model + ":streamGenerateContent?alt=sse&key=" + channel.getApiKey();
+        java.net.URL urlObj = new java.net.URL(url);
+        HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(15000);
+        conn.setReadTimeout(120000);
+        conn.setDoOutput(true);
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setRequestProperty("Accept", "text/event-stream");
+        conn.setRequestProperty("Connection", "close");
+        conn.getOutputStream().write(geminiBody.getBytes(StandardCharsets.UTF_8));
+        conn.getOutputStream().flush();
+
+        try {
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                writer.write("data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"上游错误\"}}\n\n");
+                writer.flush();
+                conn.disconnect();
+                return;
+            }
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith("data: ")) {
+                        String data = line.substring(6).trim();
+                        try {
+                            JsonNode json = objectMapper.readTree(data);
+                            JsonNode candidates = json.get("candidates");
+                            if (candidates != null && candidates.isArray() && candidates.size() > 0) {
+                                JsonNode candidate = candidates.get(0);
+                                JsonNode content = candidate.get("content");
+                                if (content != null && content.has("parts")) {
+                                    for (JsonNode part : content.get("parts")) {
+                                        if (part.has("text")) {
+                                            String text = part.get("text").asText("");
+                                            if (!text.isEmpty()) {
+                                                String claudeEvt = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + objectMapper.writeValueAsString(text) + "}}";
+                                                writer.write("data: " + claudeEvt + "\n\n");
+                                                writer.flush();
+                                            }
+                                        }
+                                    }
+                                }
+                                if (candidate.has("finishReason") && !candidate.get("finishReason").isNull()) {
+                                    String finishReason = candidate.get("finishReason").asText("STOP");
+                                    String stopReason = "STOP".equals(finishReason) ? "end_turn" : "max_tokens";
+                                    writer.write("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"" + stopReason + "\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}\n\n");
+                                    writer.flush();
+                                }
+                            }
+                            JsonNode usageMeta = json.get("usageMetadata");
+                            if (usageMeta != null) {
+                                promptTokens = usageMeta.has("promptTokenCount") ? usageMeta.get("promptTokenCount").asInt() : 0;
+                                completionTokens = usageMeta.has("candidatesTokenCount") ? usageMeta.get("candidatesTokenCount").asInt() : 0;
+                            }
+                        } catch (Exception parseEx) {
+                            log.warn("转换 Gemini SSE 为 Claude 格式失败: {}", data);
+                        }
+                    }
+                }
+            }
+            conn.disconnect();
+        } catch (Exception e) {
+            conn.disconnect();
+            log.error("渠道 {} Gemini-as-Claude 流式请求异常: {}", channel.getId(), e.getMessage());
+        }
+
+        writer.write("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");
+        writer.write("data: {\"type\":\"message_stop\"}\n\n");
+        writer.write("data: [DONE]\n\n");
+        writer.flush();
+
+        long duration = System.currentTimeMillis() - startTime;
+        recordStreamUsage(token, channel, model, promptTokens, completionTokens,
+                0, 0, 0, duration, httpRequest, "/v1/messages");
+    }
+
+    /**
+     * OpenAI 渠道流式发送，Gemini 请求 → OpenAI SSE → Gemini SSE（单渠道不重试）
+     */
+    private void forwardOpenAiStreamAsGeminiSingle(Channel channel, String requestBody,
+                                                    String model, Token token,
+                                                    HttpServletRequest httpRequest,
+                                                    HttpServletResponse httpResponse) throws IOException {
+        if (isChannelRateLimited(channel)) {
+            throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
+        }
+
+        String openAiBody = ProtocolConverter.convertGeminiToOpenAiBody(requestBody);
+        openAiBody = injectStreamOptions(openAiBody, "/v1/chat/completions");
+
+        SseUtils.setSseHeaders(httpResponse);
+        var writer = httpResponse.getWriter();
+
+        long startTime = System.currentTimeMillis();
+        int promptTokens = 0, completionTokens = 0, cachedTokens = 0;
+
+        HttpURLConnection conn = createSseConnection(channel, "/v1/chat/completions", openAiBody);
+        try {
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                writer.write("data: {\"error\":{\"message\":\"上游错误\"}}\n\n");
+                writer.flush();
+                conn.disconnect();
+                return;
+            }
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith("data: ")) {
+                        String data = line.substring(6).trim();
+                        if ("[DONE]".equals(data)) continue;
+                        try {
+                            JsonNode json = objectMapper.readTree(data);
+                            if (json.has("usage")) {
+                                JsonNode usage = json.get("usage");
+                                promptTokens = usage.path("prompt_tokens").asInt(0);
+                                completionTokens = usage.path("completion_tokens").asInt(0);
+                                JsonNode promptDetails = usage.path("prompt_tokens_details");
+                                if (!promptDetails.isMissingNode()) {
+                                    cachedTokens = promptDetails.path("cached_tokens").asInt(0);
+                                }
+                            }
+                            String geminiChunk = ProtocolConverter.convertOpenAiStreamChunkToGemini(data);
+                            if (geminiChunk != null) {
+                                writer.write("data: " + geminiChunk + "\n\n");
+                                writer.flush();
+                            }
+                        } catch (Exception parseEx) {
+                            log.warn("转换 OpenAI SSE 为 Gemini 格式失败: {}", data);
+                        }
+                    }
+                }
+            }
+            conn.disconnect();
+        } catch (Exception e) {
+            conn.disconnect();
+            log.error("渠道 {} OpenAI-as-Gemini 流式请求异常: {}", channel.getId(), e.getMessage());
+        }
+
+        long duration = System.currentTimeMillis() - startTime;
+        recordStreamUsage(token, channel, model, promptTokens, completionTokens,
+                cachedTokens, 0, cachedTokens, duration, httpRequest, "/v1/models/" + model + ":streamGenerateContent");
+    }
+
+    /**
+     * Claude 渠道流式发送，Gemini 请求 → Claude SSE → Gemini SSE（单渠道不重试）
+     */
+    private void forwardClaudeStreamAsGeminiSingle(Channel channel, String requestBody,
+                                                    String model, Token token,
+                                                    HttpServletRequest httpRequest,
+                                                    HttpServletResponse httpResponse) throws IOException {
+        if (isChannelRateLimited(channel)) {
+            throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
+        }
+
+        String claudeBody = ProtocolConverter.convertGeminiToClaudeBody(requestBody);
+        SseUtils.setSseHeaders(httpResponse);
+        var writer = httpResponse.getWriter();
+
+        long startTime = System.currentTimeMillis();
+        int promptTokens = 0, completionTokens = 0;
+
+        HttpURLConnection conn = createSseConnection(channel, "/v1/messages", claudeBody);
+        try {
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                writer.write("data: {\"error\":{\"message\":\"上游错误\"}}\n\n");
+                writer.flush();
+                conn.disconnect();
+                return;
+            }
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith("data: ")) {
+                        String data = line.substring(6).trim();
+                        if ("[DONE]".equals(data)) continue;
+                        try {
+                            JsonNode json = objectMapper.readTree(data);
+                            String type = json.path("type").asText("");
+                            if ("message_start".equals(type)) {
+                                JsonNode msgUsage = json.path("message").path("usage");
+                                if (!msgUsage.isMissingNode()) {
+                                    promptTokens = msgUsage.path("input_tokens").asInt(0);
+                                }
+                            } else if ("content_block_delta".equals(type)) {
+                                String geminiChunk = ProtocolConverter.convertClaudeStreamEventToGemini(data);
+                                if (geminiChunk != null) {
+                                    writer.write("data: " + geminiChunk + "\n\n");
+                                    writer.flush();
+                                }
+                            } else if ("message_delta".equals(type)) {
+                                JsonNode usage = json.get("usage");
+                                if (usage != null) {
+                                    completionTokens = usage.path("output_tokens").asInt(0);
+                                }
+                                String geminiChunk = ProtocolConverter.convertClaudeStreamEventToGemini(data);
+                                if (geminiChunk != null) {
+                                    writer.write("data: " + geminiChunk + "\n\n");
+                                    writer.flush();
+                                }
+                            }
+                        } catch (Exception parseEx) {
+                            log.warn("转换 Claude SSE 为 Gemini 格式失败: {}", data);
+                        }
+                    }
+                }
+            }
+            conn.disconnect();
+        } catch (Exception e) {
+            conn.disconnect();
+            log.error("渠道 {} Claude-as-Gemini 流式请求异常: {}", channel.getId(), e.getMessage());
+        }
+
+        long duration = System.currentTimeMillis() - startTime;
+        recordStreamUsage(token, channel, model, promptTokens, completionTokens,
+                0, 0, 0, duration, httpRequest, "/v1/models/" + model + ":streamGenerateContent");
+    }
+
+    /**
+     * 读取 Gemini SSE 响应并转换为 OpenAI SSE 格式输出
+     * 返回最后包含 usage 的数据行
+     */
+    private String streamGeminiResponseAsOpenAi(HttpURLConnection conn, HttpServletResponse httpResponse) throws IOException {
+        String lastUsageData = null;
+        var writer = httpResponse.getWriter();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.startsWith("data: ")) {
+                    String data = line.substring(6).trim();
+                    try {
+                        JsonNode json = objectMapper.readTree(data);
+                        JsonNode usageMeta = json.get("usageMetadata");
+                        if (usageMeta != null) {
+                            lastUsageData = data;
+                        }
+
+                        String openAiChunk = convertGeminiStreamChunkToOpenAiSse(json);
+                        if (openAiChunk != null) {
+                            writer.write("data: " + openAiChunk + "\n\n");
+                            writer.flush();
+                        }
+                    } catch (Exception parseEx) {
+                        log.warn("转换 Gemini SSE 为 OpenAI 格式失败: {}", data);
+                    }
+                }
+            }
+        }
+        writer.write("data: [DONE]\n\n");
+        writer.flush();
+        return lastUsageData;
+    }
+
+    private String convertGeminiStreamChunkToOpenAiSse(JsonNode json) {
+        try {
+            Map<String, Object> chunk = new LinkedHashMap<>();
+            chunk.put("id", "chatcmpl-" + System.currentTimeMillis());
+            chunk.put("object", "chat.completion.chunk");
+            chunk.put("created", System.currentTimeMillis() / 1000);
+            chunk.put("model", json.path("modelVersion").asText(""));
+
+            JsonNode candidates = json.get("candidates");
+            Map<String, Object> delta = new LinkedHashMap<>();
+            delta.put("role", "assistant");
+            String finishReason = null;
+
+            if (candidates != null && candidates.isArray() && candidates.size() > 0) {
+                JsonNode candidate = candidates.get(0);
+                JsonNode content = candidate.get("content");
+                if (content != null && content.has("parts")) {
+                    StringBuilder textBuf = new StringBuilder();
+                    for (JsonNode part : content.get("parts")) {
+                        if (part.has("text")) {
+                            textBuf.append(part.get("text").asText());
+                        }
+                    }
+                    if (textBuf.length() > 0) {
+                        delta.put("content", textBuf.toString());
+                    }
+                }
+                if (candidate.has("finishReason") && !candidate.get("finishReason").isNull()) {
+                    String gr = candidate.get("finishReason").asText("STOP");
+                    finishReason = switch (gr) {
+                        case "STOP" -> "stop";
+                        case "MAX_TOKENS" -> "length";
+                        default -> "stop";
+                    };
+                }
+            }
+
+            Map<String, Object> choice = new LinkedHashMap<>();
+            choice.put("index", 0);
+            choice.put("delta", delta);
+            choice.put("finish_reason", finishReason);
+            chunk.put("choices", List.of(choice));
+
+            JsonNode usageMeta = json.get("usageMetadata");
+            if (usageMeta != null) {
+                Map<String, Object> usage = new LinkedHashMap<>();
+                usage.put("prompt_tokens", usageMeta.path("promptTokenCount").asInt(0));
+                usage.put("completion_tokens", usageMeta.path("candidatesTokenCount").asInt(0));
+                usage.put("total_tokens", usageMeta.path("totalTokenCount").asInt(0));
+                chunk.put("usage", usage);
+            }
+
+            return objectMapper.writeValueAsString(chunk);
+        } catch (Exception e) {
+            log.warn("转换 Gemini stream chunk 为 OpenAI SSE 失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
     // ==================== 渠道认证 ====================
 
     /**
@@ -757,6 +1326,42 @@ public class RelayService {
             String responseBody = response.body() != null ? response.body().string() : "";
             if (!response.isSuccessful()) {
                 log.error("Claude upstream API error: {} - {}", response.code(), responseBody);
+                throw new BusinessException(response.code(), "上游 API 错误: " + responseBody);
+            }
+            return responseBody;
+        } catch (IOException e) {
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Gemini 协议请求转发
+     */
+    private String forwardGeminiRequest(Channel channel, String requestBody) {
+        if (isChannelRateLimited(channel)) {
+            throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
+        }
+
+        String model = "default";
+        try {
+            JsonNode node = objectMapper.readTree(requestBody);
+            if (node.has("model")) model = node.get("model").asText();
+        } catch (Exception e) {
+            log.warn("解析 Gemini 请求 model 失败，使用默认值");
+        }
+
+        String url = channel.getBaseUrl().replaceAll("/+$", "")
+                + "/v1/models/" + model + ":generateContent?key=" + channel.getApiKey();
+        RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
+        Request.Builder reqBuilder = new Request.Builder()
+                .url(url)
+                .addHeader("Content-Type", "application/json")
+                .post(body);
+
+        try (okhttp3.Response response = httpClient.newCall(reqBuilder.build()).execute()) {
+            String responseBody = response.body() != null ? response.body().string() : "";
+            if (!response.isSuccessful()) {
+                log.error("Gemini upstream API error: {} - {}", response.code(), responseBody);
                 throw new BusinessException(response.code(), "上游 API 错误: " + responseBody);
             }
             return responseBody;

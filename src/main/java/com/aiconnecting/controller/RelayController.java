@@ -160,6 +160,51 @@ public class RelayController {
         return result;
     }
 
+    /**
+     * Gemini Generate Content API (非流式)
+     * 接收 Gemini 格式请求，内部根据渠道类型自动转换协议
+     */
+    @PostMapping("/v1/models/{model}:generateContent")
+    public Object geminiGenerateContent(@PathVariable String model,
+                                        @RequestHeader(value = "Authorization", required = false) String authHeader,
+                                        @RequestBody String requestBody,
+                                        HttpServletRequest request) throws IOException {
+        String tokenKey = extractTokenKey(authHeader);
+        String resolvedModel = relayService.resolveModelName(model);
+
+        JsonNode jsonBody = objectMapper.readTree(requestBody);
+        if (!resolvedModel.equals(model)) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
+            requestBody = objectMapper.writeValueAsString(jsonBody);
+        }
+
+        String result = relayService.geminiRelayRequest(tokenKey, requestBody, resolvedModel, request);
+        return objectMapper.readTree(result);
+    }
+
+    /**
+     * Gemini Stream Generate Content API (流式 SSE)
+     * 接收 Gemini 格式请求，内部根据渠道类型自动转换协议，以 Gemini SSE 格式返回
+     */
+    @PostMapping("/v1/models/{model}:streamGenerateContent")
+    public Object geminiStreamGenerateContent(@PathVariable String model,
+                                              @RequestHeader(value = "Authorization", required = false) String authHeader,
+                                              @RequestBody String requestBody,
+                                              HttpServletRequest request,
+                                              HttpServletResponse response) throws IOException {
+        String tokenKey = extractTokenKey(authHeader);
+        String resolvedModel = relayService.resolveModelName(model);
+
+        JsonNode jsonBody = objectMapper.readTree(requestBody);
+        if (!resolvedModel.equals(model)) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
+            requestBody = objectMapper.writeValueAsString(jsonBody);
+        }
+
+        relayService.geminiRelayStreamRequest(tokenKey, requestBody, resolvedModel, request, response);
+        return null;
+    }
+
     private String extractTokenKey(String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             throw new BusinessException(401, "缺少 Authorization header 或格式不正确");

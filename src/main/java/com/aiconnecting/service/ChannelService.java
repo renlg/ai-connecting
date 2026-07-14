@@ -347,6 +347,37 @@ public class ChannelService {
         if (baseUrl == null || baseUrl.isBlank() || apiKey == null || apiKey.isBlank()) {
             throw new BusinessException("请先填写 Base URL 和 API Key");
         }
+
+        if ("gemini".equalsIgnoreCase(type)) {
+            String url = baseUrl.replaceAll("/+$", "") + "/v1beta/models?key=" + apiKey;
+            Request.Builder reqBuilder = new Request.Builder().url(url).get();
+            try (Response response = httpClient.newCall(reqBuilder.build()).execute()) {
+                if (!response.isSuccessful()) {
+                    String body = response.body() != null ? response.body().string() : "";
+                    throw new BusinessException("上游接口返回 " + response.code() + ": " + body);
+                }
+                String body = response.body() != null ? response.body().string() : "";
+                JsonNode root = objectMapper.readTree(body);
+                List<String> models = new ArrayList<>();
+                JsonNode modelsArray = root.has("models") ? root.get("models") : root;
+                if (modelsArray.isArray()) {
+                    for (JsonNode node : modelsArray) {
+                        String name = node.has("name") ? node.get("name").asText() : null;
+                        if (name != null && !name.isBlank()) {
+                            if (name.startsWith("models/")) {
+                                name = name.substring("models/".length());
+                            }
+                            models.add(name);
+                        }
+                    }
+                }
+                return models;
+            } catch (IOException e) {
+                log.error("获取 Gemini 上游模型列表失败: {}", e.getMessage());
+                throw new BusinessException("连接上游失败: " + e.getMessage());
+            }
+        }
+
         String url = baseUrl.replaceAll("/+$", "") + "/v1/models";
         Request.Builder reqBuilder = new Request.Builder().url(url).get();
 
