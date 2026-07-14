@@ -155,7 +155,6 @@ export const updateToken = (id, data) => api.put(`/api/tokens/${id}`, data);
 export const deleteToken = (id) => api.delete(`/api/tokens/${id}`);
 export const updateTokenStatus = (id, status) => api.put(`/api/tokens/${id}/status`, { status });
 export const getTokenCreditHistory = (id) => api.get(`/api/tokens/${id}/credit-history`);
-export const getTokenCacheStats = (id) => api.get(`/api/tokens/${id}/cache-stats`);
 export const getTokenModels = () => api.get('/api/tokens/models');
 
 // Models (Admin)
