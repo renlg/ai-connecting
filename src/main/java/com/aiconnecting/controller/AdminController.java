@@ -11,6 +11,7 @@ import com.aiconnecting.dto.StatusRequest;
 import com.aiconnecting.dto.AnnouncementRequest;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Coupon;
+import com.aiconnecting.entity.OperationLog;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.Announcement;
@@ -21,6 +22,7 @@ import com.aiconnecting.service.CouponService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.ChannelHealthTracker;
+import com.aiconnecting.service.OperationLogService;
 import com.aiconnecting.repository.AnnouncementRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -48,6 +50,7 @@ public class AdminController {
     private final DashboardService dashboardService;
     private final ChannelHealthTracker channelHealthTracker;
     private final AnnouncementRepository announcementRepository;
+    private final OperationLogService operationLogService;
 
     /**
      * 仪表盘统计 - admin 看全局，普通用户看自己的数据
@@ -79,8 +82,11 @@ public class AdminController {
      * 用户管理 - 更新状态
      */
     @PutMapping("/users/{id}/status")
-    public ApiResponse<Void> updateUserStatus(@PathVariable Long id, @Valid @RequestBody StatusRequest request) {
+    public ApiResponse<Void> updateUserStatus(@AuthenticationPrincipal User currentUser,
+                                              @PathVariable Long id, @Valid @RequestBody StatusRequest request) {
         userService.updateUserStatus(id, request.getStatus());
+        operationLogService.record(currentUser.getId(), "UPDATE_USER_STATUS", "user:" + id,
+                "status=" + request.getStatus());
         return ApiResponse.success();
     }
 
@@ -88,11 +94,12 @@ public class AdminController {
      * 用户管理 - 重置密码
      */
     @PutMapping("/users/{id}/reset-password")
-    public ApiResponse<Void> resetPassword(@PathVariable Long id) {
+    public ApiResponse<Void> resetPassword(@AuthenticationPrincipal User currentUser, @PathVariable Long id) {
         if (resetPassword == null || resetPassword.isBlank()) {
             throw new BusinessException("重置密码未配置，请设置环境变量 ADMIN_RESET_PASSWORD");
         }
         userService.resetPassword(id, resetPassword);
+        operationLogService.record(currentUser.getId(), "RESET_PASSWORD", "user:" + id, null);
         return ApiResponse.success();
     }
 
@@ -100,8 +107,11 @@ public class AdminController {
      * 用户管理 - 更新积分
      */
     @PutMapping("/users/{id}/credits")
-    public ApiResponse<Void> updateCredits(@PathVariable Long id, @Valid @RequestBody CreditsRequest request) {
+    public ApiResponse<Void> updateCredits(@AuthenticationPrincipal User currentUser,
+                                           @PathVariable Long id, @Valid @RequestBody CreditsRequest request) {
         userService.updateCredits(id, request.getCredits());
+        operationLogService.record(currentUser.getId(), "UPDATE_USER_CREDITS", "user:" + id,
+                "credits=" + request.getCredits());
         return ApiResponse.success();
     }
 
@@ -116,6 +126,16 @@ public class AdminController {
     }
 
     /**
+     * 管理员操作审计日志
+     */
+    @GetMapping("/operation-logs")
+    public ApiResponse<Page<OperationLog>> getOperationLogs(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success(operationLogService.getLogs(page, size));
+    }
+
+    /**
      * 生成积分券
      */
     @PostMapping("/coupons")
@@ -123,6 +143,8 @@ public class AdminController {
                                               @Valid @RequestBody CouponGenerateRequest request) {
         Coupon coupon = couponService.generateCoupon(currentUser, request.getCredits(),
                 request.getMaxUses(), request.getExpiryDate());
+        operationLogService.record(currentUser.getId(), "GENERATE_COUPON", "coupon:" + coupon.getId(),
+                "credits=" + request.getCredits() + ", maxUses=" + request.getMaxUses());
         return ApiResponse.success(coupon);
     }
 
@@ -146,8 +168,12 @@ public class AdminController {
      * 禁用/启用积分券
      */
     @PutMapping("/coupons/{id}/status")
-    public ApiResponse<Coupon> updateCouponStatus(@PathVariable Long id, @Valid @RequestBody StatusRequest request) {
-        return ApiResponse.success(couponService.toggleStatus(id, request.getStatus()));
+    public ApiResponse<Coupon> updateCouponStatus(@AuthenticationPrincipal User currentUser,
+                                                  @PathVariable Long id, @Valid @RequestBody StatusRequest request) {
+        Coupon coupon = couponService.toggleStatus(id, request.getStatus());
+        operationLogService.record(currentUser.getId(), "UPDATE_COUPON_STATUS", "coupon:" + id,
+                "status=" + request.getStatus());
+        return ApiResponse.success(coupon);
     }
 
     /**
@@ -189,7 +215,10 @@ public class AdminController {
                 .status(request.getStatus() != null ? request.getStatus() : 1)
                 .createdBy(currentUser.getId())
                 .build();
-        return ApiResponse.success(announcementRepository.save(announcement));
+        Announcement saved = announcementRepository.save(announcement);
+        operationLogService.record(currentUser.getId(), "CREATE_ANNOUNCEMENT", "announcement:" + saved.getId(),
+                "title=" + saved.getTitle());
+        return ApiResponse.success(saved);
     }
 
     /**
@@ -204,7 +233,8 @@ public class AdminController {
      * 更新公告
      */
     @PutMapping("/announcements/{id}")
-    public ApiResponse<Announcement> updateAnnouncement(@PathVariable Long id,
+    public ApiResponse<Announcement> updateAnnouncement(@AuthenticationPrincipal User currentUser,
+                                                        @PathVariable Long id,
                                                         @Valid @RequestBody AnnouncementRequest request) {
         Announcement announcement = announcementRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(404, "公告不存在"));
@@ -213,15 +243,19 @@ public class AdminController {
         if (request.getStatus() != null) {
             announcement.setStatus(request.getStatus());
         }
-        return ApiResponse.success(announcementRepository.save(announcement));
+        Announcement saved = announcementRepository.save(announcement);
+        operationLogService.record(currentUser.getId(), "UPDATE_ANNOUNCEMENT", "announcement:" + id,
+                "title=" + saved.getTitle());
+        return ApiResponse.success(saved);
     }
 
     /**
      * 删除公告
      */
     @DeleteMapping("/announcements/{id}")
-    public ApiResponse<Void> deleteAnnouncement(@PathVariable Long id) {
+    public ApiResponse<Void> deleteAnnouncement(@AuthenticationPrincipal User currentUser, @PathVariable Long id) {
         announcementRepository.deleteById(id);
+        operationLogService.record(currentUser.getId(), "DELETE_ANNOUNCEMENT", "announcement:" + id, null);
         return ApiResponse.success();
     }
 }
