@@ -56,6 +56,10 @@ public class User {
     @Column(unique = true, length = 16)
     private String inviteCode;
 
+    /** 用户等级: 1-5，决定可使用哪些渠道 */
+    @Column(nullable = false)
+    private Integer level;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -70,6 +74,7 @@ public class User {
         if (usedQuota == null) usedQuota = 0L;
         if (credits == null) credits = BigDecimal.ZERO;
         if (status == null) status = 1;
+        if (level == null) level = 1;
     }
 
     @PreUpdate

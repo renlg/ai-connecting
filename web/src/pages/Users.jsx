@@ -1,15 +1,17 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Tag, Switch, message, Button, Popconfirm, InputNumber, Modal, Form, Space, Input } from 'antd'
+import { Table, Tag, Switch, message, Button, Popconfirm, InputNumber, Modal, Form, Space, Input, Select } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { getUsers, updateUserStatus, resetUserPassword, updateUserCredits } from '../api'
+import { getUsers, updateUserStatus, resetUserPassword, updateUserCredits, updateUserLevel } from '../api'
 
 export default function Users() {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(false)
   const [creditsModalOpen, setCreditsModalOpen] = useState(false)
+  const [levelModalOpen, setLevelModalOpen] = useState(false)
   const [editingUser, setEditingUser] = useState(null)
   const [creditsForm] = Form.useForm()
+  const [levelForm] = Form.useForm()
   const [searchText, setSearchText] = useState('')
 
   const load = (search) => {
@@ -45,6 +47,14 @@ export default function Users() {
     load()
   }
 
+  const handleUpdateLevel = async () => {
+    const values = await levelForm.validateFields()
+    await updateUserLevel(editingUser.id, values.level)
+    message.success('等级已更新')
+    setLevelModalOpen(false)
+    load()
+  }
+
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '用户名', dataIndex: 'username', width: 120 },
@@ -54,6 +64,7 @@ export default function Users() {
     { title: '额度', dataIndex: 'quota', width: 100, render: v => v === -1 ? '无限' : v },
     { title: '已用额度', dataIndex: 'usedQuota', width: 100 },
     { title: '积分', dataIndex: 'credits', width: 100, render: v => v != null ? Math.round(Number(v)) + ' 积分' : '0 积分' },
+    { title: '等级', dataIndex: 'level', width: 80, render: v => <Tag color="purple">Lv{v ?? 1}</Tag> },
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },
     { title: '注册时间', dataIndex: 'createdAt', width: 170, render: v => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-' },
     {

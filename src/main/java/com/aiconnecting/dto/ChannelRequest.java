@@ -12,4 +12,5 @@ public class ChannelRequest {
     private Integer status;
     private Integer priority;
     private Integer rateLimit;
+    private String supportedLevels;
 }

@@ -43,15 +43,26 @@ public class ChannelRouter {
     }
 
     /**
-     * 加权选择一个渠道（排除已封禁和已尝试的渠道）
+     * 加权选择一个渠道（排除已封禁和已尝试的渠道，按用户等级过滤）
      *
      * @param channelModelId 模型ID（渠道中存储的格式）
      * @param excludeIds     需要排除的渠道 ID（已尝试过的）
+     * @param userLevel      用户等级 (1-5)，为 null 时不做等级过滤
      * @return 选中的渠道
      * @throws BusinessException 如果没有可用渠道
      */
-    public Channel selectChannel(String channelModelId, Set<Long> excludeIds) {
+    public Channel selectChannel(String channelModelId, Set<Long> excludeIds, Integer userLevel) {
         List<Channel> channels = getCachedChannels(channelModelId);
+
+        if (userLevel != null) {
+            List<Channel> levelMatched = channels.stream()
+                    .filter(c -> channelSupportsLevel(c, userLevel))
+                    .toList();
+            if (levelMatched.isEmpty()) {
+                throw new BusinessException(403, "没有可用的渠道支持该用户等级");
+            }
+            channels = levelMatched;
+        }
 
         // 批量获取封禁状态（1 次 Redis 调用，代替逐渠道查询）
         Set<Long> blockedIds = healthTracker.getBlockedChannelIds();
@@ -84,10 +95,26 @@ public class ChannelRouter {
     }
 
     /**
-     * 兼容旧接口：无排除的加权选择
+     * 兼容旧接口：无用户等级过滤的加权选择
      */
-    public Channel selectChannel(String channelModelId) {
-        return selectChannel(channelModelId, null);
+    public Channel selectChannel(String channelModelId, Set<Long> excludeIds) {
+        return selectChannel(channelModelId, excludeIds, null);
+    }
+
+    /**
+     * 判断渠道是否支持指定的用户等级
+     */
+    private boolean channelSupportsLevel(Channel channel, int userLevel) {
+        String levels = channel.getSupportedLevels();
+        if (levels == null || levels.isBlank()) {
+            return true; // 未配置等级限制的渠道对所有等级开放
+        }
+        for (String part : levels.split(",")) {
+            if (part.trim().equals(String.valueOf(userLevel))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

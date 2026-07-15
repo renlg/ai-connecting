@@ -45,7 +45,7 @@ public class GeminiRelayService {
         for (int attempt = 1; attempt <= RelaySupport.MAX_RETRIES; attempt++) {
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels);
+                channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
             } catch (BusinessException e) {
                 if (lastError != null) {
                     throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
@@ -104,7 +104,7 @@ public class GeminiRelayService {
         for (int attempt = 1; attempt <= RelaySupport.MAX_RETRIES; attempt++) {
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels);
+                channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
             } catch (BusinessException e) {
                 if (!httpResponse.isCommitted()) {
                     RelayServiceUtils.writeGeminiError(httpResponse, 502, "所有渠道均不可用");

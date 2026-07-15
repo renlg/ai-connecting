@@ -7,6 +7,7 @@ import com.aiconnecting.dto.CouponRedemptionDTO;
 import com.aiconnecting.dto.CreditsRequest;
 import com.aiconnecting.dto.DashboardDailyStats;
 import com.aiconnecting.dto.DashboardStats;
+import com.aiconnecting.dto.LevelRequest;
 import com.aiconnecting.dto.StatusRequest;
 import com.aiconnecting.dto.AnnouncementRequest;
 import com.aiconnecting.entity.Channel;
@@ -114,6 +115,18 @@ public class AdminController {
         userService.updateCredits(id, request.getCredits());
         operationLogService.record(currentUser.getId(), "UPDATE_USER_CREDITS", "user:" + id,
                 "credits=" + request.getCredits());
+        return ApiResponse.success();
+    }
+
+    /**
+     * 用户管理 - 更新等级
+     */
+    @PutMapping("/users/{id}/level")
+    public ApiResponse<Void> updateUserLevel(@AuthenticationPrincipal User currentUser,
+                                             @PathVariable Long id, @Valid @RequestBody LevelRequest request) {
+        userService.updateLevel(id, request.getLevel());
+        operationLogService.record(currentUser.getId(), "UPDATE_USER_LEVEL", "user:" + id,
+                "level=" + request.getLevel());
         return ApiResponse.success();
     }
 

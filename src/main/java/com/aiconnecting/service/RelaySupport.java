@@ -63,7 +63,7 @@ public class RelaySupport {
     private static final long MODEL_CACHE_TTL_MS = 2 * 60 * 1000L;
     private static final long ALLOWED_MODELS_CACHE_TTL_MS = 2 * 60 * 1000L;
 
-    record RelayContext(Token token, String channelModelId) {}
+    record RelayContext(Token token, String channelModelId, Integer userLevel) {}
 
     private record CachedValue(String value, long cachedAt) {
         boolean isExpired() {
@@ -107,7 +107,7 @@ public class RelaySupport {
         if (rateLimitService != null) {
             rateLimitService.checkTokenRateLimit(token.getId(), token.getRateLimit());
         }
-        return new RelayContext(token, channelModelId);
+        return new RelayContext(token, channelModelId, tokenUser.getLevel());
     }
 
     private void checkModelPermission(Token token, String model) {

@@ -41,6 +41,10 @@ public class Channel {
     @Column(length = 2000)
     private String modelIds;
 
+    /** 支持的用户等级列表, 逗号分隔, 例如 "1,2,3" */
+    @Column(length = 50)
+    private String supportedLevels;
+
     /** 状态: 1=启用, 0=禁用 */
     @Column(nullable = false)
     private Integer status;
@@ -70,6 +74,7 @@ public class Channel {
         if (priority == null) priority = 0;
         if (usedQuota == null) usedQuota = 0L;
         if (rateLimit == null) rateLimit = 0;
+        if (supportedLevels == null || supportedLevels.isBlank()) supportedLevels = "1,2,3,4,5";
     }
 
     @PreUpdate

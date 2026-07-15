@@ -174,6 +174,7 @@ export const getUsers = (search) => api.get('/api/admin/users', { params: search
 export const updateUserStatus = (id, status) => api.put(`/api/admin/users/${id}/status`, { status });
 export const resetUserPassword = (id) => api.put(`/api/admin/users/${id}/reset-password`);
 export const updateUserCredits = (id, credits) => api.put(`/api/admin/users/${id}/credits`, { credits });
+export const updateUserLevel = (id, level) => api.put(`/api/admin/users/${id}/level`, { level });
 
 // Announcements
 export const getLatestAnnouncements = (limit = 5) => api.get('/api/announcements/latest', { params: { limit } });

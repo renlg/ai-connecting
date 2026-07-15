@@ -273,6 +273,19 @@ public class UserService {
     }
 
     /**
+     * 更新用户等级 (1-5)
+     */
+    @Transactional
+    public void updateLevel(Long userId, Integer level) {
+        User user = getById(userId);
+        user.setLevel(level);
+        userRepository.save(user);
+        // 清除用户缓存，使等级变更立即生效
+        jwtAuthenticationFilter.evictUserCache(user.getUsername());
+        evictUserCache(userId);
+    }
+
+    /**
      * 判断用户是否为管理员
      */
     public boolean isAdmin(Long userId) {
