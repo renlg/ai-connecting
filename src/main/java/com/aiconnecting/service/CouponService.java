@@ -87,10 +87,7 @@ public class CouponService {
         Coupon updated = couponRepository.findById(coupon.getId())
                 .orElseThrow(() -> new BusinessException("积分券不存在"));
 
-        User freshUser = userRepository.findById(user.getId())
-                .orElseThrow(() -> new BusinessException("用户不存在"));
-        freshUser.setCredits((freshUser.getCredits() != null ? freshUser.getCredits() : BigDecimal.ZERO).add(coupon.getCredits()));
-        userRepository.save(freshUser);
+        userRepository.addCredits(user.getId(), coupon.getCredits());
 
         // 记录兑换日志
         CouponRedemptionLog log = CouponRedemptionLog.builder()

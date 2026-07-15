@@ -1,5 +1,6 @@
 package com.aiconnecting.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
@@ -32,6 +33,7 @@ public class Channel {
     private String baseUrl;
 
     /** API Key */
+    @JsonIgnore
     @Column(nullable = false, length = 1000)
     private String apiKey;
 
