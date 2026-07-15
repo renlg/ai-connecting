@@ -9,6 +9,7 @@ import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.service.CouponService;
 import com.aiconnecting.service.DashboardService;
+import com.aiconnecting.service.StatsAggregationService;
 import com.aiconnecting.service.ChannelHealthTracker;
 import com.aiconnecting.repository.AnnouncementRepository;
 import com.aiconnecting.service.UsageLogService;
@@ -69,6 +70,7 @@ class AdminControllerTest {
     @MockBean private JwtUtils jwtUtils;
     @MockBean private JwtAuthenticationFilter jwtAuthenticationFilter;
     @MockBean private OperationLogService operationLogService;
+    @MockBean private StatsAggregationService statsAggregationService;
 
     private User adminUser;
     private User regularUser;

@@ -23,6 +23,7 @@ import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.ChannelHealthTracker;
 import com.aiconnecting.service.OperationLogService;
+import com.aiconnecting.service.StatsAggregationService;
 import com.aiconnecting.repository.AnnouncementRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -51,6 +52,7 @@ public class AdminController {
     private final ChannelHealthTracker channelHealthTracker;
     private final AnnouncementRepository announcementRepository;
     private final OperationLogService operationLogService;
+    private final StatsAggregationService statsAggregationService;
 
     /**
      * 仪表盘统计 - admin 看全局，普通用户看自己的数据
@@ -257,5 +259,14 @@ public class AdminController {
         announcementRepository.deleteById(id);
         operationLogService.record(currentUser.getId(), "DELETE_ANNOUNCEMENT", "announcement:" + id, null);
         return ApiResponse.success();
+    }
+
+    /**
+     * 初始化用量汇总数据（从 usage_logs 历史数据构建 usage_stats 汇总表）
+     */
+    @PostMapping("/stats/init")
+    public ApiResponse<String> initUsageStats() {
+        statsAggregationService.initializeHistoricalData();
+        return ApiResponse.success("用量汇总数据初始化完成");
     }
 }

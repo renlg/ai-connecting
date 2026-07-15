@@ -4,6 +4,7 @@ import com.aiconnecting.dto.DashboardDailyStats;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.repository.UsageLogRepository;
+import com.aiconnecting.repository.UsageStatsRepository;
 import com.aiconnecting.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +18,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -26,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class UsageLogService {
 
     private final UsageLogRepository usageLogRepository;
+    private final UsageStatsRepository usageStatsRepository;
     private final ChannelService channelService;
     private final ModelConfigService modelConfigService;
     private final UserRepository userRepository;
@@ -220,12 +223,15 @@ public class UsageLogService {
     }
 
     /**
-     * 仪表盘每日统计 - admin 看全局，普通用户看自己的数据
+     * 仪表盘每日统计 - admin 看全局（每日积分从 usage_stats 汇总表），普通用户看自己的数据
      */
     public DashboardDailyStats getDailyStats(User currentUser, int days) {
         LocalDateTime since = LocalDate.now().minusDays(days).atStartOfDay();
+        String sinceDate = LocalDate.now().minusDays(days).format(DateTimeFormatter.ISO_LOCAL_DATE);
         List<Long> tokenIds = null;
-        if (!"admin".equalsIgnoreCase(currentUser.getRole())) {
+        boolean isAdmin = "admin".equalsIgnoreCase(currentUser.getRole());
+
+        if (!isAdmin) {
             tokenIds = tokenService.getUserTokenIds(currentUser.getId());
             if (tokenIds.isEmpty()) {
                 return DashboardDailyStats.builder()
@@ -235,12 +241,58 @@ public class UsageLogService {
             }
         }
 
-        List<Object[]> creditRows = tokenIds == null
-                ? usageLogRepository.findDailyCreditCostSince(since)
-                : usageLogRepository.findDailyCreditCostByTokenIdsSince(tokenIds, since);
-        List<Object[]> tokenRows = tokenIds == null
-                ? usageLogRepository.findDailyTokenByModelSince(since)
-                : usageLogRepository.findDailyTokenByModelByTokenIdsSince(tokenIds, since);
+        // 每日积分消耗 —— admin 从 usage_stats 汇总表读取，用户从 usage_logs 读取
+        List<Object[]> creditRows;
+        if (isAdmin) {
+            creditRows = usageStatsRepository.sumGroupByDateSince(sinceDate);
+        } else {
+            creditRows = usageLogRepository.findDailyCreditCostByTokenIdsSince(tokenIds, since);
+        }
+
+        // 每日按模型 token 消耗 —— 都需要从 usage_logs 读取（汇总表无 model 维度）
+        List<Object[]> tokenRows;
+        if (isAdmin) {
+            tokenRows = usageLogRepository.findDailyTokenByModelSince(since);
+        } else {
+            tokenRows = usageLogRepository.findDailyTokenByModelByTokenIdsSince(tokenIds, since);
+        }
+
+        List<DashboardDailyStats.DailyCreditStat> dailyCredits = creditRows.stream()
+                .map(row -> DashboardDailyStats.DailyCreditStat.builder()
+                        .date((String) row[0])
+                        .credits(BigDecimal.valueOf(((Number) row[1]).doubleValue()))
+                        .build())
+                .toList();
+
+        List<DashboardDailyStats.DailyTokenByModelStat> dailyTokensByModel = tokenRows.stream()
+                .map(row -> {
+                    long inputTokens = ((Number) row[2]).longValue();
+                    long cachedTokens = ((Number) row[3]).longValue();
+                    long totalTokens = ((Number) row[4]).longValue();
+                    return DashboardDailyStats.DailyTokenByModelStat.builder()
+                            .date((String) row[0])
+                            .model((String) row[1])
+                            .inputTokens(inputTokens)
+                            .cachedTokens(cachedTokens)
+                            .cacheMissTokens(inputTokens - cachedTokens)
+                            .totalTokens(totalTokens)
+                            .build();
+                })
+                .toList();
+
+        return DashboardDailyStats.builder()
+                .dailyCredits(dailyCredits)
+                .dailyTokensByModel(dailyTokensByModel)
+                .build();
+    }
+
+    /**
+     * 从 usage_logs 查询指定时间范围内（按 tokenId 过滤）的每日统计
+     * 仅用于非 admin 用户
+     */
+    private DashboardDailyStats getUserDailyStatsFromLogs(LocalDateTime since, List<Long> tokenIds) {
+        List<Object[]> creditRows = usageLogRepository.findDailyCreditCostByTokenIdsSince(tokenIds, since);
+        List<Object[]> tokenRows = usageLogRepository.findDailyTokenByModelByTokenIdsSince(tokenIds, since);
 
         List<DashboardDailyStats.DailyCreditStat> dailyCredits = creditRows.stream()
                 .map(row -> DashboardDailyStats.DailyCreditStat.builder()

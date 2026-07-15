@@ -93,4 +93,43 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
             "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) " +
             "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since GROUP BY date, model ORDER BY date ASC, model ASC", nativeQuery = true)
     List<Object[]> findDailyTokenByModelByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
+
+    // ========== 汇总表聚合查询 ==========
+
+    /**
+     * 聚合指定时间窗口内的所有指标（供 StatsAggregationService 使用）
+     */
+    @Query(value = "SELECT " +
+            "COALESCE(COUNT(*), 0), " +
+            "COALESCE(SUM(total_tokens), 0), " +
+            "COALESCE(SUM(prompt_tokens), 0), " +
+            "COALESCE(SUM(completion_tokens), 0), " +
+            "COALESCE(SUM(credit_cost), 0.0), " +
+            "COALESCE(SUM(prompt_tokens_cache_hit), 0), " +
+            "COALESCE(SUM(cached_tokens_cache_creation), 0), " +
+            "COALESCE(SUM(cached_tokens_cache_read), 0) " +
+            "FROM usage_logs WHERE created_at >= :startTime AND created_at < :endTime", nativeQuery = true)
+    List<Object[]> aggregateWindow(@Param("startTime") LocalDateTime startTime, @Param("endTime") LocalDateTime endTime);
+
+    /**
+     * 查找最早的使用日志创建时间（用于初始化历史汇总数据）
+     */
+    @Query("SELECT MIN(u.createdAt) FROM UsageLog u")
+    List<Object[]> findEarliestCreatedAt();
+
+    /**
+     * 查询今天当前窗口（从最近一个对齐点到现在）的原始数据聚合
+     * 用于补齐仪表盘今日统计中汇总表未覆盖的部分
+     */
+    @Query(value = "SELECT " +
+            "COALESCE(COUNT(*), 0), " +
+            "COALESCE(SUM(total_tokens), 0), " +
+            "COALESCE(SUM(prompt_tokens), 0), " +
+            "COALESCE(SUM(completion_tokens), 0), " +
+            "COALESCE(SUM(credit_cost), 0.0), " +
+            "COALESCE(SUM(prompt_tokens_cache_hit), 0), " +
+            "COALESCE(SUM(cached_tokens_cache_creation), 0), " +
+            "COALESCE(SUM(cached_tokens_cache_read), 0) " +
+            "FROM usage_logs WHERE created_at >= :since", nativeQuery = true)
+    List<Object[]> aggregateSince(@Param("since") LocalDateTime since);
 }
