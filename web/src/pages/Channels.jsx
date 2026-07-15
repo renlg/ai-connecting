@@ -151,6 +151,10 @@ export default function Channels() {
     if (values.modelIds && Array.isArray(values.modelIds)) {
       values.modelIds = values.modelIds.join(',')
     }
+    // 多选用户等级转逗号分隔字符串
+    if (values.supportedLevels && Array.isArray(values.supportedLevels)) {
+      values.supportedLevels = values.supportedLevels.join(',')
+    }
     if (editing) {
       await updateChannel(editing.id, values)
       message.success('更新成功')
@@ -190,6 +194,10 @@ export default function Channels() {
       })
       return modelNames.map(m => <Tag key={m}>{m}</Tag>)
     } },
+    { title: '支持等级', dataIndex: 'supportedLevels', width: 150, render: v => {
+      if (!v) return '-'
+      return v.split(',').map(l => l.trim()).filter(l => l).map(l => <Tag key={l} color="purple">Lv{l}</Tag>)
+    } },
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },
     {
       title: '操作', width: 180, fixed: 'right', render: (_, record) => (
@@ -200,6 +208,10 @@ export default function Channels() {
             if (formValues.modelIds && typeof formValues.modelIds === 'string') {
               // 将逗号分隔的模型ID转换为数组
               formValues.modelIds = formValues.modelIds.split(',').map(id => id.trim()).filter(id => id)
+            }
+            if (formValues.supportedLevels && typeof formValues.supportedLevels === 'string') {
+              // 将逗号分隔的等级转换为数组
+              formValues.supportedLevels = formValues.supportedLevels.split(',').map(l => l.trim()).filter(l => l)
             }
             form.setFieldsValue(formValues)
             setModalOpen(true)
@@ -284,6 +296,14 @@ export default function Channels() {
                 (option?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
                 (option?.value ?? '').toLowerCase().includes(input.toLowerCase())
               }
+            />
+          </Form.Item>
+          <Form.Item name="supportedLevels" label="支持等级" initialValue={['1', '2', '3', '4', '5']}>
+            <Select
+              mode="multiple"
+              placeholder="选择该渠道支持的用户等级"
+              options={[1, 2, 3, 4, 5].map(l => ({ value: String(l), label: `Lv${l}` }))}
+              style={{ width: '100%' }}
             />
           </Form.Item>
           <Space>

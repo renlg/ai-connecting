@@ -96,7 +96,10 @@ public class ChannelRouter {
 
     /**
      * 兼容旧接口：无用户等级过滤的加权选择
+     *
+     * @deprecated 不做用户等级过滤，可能绕过渠道等级限制；请使用 {@link #selectChannel(String, Set, Integer)}
      */
+    @Deprecated
     public Channel selectChannel(String channelModelId, Set<Long> excludeIds) {
         return selectChannel(channelModelId, excludeIds, null);
     }
@@ -184,14 +187,17 @@ public class ChannelRouter {
     }
 
     /**
-     * 从缓存的渠道列表中过滤出指定类型的渠道（排除封禁）
+     * 从缓存的渠道列表中过滤出指定类型的渠道（排除封禁，按用户等级过滤）
+     *
+     * @param userLevel 用户等级 (1-5)，为 null 时不做等级过滤
      */
-    public List<Channel> filterByType(String channelModelId, String type) {
+    public List<Channel> filterByType(String channelModelId, String type, Integer userLevel) {
         List<Channel> channels = getCachedChannels(channelModelId);
         Set<Long> blockedIds = healthTracker.getBlockedChannelIds();
         return channels.stream()
                 .filter(c -> !blockedIds.contains(c.getId()))
                 .filter(c -> type.equalsIgnoreCase(c.getType()) || "anthropic".equalsIgnoreCase(c.getType()))
+                .filter(c -> userLevel == null || channelSupportsLevel(c, userLevel))
                 .toList();
     }
 

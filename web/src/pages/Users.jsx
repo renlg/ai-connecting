@@ -75,6 +75,11 @@ export default function Users() {
             creditsForm.setFieldsValue({ credits: r.credits ?? 0 })
             setCreditsModalOpen(true)
           }}>修改积分</Button>
+          <Button type="link" size="small" onClick={() => {
+            setEditingUser(r)
+            levelForm.setFieldsValue({ level: r.level ?? 1 })
+            setLevelModalOpen(true)
+          }}>修改等级</Button>
           <Popconfirm title="确认重置密码？" description="密码将被重置为默认密码" onConfirm={() => handleResetPassword(r.id)} okText="确认" cancelText="取消">
             <Button type="link" danger size="small">重置密码</Button>
           </Popconfirm>
@@ -100,6 +105,13 @@ export default function Users() {
         <Form form={creditsForm} layout="vertical">
           <Form.Item name="credits" label="积分" rules={[{ required: true, message: '请输入积分数量' }]}>
             <InputNumber style={{ width: '100%' }} min={0} step={1} placeholder="输入积分数量" />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal title={`修改等级 - ${editingUser?.username || ''}`} open={levelModalOpen} onOk={handleUpdateLevel} onCancel={() => setLevelModalOpen(false)} width={400}>
+        <Form form={levelForm} layout="vertical">
+          <Form.Item name="level" label="用户等级" rules={[{ required: true, message: '请选择用户等级' }]}>
+            <Select options={[1, 2, 3, 4, 5].map(l => ({ value: l, label: `Lv${l}` }))} />
           </Form.Item>
         </Form>
       </Modal>

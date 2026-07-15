@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
@@ -146,7 +147,19 @@ public class ChannelService {
                 .orElseThrow(() -> new BusinessException("渠道不存在"));
     }
 
+    private static final Pattern SUPPORTED_LEVELS_PATTERN = Pattern.compile("^[1-5](,[1-5])*$");
+
+    private void validateSupportedLevels(String supportedLevels) {
+        if (supportedLevels == null || supportedLevels.isBlank()) {
+            return;
+        }
+        if (!SUPPORTED_LEVELS_PATTERN.matcher(supportedLevels.trim()).matches()) {
+            throw new BusinessException("支持等级格式非法，应为 1-5 的逗号分隔数字，例如: 1,2,3");
+        }
+    }
+
     public Channel create(ChannelRequest request) {
+        validateSupportedLevels(request.getSupportedLevels());
         Channel channel = Channel.builder()
                 .name(request.getName())
                 .type(request.getType())
@@ -164,6 +177,7 @@ public class ChannelService {
     }
 
     public Channel update(Long id, ChannelRequest request) {
+        validateSupportedLevels(request.getSupportedLevels());
         Channel channel = getById(id);
         if (request.getName() != null) channel.setName(request.getName());
         if (request.getType() != null) channel.setType(request.getType());

@@ -1,4 +1,5 @@
 -- 用户等级/渠道支持等级 迁移脚本
+-- 注意：本脚本非幂等，仅可执行一次，重复执行会因列已存在而报错
 -- 用户新增 level 字段 (1-5)，默认为 1
 ALTER TABLE users ADD COLUMN level INTEGER NOT NULL DEFAULT 1;
 
