@@ -11,11 +11,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +58,84 @@ public class ChannelService {
     }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Value("${app.channel.allowed-upstream-hosts:}")
+    private String allowedUpstreamHosts;
+
+    private void validateBaseUrlForSsrf(String baseUrl) {
+        URI uri;
+        try {
+            uri = new URI(baseUrl);
+        } catch (Exception e) {
+            throw new BusinessException("无效的 URL: " + e.getMessage());
+        }
+        String scheme = uri.getScheme();
+        if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
+            throw new BusinessException("仅允许 http/https 协议");
+        }
+        String host = uri.getHost();
+        if (host == null || host.isBlank()) {
+            throw new BusinessException("无效的 URL: 缺少主机名");
+        }
+        if (allowedUpstreamHosts != null && !allowedUpstreamHosts.isBlank()) {
+            boolean matched = false;
+            for (String allowed : allowedUpstreamHosts.split(",")) {
+                if (allowed.trim().equalsIgnoreCase(host)) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                throw new BusinessException("主机不在白名单中: " + host);
+            }
+        }
+        InetAddress[] addresses;
+        try {
+            addresses = InetAddress.getAllByName(host);
+        } catch (Exception e) {
+            throw new BusinessException("无法解析主机地址: " + host);
+        }
+        for (InetAddress addr : addresses) {
+            if (isInternalAddress(addr)) {
+                throw new BusinessException("禁止访问内网地址: " + host);
+            }
+        }
+    }
+
+    private boolean isInternalAddress(InetAddress addr) {
+        if (addr.isLoopbackAddress() || addr.isLinkLocalAddress() || addr.isAnyLocalAddress()) {
+            return true;
+        }
+        if (addr instanceof java.net.Inet6Address inet6) {
+            byte[] bytes = inet6.getAddress();
+            if (bytes.length == 16 && bytes[0] == 0x20 && bytes[1] == 0x02) {
+                return true;
+            }
+            boolean allV4Mapped = true;
+            for (int i = 0; i < 10; i++) {
+                if (bytes[i] != 0) { allV4Mapped = false; break; }
+            }
+            if (allV4Mapped && bytes[10] == (byte) 0xff && bytes[11] == (byte) 0xff) {
+                byte[] v4 = new byte[]{bytes[12], bytes[13], bytes[14], bytes[15]};
+                return isInternalIpv4(v4);
+            }
+            return false;
+        }
+        byte[] bytes = addr.getAddress();
+        if (bytes.length != 4) return true;
+        return isInternalIpv4(bytes);
+    }
+
+    private boolean isInternalIpv4(byte[] bytes) {
+        int b0 = bytes[0] & 0xFF;
+        int b1 = bytes[1] & 0xFF;
+        if (b0 == 10) return true;
+        if (b0 == 172 && b1 >= 16 && b1 <= 31) return true;
+        if (b0 == 192 && b1 == 168) return true;
+        if (b0 == 127) return true;
+        if (b0 == 169 && b1 == 254) return true;
+        return false;
+    }
 
     public List<Channel> listAll() {
         return channelRepository.findAll();
@@ -262,18 +343,19 @@ public class ChannelService {
 
         // 使用 HttpURLConnection 避免 OkHttp 连接池问题
         java.net.URL urlObj = new java.net.URL(url);
-        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) urlObj.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(120000);
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Authorization", "Bearer " + apiKey);
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Connection", "close");
+        java.net.HttpURLConnection conn = null;
 
         log.info("准备发送HTTP请求");
         long httpStart = System.currentTimeMillis();
         try {
+            conn = (java.net.HttpURLConnection) urlObj.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(120000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Connection", "close");
             conn.getOutputStream().write(jsonBody.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             conn.getOutputStream().flush();
 
@@ -336,7 +418,7 @@ public class ChannelService {
                 }
             }
         } finally {
-            conn.disconnect();
+            if (conn != null) conn.disconnect();
         }
     }
 
@@ -347,6 +429,7 @@ public class ChannelService {
         if (baseUrl == null || baseUrl.isBlank() || apiKey == null || apiKey.isBlank()) {
             throw new BusinessException("请先填写 Base URL 和 API Key");
         }
+        validateBaseUrlForSsrf(baseUrl);
 
         if ("gemini".equalsIgnoreCase(type)) {
             String url = baseUrl.replaceAll("/+$", "") + "/v1beta/models?key=" + apiKey;

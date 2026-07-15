@@ -160,18 +160,19 @@ public class GeminiRelayService {
         String url = channel.getBaseUrl().replaceAll("/+$", "")
                 + "/v1/models/" + model + ":streamGenerateContent?alt=sse&key=" + channel.getApiKey();
         java.net.URL urlObj = new java.net.URL(url);
-        HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(120000);
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Accept", "text/event-stream");
-        conn.setRequestProperty("Connection", "close");
-        conn.getOutputStream().write(requestBody.getBytes(StandardCharsets.UTF_8));
-        conn.getOutputStream().flush();
-
+        HttpURLConnection conn = null;
         try {
+            conn = (HttpURLConnection) urlObj.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(120000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Accept", "text/event-stream");
+            conn.setRequestProperty("Connection", "close");
+            conn.getOutputStream().write(requestBody.getBytes(StandardCharsets.UTF_8));
+            conn.getOutputStream().flush();
+
             int code = conn.getResponseCode();
             log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
             if (code != 200) {
@@ -180,12 +181,10 @@ public class GeminiRelayService {
                 httpResponse.setStatus(code);
                 httpResponse.getWriter().write(errorBody.isEmpty()
                         ? "{\"error\":{\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
-                conn.disconnect();
                 return;
             }
 
             String lastUsageData = support.streamSseResponse(conn, httpResponse, null);
-            conn.disconnect();
 
             long duration = System.currentTimeMillis() - startTime;
             RelayServiceUtils.UsageInfo usage = RelayServiceUtils.parseGeminiStreamUsage(support.objectMapper, lastUsageData);
@@ -193,12 +192,8 @@ public class GeminiRelayService {
                     usage.promptTokens(), usage.completionTokens(),
                     0, 0, 0, duration, httpRequest,
                     "/v1/models/" + model + ":streamGenerateContent");
-        } catch (Exception e) {
-            conn.disconnect();
-            log.error("渠道 {} Gemini 流式请求异常: {}", channel.getId(), e.getMessage());
-            if (!httpResponse.isCommitted()) {
-                RelayServiceUtils.writeGeminiError(httpResponse, 502, "渠道请求失败");
-            }
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
 
@@ -222,13 +217,13 @@ public class GeminiRelayService {
         long startTime = System.currentTimeMillis();
         int promptTokens = 0, completionTokens = 0, cachedTokens = 0;
 
-        HttpURLConnection conn = support.createSseConnection(channel, "/v1/chat/completions", openAiBody);
+        HttpURLConnection conn = null;
         try {
+            conn = support.createSseConnection(channel, "/v1/chat/completions", openAiBody);
             int code = conn.getResponseCode();
             if (code != 200) {
                 writer.write("data: {\"error\":{\"message\":\"上游错误\"}}\n\n");
                 writer.flush();
-                conn.disconnect();
                 return;
             }
             try (BufferedReader reader = new BufferedReader(
@@ -260,10 +255,8 @@ public class GeminiRelayService {
                     }
                 }
             }
-            conn.disconnect();
-        } catch (Exception e) {
-            conn.disconnect();
-            log.error("渠道 {} OpenAI-as-Gemini 流式请求异常: {}", channel.getId(), e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
         }
 
         long duration = System.currentTimeMillis() - startTime;
@@ -290,13 +283,13 @@ public class GeminiRelayService {
         long startTime = System.currentTimeMillis();
         int promptTokens = 0, completionTokens = 0;
 
-        HttpURLConnection conn = support.createSseConnection(channel, "/v1/messages", claudeBody);
+        HttpURLConnection conn = null;
         try {
+            conn = support.createSseConnection(channel, "/v1/messages", claudeBody);
             int code = conn.getResponseCode();
             if (code != 200) {
                 writer.write("data: {\"error\":{\"message\":\"上游错误\"}}\n\n");
                 writer.flush();
-                conn.disconnect();
                 return;
             }
             try (BufferedReader reader = new BufferedReader(
@@ -337,10 +330,8 @@ public class GeminiRelayService {
                     }
                 }
             }
-            conn.disconnect();
-        } catch (Exception e) {
-            conn.disconnect();
-            log.error("渠道 {} Claude-as-Gemini 流式请求异常: {}", channel.getId(), e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
         }
 
         long duration = System.currentTimeMillis() - startTime;

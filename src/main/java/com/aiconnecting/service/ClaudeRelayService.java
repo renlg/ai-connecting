@@ -160,8 +160,9 @@ public class ClaudeRelayService {
         SseUtils.setSseHeaders(httpResponse);
         long startTime = System.currentTimeMillis();
 
-        HttpURLConnection conn = support.createSseConnection(channel, "/v1/messages", requestBody);
+        HttpURLConnection conn = null;
         try {
+            conn = support.createSseConnection(channel, "/v1/messages", requestBody);
             int code = conn.getResponseCode();
             log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
             if (code != 200) {
@@ -171,7 +172,6 @@ public class ClaudeRelayService {
                 httpResponse.setStatus(code);
                 httpResponse.getWriter().write(errorBody.isEmpty()
                         ? "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
-                conn.disconnect();
                 return;
             }
             String lastUsageData = support.streamSseResponse(conn, httpResponse,
@@ -179,7 +179,6 @@ public class ClaudeRelayService {
             var writer = httpResponse.getWriter();
             writer.write("data: [DONE]\n\n");
             writer.flush();
-            conn.disconnect();
 
             long duration = System.currentTimeMillis() - startTime;
             RelayServiceUtils.UsageInfo usage = RelayServiceUtils.parseClaudeStreamUsage(support.objectMapper, lastUsageData);
@@ -187,12 +186,8 @@ public class ClaudeRelayService {
                     usage.promptTokens(), usage.completionTokens(),
                     usage.cachedTokens(), usage.cacheCreationTokens(), usage.cacheReadTokens(),
                     duration, httpRequest, "/v1/messages");
-        } catch (Exception e) {
-            conn.disconnect();
-            log.error("渠道 {} Claude 流式请求异常: {}", channel.getId(), e.getMessage());
-            if (!httpResponse.isCommitted()) {
-                RelayServiceUtils.writeClaudeError(httpResponse, 502, "渠道请求失败");
-            }
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
 
@@ -223,15 +218,15 @@ public class ClaudeRelayService {
         int promptTokens = 0, completionTokens = 0, cachedTokens = 0;
         List<Map<String, Object>> toolCalls = new ArrayList<>();
 
-        HttpURLConnection conn = support.createSseConnection(channel, "/v1/chat/completions", openAiBody);
+        HttpURLConnection conn = null;
         try {
+            conn = support.createSseConnection(channel, "/v1/chat/completions", openAiBody);
             int code = conn.getResponseCode();
             log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
             if (code != 200) {
                 log.warn("渠道 {} OpenAI-as-Claude 流式请求失败: {}", channel.getId(), code);
                 writer.write("data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"上游错误\"}}\n\n");
                 writer.flush();
-                conn.disconnect();
                 return;
             }
             try (BufferedReader reader = new BufferedReader(
@@ -286,13 +281,8 @@ public class ClaudeRelayService {
                     }
                 }
             }
-            conn.disconnect();
-        } catch (Exception e) {
-            conn.disconnect();
-            log.error("渠道 {} OpenAI-as-Claude 流式请求异常: {}", channel.getId(), e.getMessage());
-            writer.write("data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"渠道请求失败\"}}\n\n");
-            writer.flush();
-            return;
+        } finally {
+            if (conn != null) conn.disconnect();
         }
 
         writer.write("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");
@@ -348,23 +338,23 @@ public class ClaudeRelayService {
         String url = channel.getBaseUrl().replaceAll("/+$", "")
                 + "/v1/models/" + model + ":streamGenerateContent?alt=sse&key=" + channel.getApiKey();
         java.net.URL urlObj = new java.net.URL(url);
-        HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(120000);
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Accept", "text/event-stream");
-        conn.setRequestProperty("Connection", "close");
-        conn.getOutputStream().write(geminiBody.getBytes(StandardCharsets.UTF_8));
-        conn.getOutputStream().flush();
-
+        HttpURLConnection conn = null;
         try {
+            conn = (HttpURLConnection) urlObj.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(120000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Accept", "text/event-stream");
+            conn.setRequestProperty("Connection", "close");
+            conn.getOutputStream().write(geminiBody.getBytes(StandardCharsets.UTF_8));
+            conn.getOutputStream().flush();
+
             int code = conn.getResponseCode();
             if (code != 200) {
                 writer.write("data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"上游错误\"}}\n\n");
                 writer.flush();
-                conn.disconnect();
                 return;
             }
             try (BufferedReader reader = new BufferedReader(
@@ -409,10 +399,8 @@ public class ClaudeRelayService {
                     }
                 }
             }
-            conn.disconnect();
-        } catch (Exception e) {
-            conn.disconnect();
-            log.error("渠道 {} Gemini-as-Claude 流式请求异常: {}", channel.getId(), e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
         }
 
         writer.write("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");

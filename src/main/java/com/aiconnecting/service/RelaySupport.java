@@ -195,21 +195,30 @@ public class RelaySupport {
 
     // ==================== 连接与认证 ====================
 
+    String maskApiKey(String url) {
+        return url.replaceAll("([?&]key=)[^&]*", "$1***");
+    }
+
     HttpURLConnection createSseConnection(Channel channel, String path, String requestBody) throws IOException {
         String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
-        log.info("流式请求: url={}, channel={}", url, channel.getId());
+        log.info("流式请求: url={}, channel={}", maskApiKey(url), channel.getId());
         java.net.URL urlObj = new java.net.URL(url);
         HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(120000);
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Accept", "text/event-stream");
-        conn.setRequestProperty("Connection", "close");
-        applyChannelAuthToConnection(conn, channel);
-        conn.getOutputStream().write(requestBody.getBytes(StandardCharsets.UTF_8));
-        conn.getOutputStream().flush();
+        try {
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(120000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Accept", "text/event-stream");
+            conn.setRequestProperty("Connection", "close");
+            applyChannelAuthToConnection(conn, channel);
+            conn.getOutputStream().write(requestBody.getBytes(StandardCharsets.UTF_8));
+            conn.getOutputStream().flush();
+        } catch (IOException e) {
+            conn.disconnect();
+            throw e;
+        }
         return conn;
     }
 

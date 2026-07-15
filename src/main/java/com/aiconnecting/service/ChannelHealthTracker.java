@@ -61,6 +61,19 @@ public class ChannelHealthTracker {
             new ThreadPoolExecutor.CallerRunsPolicy() // 队列满时由调用线程执行，避免丢失失败记录
     );
 
+    @jakarta.annotation.PreDestroy
+    void shutdown() {
+        healthExecutor.shutdown();
+        try {
+            if (!healthExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                healthExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            healthExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
     // ==================== 内存回退数据结构 ====================
     private final ConcurrentHashMap<Long, Long> memWeights = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, LinkedList<Long>> memFailureTimestamps = new ConcurrentHashMap<>();

@@ -1,11 +1,19 @@
 package com.aiconnecting.common;
 
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+
+import java.util.stream.Collectors;
 
 @RestControllerAdvice
 @Slf4j
@@ -44,6 +52,44 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.error(400, message));
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMethodNotAllowed(HttpRequestMethodNotSupportedException e) {
+        return ResponseEntity
+                .status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(ApiResponse.error(405, "不支持的请求方法: " + e.getMethod()));
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException e) {
+        return ResponseEntity
+                .status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(ApiResponse.error(415, "不支持的媒体类型: " + e.getContentType()));
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingParam(MissingServletRequestParameterException e) {
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(400, "缺少必要参数: " + e.getParameterName()));
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConstraintViolation(ConstraintViolationException e) {
+        String message = e.getConstraintViolations().stream()
+                .map(ConstraintViolation::getMessage)
+                .collect(Collectors.joining("; "));
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error(400, message));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMaxUploadSize(MaxUploadSizeExceededException e) {
+        return ResponseEntity
+                .status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(ApiResponse.error(413, "上传文件大小超过限制"));
     }
 
     @ExceptionHandler(Exception.class)
