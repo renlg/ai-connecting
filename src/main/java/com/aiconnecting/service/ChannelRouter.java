@@ -141,8 +141,10 @@ public class ChannelRouter {
         Long halfOpenCandidateId = selected.getId();
         if (healthTracker.getEffectiveState(halfOpenCandidateId) == ChannelHealthTracker.CircuitState.HALF_OPEN
                 && !healthTracker.tryAcquireHalfOpenProbe(halfOpenCandidateId)) {
+            // 排除同层内所有 HALF_OPEN 渠道（而非仅原候选渠道），
+            // 否则 SWRR 可能选中另一个同样处于探测期的渠道，绕过探测许可检查
             List<Channel> alternatives = selectedTierChannels.stream()
-                    .filter(c -> !c.getId().equals(halfOpenCandidateId))
+                    .filter(c -> healthTracker.getEffectiveState(c.getId()) != ChannelHealthTracker.CircuitState.HALF_OPEN)
                     .toList();
             if (!alternatives.isEmpty()) {
                 selected = cached.swrrState().select(alternatives);
