@@ -179,7 +179,7 @@ public class GeminiRelayService {
         long startTime = System.currentTimeMillis();
 
         String url = channel.getBaseUrl().replaceAll("/+$", "")
-                + "/v1/models/" + model + ":streamGenerateContent?alt=sse&key=" + channel.getApiKey();
+                + "/v1/models/" + model + ":streamGenerateContent?alt=sse";
         java.net.URL urlObj = new java.net.URL(url);
         HttpURLConnection conn = null;
         try {
@@ -191,6 +191,7 @@ public class GeminiRelayService {
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Accept", "text/event-stream");
             conn.setRequestProperty("Connection", "close");
+            conn.setRequestProperty("X-Goog-Api-Key", channel.getApiKey());
             conn.getOutputStream().write(requestBody.getBytes(StandardCharsets.UTF_8));
             conn.getOutputStream().flush();
 

@@ -313,11 +313,12 @@ public class RelaySupport {
         }
 
         String url = channel.getBaseUrl().replaceAll("/+$", "")
-                + "/v1/models/" + model + ":generateContent?key=" + channel.getApiKey();
+                + "/v1/models/" + model + ":generateContent";
         RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
         Request.Builder reqBuilder = new Request.Builder()
                 .url(url)
                 .addHeader("Content-Type", "application/json")
+                .addHeader("X-Goog-Api-Key", channel.getApiKey())
                 .post(body);
 
         try (okhttp3.Response response = httpClient.newCall(reqBuilder.build()).execute()) {
