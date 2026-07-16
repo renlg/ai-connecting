@@ -20,7 +20,6 @@ import com.aiconnecting.service.DashboardService;
 import com.aiconnecting.service.UserService;
 import com.aiconnecting.service.UsageLogService;
 import com.aiconnecting.service.CouponService;
-import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.ChannelHealthTracker;
 import com.aiconnecting.service.OperationLogService;
@@ -47,7 +46,6 @@ public class AdminController {
     private final ChannelService channelService;
     private final UserService userService;
     private final UsageLogService usageLogService;
-    private final TokenService tokenService;
     private final CouponService couponService;
     private final DashboardService dashboardService;
     private final ChannelHealthTracker channelHealthTracker;

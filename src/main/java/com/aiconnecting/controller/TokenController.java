@@ -10,7 +10,6 @@ import com.aiconnecting.entity.User;
 import com.aiconnecting.service.UserService;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.service.ModelConfigService;
-import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.UsageLogService;
@@ -42,7 +41,6 @@ public class TokenController {
     private final UsageLogService usageLogService;
     private final UserService userService;
     private final RelayService relayService;
-    private final ChannelService channelService;
     private final ModelConfigService modelConfigService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
