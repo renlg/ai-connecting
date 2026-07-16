@@ -2,9 +2,7 @@ package com.aiconnecting.controller;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.dto.CouponRedemptionDTO;
-import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Coupon;
-import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.service.CouponService;
@@ -41,7 +39,6 @@ import com.aiconnecting.dto.DashboardStats;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;

@@ -362,41 +362,4 @@ public class GeminiRelayService {
                 "/v1/models/" + model + ":streamGenerateContent");
     }
 
-    // ==================== Gemini → OpenAI 流式转换 ====================
-
-    /**
-     * 读取 Gemini SSE 响应并转换为 OpenAI SSE 格式输出
-     * 返回最后包含 usage 的数据行
-     */
-    public String streamGeminiResponseAsOpenAi(HttpURLConnection conn, HttpServletResponse httpResponse) throws IOException {
-        String lastUsageData = null;
-        var writer = httpResponse.getWriter();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.startsWith("data: ")) {
-                    String data = line.substring(6).trim();
-                    try {
-                        JsonNode json = support.objectMapper.readTree(data);
-                        JsonNode usageMeta = json.get("usageMetadata");
-                        if (usageMeta != null) {
-                            lastUsageData = data;
-                        }
-
-                        String openAiChunk = RelayServiceUtils.convertGeminiStreamChunkToOpenAiSse(support.objectMapper, json);
-                        if (openAiChunk != null) {
-                            writer.write("data: " + openAiChunk + "\n\n");
-                            writer.flush();
-                        }
-                    } catch (Exception parseEx) {
-                        log.warn("转换 Gemini SSE 为 OpenAI 格式失败: {}", data);
-                    }
-                }
-            }
-        }
-        writer.write("data: [DONE]\n\n");
-        writer.flush();
-        return lastUsageData;
-    }
 }

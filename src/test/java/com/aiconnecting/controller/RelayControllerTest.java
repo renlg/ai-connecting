@@ -2,7 +2,6 @@ package com.aiconnecting.controller;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.GlobalExceptionHandler;
-import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
@@ -27,7 +26,6 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;

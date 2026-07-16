@@ -286,40 +286,4 @@ public class UsageLogService {
                 .build();
     }
 
-    /**
-     * 从 usage_logs 查询指定时间范围内（按 tokenId 过滤）的每日统计
-     * 仅用于非 admin 用户
-     */
-    private DashboardDailyStats getUserDailyStatsFromLogs(LocalDateTime since, List<Long> tokenIds) {
-        List<Object[]> creditRows = usageLogRepository.findDailyCreditCostByTokenIdsSince(tokenIds, since);
-        List<Object[]> tokenRows = usageLogRepository.findDailyTokenByModelByTokenIdsSince(tokenIds, since);
-
-        List<DashboardDailyStats.DailyCreditStat> dailyCredits = creditRows.stream()
-                .map(row -> DashboardDailyStats.DailyCreditStat.builder()
-                        .date((String) row[0])
-                        .credits(BigDecimal.valueOf(((Number) row[1]).doubleValue()))
-                        .build())
-                .toList();
-
-        List<DashboardDailyStats.DailyTokenByModelStat> dailyTokensByModel = tokenRows.stream()
-                .map(row -> {
-                    long inputTokens = ((Number) row[2]).longValue();
-                    long cachedTokens = ((Number) row[3]).longValue();
-                    long totalTokens = ((Number) row[4]).longValue();
-                    return DashboardDailyStats.DailyTokenByModelStat.builder()
-                            .date((String) row[0])
-                            .model((String) row[1])
-                            .inputTokens(inputTokens)
-                            .cachedTokens(cachedTokens)
-                            .cacheMissTokens(inputTokens - cachedTokens)
-                            .totalTokens(totalTokens)
-                            .build();
-                })
-                .toList();
-
-        return DashboardDailyStats.builder()
-                .dailyCredits(dailyCredits)
-                .dailyTokensByModel(dailyTokensByModel)
-                .build();
-    }
 }
