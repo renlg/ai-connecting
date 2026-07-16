@@ -4,6 +4,8 @@ import com.aiconnecting.common.ApiResponse;
 import com.aiconnecting.dto.ChannelRequest;
 import com.aiconnecting.dto.StatusRequest;
 import com.aiconnecting.entity.Channel;
+import com.aiconnecting.service.ChannelHealthService;
+import com.aiconnecting.service.ChannelHealthTracker;
 import com.aiconnecting.service.ChannelService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -21,6 +23,8 @@ import java.util.Map;
 public class ChannelController {
 
     private final ChannelService channelService;
+    private final ChannelHealthService channelHealthService;
+    private final ChannelHealthTracker channelHealthTracker;
 
     @GetMapping
     public ApiResponse<List<Channel>> list() {
@@ -57,6 +61,23 @@ public class ChannelController {
     @PostMapping("/{id}/test")
     public ApiResponse<Boolean> test(@PathVariable Long id) {
         return ApiResponse.success(channelService.testChannel(id));
+    }
+
+    /**
+     * 渠道健康看板：熔断器状态、SWRR 权重、错误率等
+     */
+    @GetMapping("/health")
+    public ApiResponse<List<Map<String, Object>>> health() {
+        return ApiResponse.success(channelHealthService.getAllChannelHealth());
+    }
+
+    /**
+     * 手动解除渠道熔断封禁
+     */
+    @PostMapping("/{id}/unblock")
+    public ApiResponse<Void> unblock(@PathVariable Long id) {
+        channelHealthTracker.unblockChannel(id);
+        return ApiResponse.success();
     }
 
     /**

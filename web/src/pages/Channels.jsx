@@ -1,7 +1,11 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined } from '@ant-design/icons'
-import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream } from '../api'
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Tooltip, Checkbox } from 'antd'
+import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined } from '@ant-design/icons'
+import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, getChannelHealth, unblockChannel } from '../api'
+
+const CB_STATE_COLOR = { CLOSED: 'green', HALF_OPEN: 'gold', OPEN: 'red' }
+
+const HEALTH_REFRESH_MS = 30000
 
 export default function Channels() {
   const [channels, setChannels] = useState([])
@@ -19,6 +23,8 @@ export default function Channels() {
   const [testLoading, setTestLoading] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [testModelOptions, setTestModelOptions] = useState([])
+  const [healthMap, setHealthMap] = useState({})
+  const [showBlockedOnly, setShowBlockedOnly] = useState(false)
 
 
   const load = () => {
@@ -26,6 +32,22 @@ export default function Channels() {
     getChannels().then(res => {
       if (res.code === 200) setChannels(res.data || [])
     }).finally(() => setLoading(false))
+  }
+
+  const loadHealth = () => {
+    getChannelHealth().then(res => {
+      if (res.code === 200) {
+        const map = {}
+        ;(res.data || []).forEach(h => { map[h.channelId] = h })
+        setHealthMap(map)
+      }
+    })
+  }
+
+  const handleUnblock = async (id) => {
+    await unblockChannel(id)
+    message.success('已解除封禁')
+    loadHealth()
   }
 
   const loadModels = () => {
@@ -42,7 +64,12 @@ export default function Channels() {
     })
   }
 
-  useEffect(() => { load(); loadModels() }, [])
+  useEffect(() => { load(); loadModels(); loadHealth() }, [])
+
+  useEffect(() => {
+    const timer = setInterval(loadHealth, HEALTH_REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [])
 
   const handleFetchModels = async () => {
     try {
@@ -200,8 +227,41 @@ export default function Channels() {
     } },
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },
     {
-      title: '操作', width: 180, fixed: 'right', render: (_, record) => (
+      title: '健康状态', width: 220, render: (_, record) => {
+        const h = healthMap[record.id]
+        if (!h) return <Tag>加载中</Tag>
+        const state = h.circuitBreakerState
+        const errorRatePct = ((h.errorRate || 0) * 100).toFixed(1)
+        const tooltip = (
+          <div>
+            <div>currentWeight: {h.currentWeight}</div>
+            <div>effectiveWeight: {h.effectiveWeight}</div>
+            <div>最近1分钟请求数: {h.totalRequests1m}</div>
+            <div>探测失败次数: {h.probeFailures}</div>
+            <div>最后成功: {h.lastSuccessAt || '-'}</div>
+            <div>最后失败: {h.lastFailureAt || '-'}</div>
+            <div>最后失败原因: {h.lastFailureReason || '-'}</div>
+          </div>
+        )
+        return (
+          <Tooltip title={tooltip}>
+            <Space size="small" wrap>
+              <Tag color={CB_STATE_COLOR[state] || 'default'}>{state}</Tag>
+              <Tag>{errorRatePct}%</Tag>
+              {state === 'OPEN' && h.blockedUntil && <Tag color="red">至 {h.blockedUntil}</Tag>}
+            </Space>
+          </Tooltip>
+        )
+      }
+    },
+    {
+      title: '操作', width: 220, fixed: 'right', render: (_, record) => (
         <Space size="small" wrap>
+          {healthMap[record.id]?.circuitBreakerState === 'OPEN' && (
+            <Popconfirm title="确定解除封禁？" onConfirm={() => handleUnblock(record.id)}>
+              <Button size="small" icon={<UnlockOutlined />}>解封</Button>
+            </Popconfirm>
+          )}
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
             const formValues = { ...record }

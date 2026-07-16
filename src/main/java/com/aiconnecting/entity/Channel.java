@@ -47,7 +47,7 @@ public class Channel {
     @Column(nullable = false)
     private Integer status;
 
-    /** 优先级, 数字越大优先级越高 */
+    /** 优先级, 数值越低优先级越高, 同优先级组内轮询分发, 低优先级仅在高优先级组不可用时启用 */
     @Column(nullable = false)
     private Integer priority;
 

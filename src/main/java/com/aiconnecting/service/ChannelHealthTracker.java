@@ -140,6 +140,12 @@ public class ChannelHealthTracker {
     private final ConcurrentHashMap<Long, LinkedList<Long>> memWinTotal = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, LinkedList<Long>> memWinError = new ConcurrentHashMap<>();
 
+    /** 健康看板用的最近成功/失败时间与探测失败计数，JVM 本地，不跨实例同步（仅用于展示，不影响熔断判定） */
+    private final ConcurrentHashMap<Long, Long> memLastSuccessAt = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Long> memLastFailureAt = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, String> memLastFailureReason = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Integer> memProbeFailures = new ConcurrentHashMap<>();
+
     private boolean isRedisAvailable() {
         return redisTemplate != null;
     }
@@ -234,6 +240,10 @@ public class ChannelHealthTracker {
      * 记录渠道请求失败（异步执行，不阻塞请求线程）
      */
     public void recordFailure(Long channelId, ErrorCategory category, String errorMessage) {
+        if (category != ErrorCategory.CLIENT_ERROR) {
+            memLastFailureAt.put(channelId, System.currentTimeMillis());
+            memLastFailureReason.put(channelId, category + ": " + errorMessage);
+        }
         switch (category) {
             case RATE_LIMIT:
                 healthExecutor.submit(() -> applyRateLimitCooldown(channelId, errorMessage));
@@ -309,6 +319,7 @@ public class ChannelHealthTracker {
      * 记录渠道请求成功（异步执行，不阻塞请求线程）
      */
     public void recordSuccess(Long channelId) {
+        memLastSuccessAt.put(channelId, System.currentTimeMillis());
         healthExecutor.submit(() -> {
             try {
                 CircuitState state = getEffectiveState(channelId);
@@ -348,6 +359,7 @@ public class ChannelHealthTracker {
         long until = System.currentTimeMillis() + backoff;
         setState(channelId, true, until);
         releasePermit(channelId);
+        memProbeFailures.merge(channelId, 1, Integer::sum);
         log.warn("渠道 {} 重新熔断，退避时长翻倍至 {} 秒", channelId, backoff / 1000);
     }
 
@@ -370,6 +382,7 @@ public class ChannelHealthTracker {
         clearOpenSince(channelId);
         releasePermit(channelId);
         clearWindow(channelId);
+        memProbeFailures.remove(channelId);
     }
 
     /**
@@ -736,6 +749,57 @@ public class ChannelHealthTracker {
     }
 
     /**
+     * 获取渠道最近 1 分钟窗口的错误率（供健康看板使用）
+     */
+    public double getErrorRate1m(Long channelId) {
+        long[] counts = getWindowCounts(channelId);
+        return counts[0] > 0 ? (double) counts[1] / counts[0] : 0d;
+    }
+
+    /**
+     * 获取渠道最近 1 分钟窗口的总请求数（供健康看板使用）
+     */
+    public long getTotalRequests1m(Long channelId) {
+        return getWindowCounts(channelId)[0];
+    }
+
+    /**
+     * 获取渠道封禁截止时间（熔断 OPEN 或限流冷却），未封禁返回 null
+     */
+    public Long getBlockedUntil(Long channelId) {
+        long rateLimitUntil = 0;
+        try {
+            if (isRedisAvailable()) {
+                Long v = redisTemplate.opsForValue().get(RATE_LIMIT_PREFIX + channelId);
+                if (v != null) rateLimitUntil = v;
+            } else {
+                Long v = memRateLimitUntil.get(channelId);
+                if (v != null) rateLimitUntil = v;
+            }
+        } catch (Exception ignored) {}
+        long cbUntil = getEffectiveState(channelId) == CircuitState.OPEN ? getUntil(channelId) : 0;
+        long until = Math.max(rateLimitUntil, cbUntil);
+        long now = System.currentTimeMillis();
+        return until > now ? until : null;
+    }
+
+    public Long getLastSuccessAt(Long channelId) {
+        return memLastSuccessAt.get(channelId);
+    }
+
+    public Long getLastFailureAt(Long channelId) {
+        return memLastFailureAt.get(channelId);
+    }
+
+    public String getLastFailureReason(Long channelId) {
+        return memLastFailureReason.get(channelId);
+    }
+
+    public int getProbeFailures(Long channelId) {
+        return memProbeFailures.getOrDefault(channelId, 0);
+    }
+
+    /**
      * 清除所有追踪数据（渠道配置变更时调用）
      */
     public void clearAll() {
@@ -767,6 +831,10 @@ public class ChannelHealthTracker {
         memCbPermitUntil.clear();
         memWinTotal.clear();
         memWinError.clear();
+        memLastSuccessAt.clear();
+        memLastFailureAt.clear();
+        memLastFailureReason.clear();
+        memProbeFailures.clear();
         log.info("渠道健康追踪数据已清除（内存）");
     }
 
