@@ -1,11 +1,33 @@
--- 数据库迁移脚本：将 channels 表的 models 字段从模型名称转换为模型ID
+-- ============================================================
+-- ai-connecting 数据库迁移总脚本
+-- 合并以下脚本：
+--   migrate_user_levels.sql
+--   migrate_models_to_ids.sql
+--   migrate_cache_tokens_and_multiplier.sql
+-- 执行顺序按原始创建时间排列
+-- 注意：本脚本非幂等，重复执行会因列已存在而报错
 -- 执行前请备份数据库！
+-- ============================================================
+
+-- ============================================================
+-- Part 1: 用户等级 / 渠道支持等级
+-- ============================================================
+
+-- 用户新增 level 字段 (1-5)，默认为 1
+ALTER TABLE users ADD COLUMN level INTEGER NOT NULL DEFAULT 1;
+
+-- 渠道新增 supportedLevels 字段（逗号分隔），默认支持所有等级
+ALTER TABLE channels ADD COLUMN supportedLevels VARCHAR(50) DEFAULT '1,2,3,4,5';
+
+
+-- ============================================================
+-- Part 2: channels 表 models -> modelIds 迁移
+-- ============================================================
 
 -- 1. 添加新字段 modelIds
 ALTER TABLE channels ADD COLUMN modelIds VARCHAR(2000);
 
 -- 2. 数据迁移：将 models 中的模型名称转换为对应的模型ID
--- 使用子查询和 GROUP_CONCAT 进行转换
 UPDATE channels 
 SET modelIds = (
     SELECT GROUP_CONCAT(mc.id, ',')
@@ -13,7 +35,6 @@ SET modelIds = (
     WHERE mc.name IN (
         SELECT DISTINCT TRIM(model_name)
         FROM (
-            -- 将逗号分隔的模型名称拆分为多行
             WITH RECURSIVE split(id, model_name, rest) AS (
                 SELECT 
                     c.id,
@@ -56,8 +77,15 @@ SET modelIds = (
 )
 WHERE models IS NOT NULL AND models != '';
 
--- 3. 删除旧字段 models（可选，建议先验证数据后再执行）
--- ALTER TABLE channels DROP COLUMN models;
 
--- 4. 验证迁移结果
-SELECT id, name, models, modelIds FROM channels WHERE models IS NOT NULL OR modelIds IS NOT NULL;
+-- ============================================================
+-- Part 3: 缓存 Token / 倍率字段
+-- ============================================================
+
+-- usage_logs 表新增缓存 Token 字段
+ALTER TABLE usage_logs ADD COLUMN prompt_tokens_cache_hit INTEGER;
+ALTER TABLE usage_logs ADD COLUMN cached_tokens_cache_creation INTEGER;
+ALTER TABLE usage_logs ADD COLUMN cached_tokens_cache_read INTEGER;
+
+-- model_configs 表新增倍率字段
+ALTER TABLE model_configs ADD COLUMN multiplier DECIMAL(10, 2) NOT NULL DEFAULT 1.0;
