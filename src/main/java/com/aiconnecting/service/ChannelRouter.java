@@ -12,12 +12,12 @@ import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * 渠道路由器 - 加权轮询策略
- * 按模型缓存渠道列表，根据渠道权重进行加权选择
- * 自动跳过被封禁的渠道
+ * 按模型缓存渠道列表，根据渠道优先级进行加权选择
+ * 自动跳过熔断 OPEN 的渠道；渠道是否可用完全由熔断器状态决定，
+ * CLOSED 渠道之间仅按优先级区分权重（不再有动态健康权重）
  *
  * 性能优化：
  * - 封禁状态批量获取（1 次 Redis 调用代替 N 次）
- * - 权重本地缓存（30 秒刷新，避免每次请求访问 Redis）
  */
 @Service
 @RequiredArgsConstructor
@@ -30,11 +30,6 @@ public class ChannelRouter {
     /** 按模型缓存渠道列表，避免每次请求查库 */
     private final ConcurrentHashMap<String, CachedChannelList> channelCache = new ConcurrentHashMap<>();
     private static final long CACHE_TTL_MS = 2 * 60 * 1000L; // 2 分钟
-
-    /** 权重本地缓存，避免每次请求都查 Redis */
-    private final ConcurrentHashMap<Long, Long> weightCache = new ConcurrentHashMap<>();
-    private volatile long weightCacheRefreshAt = 0;
-    private static final long WEIGHT_CACHE_TTL_MS = 15 * 1000L; // 15 秒
 
     private record CachedChannelList(List<Channel> channels, long cachedAt) {
         boolean isExpired() {
@@ -85,11 +80,26 @@ public class ChannelRouter {
             available = fallback;
         }
 
-        // 加权随机选择（使用本地缓存的权重）
+        // 加权随机选择（按优先级）
         Channel selected = weightedSelect(available);
-        log.debug("加权选择渠道: modelId={}, channel={}, weight={}, available={}/{}",
+
+        // 若选中的渠道处于 HALF_OPEN（熔断探测期），需要获取探测许可，
+        // 确保同一时刻只有 1 个请求作为探测流量打到该渠道
+        Long halfOpenCandidateId = selected.getId();
+        if (healthTracker.getEffectiveState(halfOpenCandidateId) == ChannelHealthTracker.CircuitState.HALF_OPEN
+                && !healthTracker.tryAcquireHalfOpenProbe(halfOpenCandidateId)) {
+            List<Channel> alternatives = available.stream()
+                    .filter(c -> !c.getId().equals(halfOpenCandidateId))
+                    .toList();
+            if (!alternatives.isEmpty()) {
+                selected = weightedSelect(alternatives);
+            }
+            // 若没有其他可选渠道，退化为仍使用该渠道（极端并发场景下的兜底）
+        }
+
+        log.debug("加权选择渠道: modelId={}, channel={}, priority={}, available={}/{}",
                 channelModelId, selected.getId(),
-                getCachedWeight(selected.getId()),
+                selected.getPriority(),
                 available.size(), channels.size());
         return selected;
     }
@@ -149,41 +159,13 @@ public class ChannelRouter {
     }
 
     /**
-     * 计算渠道有效权重 = 健康权重 × 优先级系数
+     * 计算渠道有效权重 = 优先级系数
      * priority 为渠道配置的优先级（数字越大越优先），最低为 0
-     * 优先级系数 = priority + 1（保证 priority=0 时系数为 1，不被完全忽略）
+     * 有效权重 = priority + 1（保证 priority=0 时权重为 1，不被完全忽略）
+     * 渠道是否可用完全由熔断器状态决定，CLOSED 渠道之间不再有动态健康权重
      */
     private long getEffectiveWeight(Channel c) {
-        long healthWeight = getCachedWeight(c.getId());
-        int priorityCoeff = (c.getPriority() != null ? c.getPriority() : 0) + 1;
-        return healthWeight * priorityCoeff;
-    }
-
-    /**
-     * 获取渠道权重（优先本地缓存，定期刷新）
-     */
-    private long getCachedWeight(Long channelId) {
-        refreshWeightCacheIfNeeded();
-        Long cached = weightCache.get(channelId);
-        return cached != null ? cached : 100L; // 默认权重 100
-    }
-
-    /**
-     * 定期刷新权重缓存（30 秒一次，从 Redis 批量拉取）
-     */
-    private void refreshWeightCacheIfNeeded() {
-        if (System.currentTimeMillis() < weightCacheRefreshAt) {
-            return;
-        }
-        weightCacheRefreshAt = System.currentTimeMillis() + WEIGHT_CACHE_TTL_MS;
-        // 仅对已缓存的渠道刷新权重，避免拉取全量
-        for (Long channelId : new ArrayList<>(weightCache.keySet())) {
-            try {
-                weightCache.put(channelId, healthTracker.getWeight(channelId));
-            } catch (Exception e) {
-                log.debug("刷新渠道 {} 权重缓存失败: {}", channelId, e.getMessage());
-            }
-        }
+        return (c.getPriority() != null ? c.getPriority() : 0) + 1;
     }
 
     /**
@@ -206,8 +188,6 @@ public class ChannelRouter {
      */
     public void clearCache() {
         channelCache.clear();
-        weightCache.clear();
-        weightCacheRefreshAt = 0;
         healthTracker.clearAll();
         log.info("渠道路由缓存已清除");
     }
@@ -219,10 +199,6 @@ public class ChannelRouter {
         }
         List<Channel> channels = channelService.getActiveChannelsByModel(channelModelId);
         channelCache.put(channelModelId, new CachedChannelList(channels, System.currentTimeMillis()));
-        // 初始化新渠道的权重缓存
-        for (Channel c : channels) {
-            weightCache.putIfAbsent(c.getId(), healthTracker.getWeight(c.getId()));
-        }
         log.debug("刷新渠道缓存: modelId={}, channelCount={}", channelModelId, channels.size());
         return channels;
     }

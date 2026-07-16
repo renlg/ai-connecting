@@ -16,7 +16,9 @@ import org.springframework.data.redis.core.RedisTemplate;
 
 /**
  * 渠道探测定时任务
- * 每隔 1 小时探测被封禁的渠道，如果恢复则解封，连续 5 次探测失败则自动禁用
+ * 每隔 1 小时探测处于熔断 OPEN 状态的渠道，如果恢复则手动关闭熔断器；
+ * HALF_OPEN 渠道不由本任务探测，而是由真实流量触发探测（见 ChannelHealthTracker）。
+ * 若渠道持续处于 OPEN 状态超过 2 小时，自动禁用。
  */
 @Component
 @RequiredArgsConstructor
@@ -94,25 +96,28 @@ public class ChannelProbeTask {
      * 实际探测逻辑
      */
     private void doProbe() {
-        Set<Long> blockedIds = healthTracker.getBlockedChannelIds();
-        if (blockedIds.isEmpty()) {
-            log.debug("没有被封禁的渠道，跳过探测");
+        Set<Long> openIds = healthTracker.getCircuitOpenChannelIds();
+        if (openIds.isEmpty()) {
+            log.debug("没有处于熔断 OPEN 状态的渠道，跳过探测");
             return;
         }
 
-        log.info("开始探测 {} 个被封禁的渠道: {}", blockedIds.size(), blockedIds);
+        log.info("开始探测 {} 个熔断 OPEN 状态的渠道: {}", openIds.size(), openIds);
 
-        for (Long channelId : blockedIds) {
+        for (Long channelId : openIds) {
             try {
                 Channel channel = channelService.getById(channelId);
                 if (channel.getStatus() == 0) {
                     log.info("渠道 {} 已被手动禁用，跳过探测", channelId);
                     continue;
                 }
+                if (healthTracker.isOpenTooLong(channelId)) {
+                    healthTracker.autoDisableChannel(channelId);
+                    continue;
+                }
                 probeChannel(channel);
             } catch (Exception e) {
                 log.error("探测渠道 {} 时发生异常: {}", channelId, e.getMessage(), e);
-                healthTracker.recordProbeFailure(channelId, e.getMessage());
             }
         }
     }
@@ -143,22 +148,16 @@ public class ChannelProbeTask {
 
         try (Response response = probeClient.newCall(reqBuilder.build()).execute()) {
             if (response.isSuccessful()) {
-                log.info("渠道 {} 探测成功 (HTTP {})，解除封禁", channelId, response.code());
+                log.info("渠道 {} 探测成功 (HTTP {})，关闭熔断器", channelId, response.code());
                 healthTracker.unblockChannel(channelId);
-                // 重置权重为默认值，让渠道重新参与轮询
-                healthTracker.recordSuccess(channelId);
             } else {
                 String body = response.body() != null ? response.body().string() : "";
                 String errorMsg = String.format("HTTP %d: %s", response.code(),
                         body.length() > 200 ? body.substring(0, 200) : body);
-                log.warn("渠道 {} 探测失败: {}", channelId, errorMsg);
-                int failCount = healthTracker.recordProbeFailure(channelId, errorMsg);
-                log.warn("渠道 {} 连续探测失败 {}/5 次", channelId, failCount);
+                log.warn("渠道 {} 探测失败，仍处于熔断状态，等待下一轮探测: {}", channelId, errorMsg);
             }
         } catch (IOException e) {
-            log.warn("渠道 {} 探测连接失败: {}", channelId, e.getMessage());
-            int failCount = healthTracker.recordProbeFailure(channelId, e.getMessage());
-            log.warn("渠道 {} 连续探测失败 {}/5 次", channelId, failCount);
+            log.warn("渠道 {} 探测连接失败，仍处于熔断状态，等待下一轮探测: {}", channelId, e.getMessage());
         }
     }
 }
