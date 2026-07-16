@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Tag, Switch, message, Button, Popconfirm, InputNumber, Modal, Form, Space, Input, Select } from 'antd'
+import { Table, Tag, Switch, message, Button, Popconfirm, InputNumber, Modal, Form, Space, Input, Select, Tooltip } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { getUsers, updateUserStatus, resetUserPassword, updateUserCredits, updateUserLevel } from '../api'
@@ -59,7 +59,7 @@ export default function Users() {
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '用户名', dataIndex: 'username', width: 120 },
     { title: '昵称', dataIndex: 'nickname', width: 120 },
-    { title: '邮箱', dataIndex: 'email' },
+    { title: '邮箱', dataIndex: 'email', width: 200, ellipsis: { showTitle: false }, render: v => v ? <Tooltip title={v}><span style={{ cursor: 'pointer' }}>{v}</span></Tooltip> : '-' },
     { title: '角色', dataIndex: 'role', width: 100, render: v => <Tag color={v === 'admin' ? 'red' : 'blue'}>{v === 'admin' ? '管理员' : '用户'}</Tag> },
     { title: '额度', dataIndex: 'quota', width: 100, render: v => v === -1 ? '无限' : v },
     { title: '已用额度', dataIndex: 'usedQuota', width: 100 },
@@ -100,7 +100,7 @@ export default function Users() {
           prefix={<SearchOutlined />}
         />
       </div>
-      <Table columns={columns} dataSource={users} rowKey="id" loading={loading} scroll={{ x: 1100 }} />
+      <Table columns={columns} dataSource={users} rowKey="id" loading={loading} scroll={{ x: 1430 }} />
       <Modal title={`修改积分 - ${editingUser?.username || ''}`} open={creditsModalOpen} onOk={handleUpdateCredits} onCancel={() => setCreditsModalOpen(false)} width={400}>
         <Form form={creditsForm} layout="vertical">
           <Form.Item name="credits" label="积分" rules={[{ required: true, message: '请输入积分数量' }]}>
