@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
@@ -262,9 +263,12 @@ public class RelaySupport {
             }
 
             return responseBody;
+        } catch (SocketTimeoutException e) {
+            log.error("Timed out forwarding request to channel {}: {}", channel.getId(), e.getMessage());
+            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(), e);
         } catch (IOException e) {
             log.error("Failed to forward request to channel {}: {}", channel.getId(), e.getMessage());
-            throw new BusinessException(502, "渠道请求失败: " + e.getMessage());
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
         }
     }
 
@@ -288,8 +292,10 @@ public class RelaySupport {
                 throw new BusinessException(response.code(), "上游 API 错误: " + responseBody);
             }
             return responseBody;
+        } catch (SocketTimeoutException e) {
+            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(), e);
         } catch (IOException e) {
-            throw new BusinessException(502, "渠道请求失败: " + e.getMessage());
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
         }
     }
 
@@ -321,8 +327,10 @@ public class RelaySupport {
                 throw new BusinessException(response.code(), "上游 API 错误: " + responseBody);
             }
             return responseBody;
+        } catch (SocketTimeoutException e) {
+            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(), e);
         } catch (IOException e) {
-            throw new BusinessException(502, "渠道请求失败: " + e.getMessage());
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
         }
     }
 

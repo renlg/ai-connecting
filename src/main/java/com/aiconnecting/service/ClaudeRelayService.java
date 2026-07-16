@@ -45,8 +45,9 @@ public class ClaudeRelayService {
         Set<Long> triedChannels = new HashSet<>();
         long startTime = System.currentTimeMillis();
         String lastError = null;
+        int attempt = 0;
 
-        for (int attempt = 1; attempt <= RelaySupport.MAX_RETRIES; attempt++) {
+        while (attempt < RelaySupport.MAX_RETRIES) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -58,6 +59,13 @@ public class ClaudeRelayService {
             }
             triedChannels.add(channel.getId());
 
+            if (support.isChannelRateLimited(channel)) {
+                lastError = "渠道 " + channel.getId() + " 请求频率超限";
+                log.warn("跳过限流渠道 {}: {}", channel.getId(), lastError);
+                continue;
+            }
+
+            attempt++;
             try {
                 String response;
                 if (support.isClaudeTypeChannel(channel)) {
@@ -83,7 +91,8 @@ public class ClaudeRelayService {
             } catch (BusinessException e) {
                 lastError = e.getMessage();
                 log.error("Claude 渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
-                support.channelHealthTracker.recordFailure(channel.getId(), e.getMessage());
+                support.channelHealthTracker.recordFailure(channel.getId(),
+                        ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage());
                 if (attempt == RelaySupport.MAX_RETRIES) {
                     throw new BusinessException(e.getCode(),
                             "所有渠道均不可用，最后错误: " + lastError);
@@ -103,8 +112,9 @@ public class ClaudeRelayService {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
         Set<Long> triedChannels = new HashSet<>();
         String lastError = null;
+        int attempt = 0;
 
-        for (int attempt = 1; attempt <= RelaySupport.MAX_RETRIES; attempt++) {
+        while (attempt < RelaySupport.MAX_RETRIES) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -115,6 +125,14 @@ public class ClaudeRelayService {
                 return;
             }
             triedChannels.add(channel.getId());
+
+            if (support.isChannelRateLimited(channel)) {
+                lastError = "渠道 " + channel.getId() + " 请求频率超限";
+                log.warn("[Claude流式] 跳过限流渠道 {}: {}", channel.getId(), lastError);
+                continue;
+            }
+
+            attempt++;
             log.info("[Claude流式] 尝试 {}/{}, channel={}", attempt, RelaySupport.MAX_RETRIES, channel.getId());
 
             try {
@@ -131,7 +149,10 @@ public class ClaudeRelayService {
             } catch (Exception e) {
                 lastError = e.getMessage();
                 log.error("[Claude流式] 渠道 {} 失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
-                support.channelHealthTracker.recordFailure(channel.getId(), e.getMessage());
+                ChannelHealthTracker.ErrorCategory category = (e instanceof BusinessException be)
+                        ? ChannelHealthTracker.ErrorCategory.fromStatusCode(be.getCode())
+                        : ChannelHealthTracker.ErrorCategory.fromException(e);
+                support.channelHealthTracker.recordFailure(channel.getId(), category, e.getMessage());
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) {
                     log.info("[Claude流式] 响应未提交，尝试下一个渠道");
                     continue;

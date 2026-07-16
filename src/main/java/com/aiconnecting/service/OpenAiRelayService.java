@@ -39,8 +39,9 @@ public class OpenAiRelayService {
         Set<Long> triedChannels = new HashSet<>();
         long startTime = System.currentTimeMillis();
         String lastError = null;
+        int attempt = 0;
 
-        for (int attempt = 1; attempt <= RelaySupport.MAX_RETRIES; attempt++) {
+        while (attempt < RelaySupport.MAX_RETRIES) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -54,10 +55,11 @@ public class OpenAiRelayService {
 
             if (support.isChannelRateLimited(channel)) {
                 lastError = "渠道 " + channel.getId() + " 请求频率超限";
-                log.warn("重试 {}/{}: {}", attempt, RelaySupport.MAX_RETRIES, lastError);
+                log.warn("跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
             }
 
+            attempt++;
             try {
                 String response;
                 if (support.isGeminiTypeChannel(channel)) {
@@ -74,7 +76,8 @@ public class OpenAiRelayService {
             } catch (BusinessException e) {
                 lastError = e.getMessage();
                 log.error("渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
-                support.channelHealthTracker.recordFailure(channel.getId(), e.getMessage());
+                support.channelHealthTracker.recordFailure(channel.getId(),
+                        ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage());
                 if (attempt == RelaySupport.MAX_RETRIES) {
                     throw new BusinessException(e.getCode(),
                             "所有渠道均不可用，最后错误: " + lastError);
@@ -94,8 +97,9 @@ public class OpenAiRelayService {
         Set<Long> triedChannels = new HashSet<>();
         long startTime = System.currentTimeMillis();
         String lastError = null;
+        int attempt = 0;
 
-        for (int attempt = 1; attempt <= RelaySupport.MAX_RETRIES; attempt++) {
+        while (attempt < RelaySupport.MAX_RETRIES) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -109,10 +113,11 @@ public class OpenAiRelayService {
 
             if (support.isChannelRateLimited(channel)) {
                 lastError = "渠道 " + channel.getId() + " 请求频率超限";
-                log.warn("重试 {}/{}: {}", attempt, RelaySupport.MAX_RETRIES, lastError);
+                log.warn("跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
             }
 
+            attempt++;
             String modifiedBody = support.injectStreamOptions(requestBody, path);
 
             SseUtils.setSseHeaders(httpResponse);
@@ -129,7 +134,8 @@ public class OpenAiRelayService {
             } catch (IOException e) {
                 lastError = e.getMessage();
                 log.error("渠道 {} 流式连接失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
-                support.channelHealthTracker.recordFailure(channel.getId(), e.getMessage());
+                support.channelHealthTracker.recordFailure(channel.getId(),
+                        ChannelHealthTracker.ErrorCategory.fromException(e), e.getMessage());
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                 if (!httpResponse.isCommitted()) {
                     RelayServiceUtils.writeOpenAiError(httpResponse, 502, "渠道请求失败: " + e.getMessage());
@@ -145,7 +151,8 @@ public class OpenAiRelayService {
                             ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
                     lastError = "HTTP " + code + " - " + errorBody;
                     log.warn("渠道 {} 流式请求失败: {}", channel.getId(), lastError);
-                    support.channelHealthTracker.recordFailure(channel.getId(), lastError);
+                    support.channelHealthTracker.recordFailure(channel.getId(),
+                            ChannelHealthTracker.ErrorCategory.fromStatusCode(code), lastError);
                     conn.disconnect();
                     if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                     httpResponse.setStatus(code);
@@ -174,7 +181,8 @@ public class OpenAiRelayService {
                 conn.disconnect();
                 lastError = e.getMessage();
                 log.error("渠道 {} 流式请求异常 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
-                support.channelHealthTracker.recordFailure(channel.getId(), e.getMessage());
+                support.channelHealthTracker.recordFailure(channel.getId(),
+                        ChannelHealthTracker.ErrorCategory.fromException(e), e.getMessage());
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                 if (!httpResponse.isCommitted()) {
                     RelayServiceUtils.writeOpenAiError(httpResponse, 502, "渠道请求失败: " + e.getMessage());

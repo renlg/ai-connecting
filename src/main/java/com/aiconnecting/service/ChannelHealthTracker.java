@@ -40,8 +40,37 @@ public class ChannelHealthTracker {
     /** 封禁时长：1 小时 */
     private static final long BLOCK_DURATION_MS = 60 * 60 * 1000L;
 
+    /** 上游限流（429）冷却时长：30 秒，不计入失败窗口 */
+    private static final long RATE_LIMIT_COOLDOWN_MS = 30 * 1000L;
+
     /** 探测失败 5 次后自动禁用 */
     private static final int PROBE_DISABLE_THRESHOLD = 5;
+
+    /**
+     * 上游错误分类
+     * TIMEOUT/SERVER_ERROR/CONNECTION_ERROR 计入渠道健康失败窗口
+     * RATE_LIMIT 仅短暂冷却，不计入失败窗口
+     * AUTH_ERROR 立即封禁 1 小时（密钥可能已失效），但不计入失败窗口
+     * CLIENT_ERROR 是用户请求本身的问题，不影响渠道健康
+     */
+    public enum ErrorCategory {
+        TIMEOUT, SERVER_ERROR, RATE_LIMIT, AUTH_ERROR, CLIENT_ERROR, CONNECTION_ERROR;
+
+        public static ErrorCategory fromStatusCode(int code) {
+            if (code == 429) return RATE_LIMIT;
+            if (code == 401 || code == 403) return AUTH_ERROR;
+            if (code == 504) return TIMEOUT;
+            if (code == 502 || code == 503) return CONNECTION_ERROR;
+            if (code >= 500) return SERVER_ERROR;
+            if (code >= 400) return CLIENT_ERROR;
+            return SERVER_ERROR;
+        }
+
+        public static ErrorCategory fromException(Throwable e) {
+            if (e instanceof java.net.SocketTimeoutException) return TIMEOUT;
+            return CONNECTION_ERROR;
+        }
+    }
 
     // ==================== Redis Key 前缀 ====================
     private static final String WEIGHT_PREFIX = "channel:weight:";
@@ -140,19 +169,63 @@ public class ChannelHealthTracker {
 
     /**
      * 记录渠道请求失败（异步执行，不阻塞请求线程）
-     * 如果在 10 分钟窗口内失败次数达到阈值，则封禁该渠道 1 小时
+     * 根据错误分类采取不同策略：
+     * - TIMEOUT/SERVER_ERROR/CONNECTION_ERROR: 降低权重并计入 3 分钟失败窗口，达到阈值则封禁 1 小时
+     * - RATE_LIMIT: 仅短暂冷却（30 秒），不计入失败窗口，不影响权重
+     * - AUTH_ERROR: 密钥可能已失效，立即封禁 1 小时，不计入失败窗口
+     * - CLIENT_ERROR: 用户请求本身有误，渠道本身健康，不做任何记录
      *
      * @param channelId    渠道 ID
+     * @param category     错误分类
      * @param errorMessage 失败原因（用于日志）
      */
-    public void recordFailure(Long channelId, String errorMessage) {
-        healthExecutor.submit(() -> {
-            try {
-                doRecordFailure(channelId, errorMessage);
-            } catch (Exception e) {
-                log.error("异步记录渠道 {} 失败异常: {}", channelId, e.getMessage(), e);
+    public void recordFailure(Long channelId, ErrorCategory category, String errorMessage) {
+        switch (category) {
+            case RATE_LIMIT:
+                healthExecutor.submit(() -> applyRateLimitCooldown(channelId, errorMessage));
+                break;
+            case AUTH_ERROR:
+                healthExecutor.submit(() -> {
+                    log.warn("渠道 {} 鉴权失败（{}），密钥可能已失效，立即封禁 1 小时: {}",
+                            channelId, category, errorMessage);
+                    blockChannel(channelId);
+                });
+                break;
+            case CLIENT_ERROR:
+                // 用户请求本身有误（400/404/413/422 等），渠道健康不受影响
+                break;
+            case TIMEOUT:
+            case SERVER_ERROR:
+            case CONNECTION_ERROR:
+            default:
+                healthExecutor.submit(() -> {
+                    try {
+                        decreaseWeight(channelId);
+                        doRecordFailure(channelId, category + ": " + errorMessage);
+                    } catch (Exception e) {
+                        log.error("异步记录渠道 {} 失败异常: {}", channelId, e.getMessage(), e);
+                    }
+                });
+                break;
+        }
+    }
+
+    /**
+     * 上游限流（429）短暂冷却，不计入失败窗口
+     */
+    private void applyRateLimitCooldown(Long channelId, String errorMessage) {
+        long until = System.currentTimeMillis() + RATE_LIMIT_COOLDOWN_MS;
+        try {
+            if (isRedisAvailable()) {
+                redisTemplate.opsForValue().set(BLOCK_PREFIX + channelId, until, RATE_LIMIT_COOLDOWN_MS, TimeUnit.MILLISECONDS);
+                log.info("渠道 {} 触发上游限流，短暂冷却 {} 秒: {}", channelId, RATE_LIMIT_COOLDOWN_MS / 1000, errorMessage);
+                return;
             }
-        });
+        } catch (Exception e) {
+            log.warn("Redis 设置渠道 {} 限流冷却失败，降级为内存模式: {}", channelId, e.getMessage());
+        }
+        memBlockUntil.put(channelId, until);
+        log.info("渠道 {} 触发上游限流，短暂冷却 {} 秒: {}", channelId, RATE_LIMIT_COOLDOWN_MS / 1000, errorMessage);
     }
 
     /**

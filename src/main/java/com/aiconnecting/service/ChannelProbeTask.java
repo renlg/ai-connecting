@@ -124,16 +124,20 @@ public class ChannelProbeTask {
         Long channelId = channel.getId();
         log.info("探测渠道 {} ({})...", channelId, channel.getName());
 
-        String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1/models";
-        Request.Builder reqBuilder = new Request.Builder()
-                .url(url)
-                .get();
+        Request.Builder reqBuilder = new Request.Builder().get();
 
-        // 根据渠道类型设置认证头
-        if ("claude".equalsIgnoreCase(channel.getType()) || "anthropic".equalsIgnoreCase(channel.getType())) {
+        if ("gemini".equalsIgnoreCase(channel.getType())) {
+            // Gemini 使用 v1beta/models 端点，密钥通过 query 参数传递，不使用 Authorization 头
+            String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1beta/models?key=" + channel.getApiKey();
+            reqBuilder.url(url);
+        } else if ("claude".equalsIgnoreCase(channel.getType()) || "anthropic".equalsIgnoreCase(channel.getType())) {
+            String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1/models";
+            reqBuilder.url(url);
             reqBuilder.addHeader("x-api-key", channel.getApiKey());
             reqBuilder.addHeader("anthropic-version", "2023-06-01");
         } else {
+            String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1/models";
+            reqBuilder.url(url);
             reqBuilder.addHeader("Authorization", "Bearer " + channel.getApiKey());
         }
 
