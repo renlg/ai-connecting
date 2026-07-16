@@ -2,6 +2,7 @@ package com.aiconnecting.controller;
 
 import com.aiconnecting.common.ApiResponse;
 import com.aiconnecting.dto.ChannelRequest;
+import com.aiconnecting.dto.ChannelResponse;
 import com.aiconnecting.dto.StatusRequest;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.service.ChannelHealthService;
@@ -16,6 +17,7 @@ import jakarta.validation.Valid;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/admin/channels")
@@ -27,23 +29,34 @@ public class ChannelController {
     private final ChannelHealthTracker channelHealthTracker;
 
     @GetMapping
-    public ApiResponse<List<Channel>> list() {
-        return ApiResponse.success(channelService.listAll());
+    public ApiResponse<List<ChannelResponse>> list() {
+        return ApiResponse.success(channelService.listAll().stream()
+                .map(ChannelResponse::fromChannel)
+                .collect(Collectors.toList()));
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<Channel> getById(@PathVariable Long id) {
-        return ApiResponse.success(channelService.getById(id));
+    public ApiResponse<ChannelResponse> getById(@PathVariable Long id) {
+        return ApiResponse.success(ChannelResponse.fromChannel(channelService.getById(id)));
+    }
+
+    /**
+     * 查看渠道明文 API Key
+     */
+    @GetMapping("/{id}/apikey")
+    public ApiResponse<Map<String, String>> getApiKeyPlaintext(@PathVariable Long id) {
+        Channel channel = channelService.getById(id);
+        return ApiResponse.success(Map.of("apiKey", channel.getApiKey()));
     }
 
     @PostMapping
-    public ApiResponse<Channel> create(@RequestBody ChannelRequest request) {
-        return ApiResponse.success(channelService.create(request));
+    public ApiResponse<ChannelResponse> create(@RequestBody ChannelRequest request) {
+        return ApiResponse.success(ChannelResponse.fromChannel(channelService.create(request)));
     }
 
     @PutMapping("/{id}")
-    public ApiResponse<Channel> update(@PathVariable Long id, @RequestBody ChannelRequest request) {
-        return ApiResponse.success(channelService.update(id, request));
+    public ApiResponse<ChannelResponse> update(@PathVariable Long id, @RequestBody ChannelRequest request) {
+        return ApiResponse.success(ChannelResponse.fromChannel(channelService.update(id, request)));
     }
 
     @DeleteMapping("/{id}")

@@ -182,7 +182,9 @@ public class ChannelService {
         if (request.getName() != null) channel.setName(request.getName());
         if (request.getType() != null) channel.setType(request.getType());
         if (request.getBaseUrl() != null) channel.setBaseUrl(request.getBaseUrl());
-        if (request.getApiKey() != null) channel.setApiKey(request.getApiKey());
+        if (request.getApiKey() != null && !request.getApiKey().contains("...")) {
+            channel.setApiKey(request.getApiKey());
+        }
         if (request.getModelIds() != null) channel.setModelIds(request.getModelIds());
         if (request.getStatus() != null) channel.setStatus(request.getStatus());
         if (request.getPriority() != null) channel.setPriority(request.getPriority());

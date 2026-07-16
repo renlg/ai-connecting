@@ -1,5 +1,6 @@
 package com.aiconnecting.entity;
 
+import com.aiconnecting.config.ApiKeyCryptoConverter;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
@@ -32,6 +33,7 @@ public class Channel {
     private String baseUrl;
 
     /** API Key */
+    @Convert(converter = ApiKeyCryptoConverter.class)
     @Column(nullable = false, length = 1000)
     private String apiKey;
 

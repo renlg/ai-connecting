@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Tooltip, Checkbox } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined } from '@ant-design/icons'
-import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, getChannelHealth, unblockChannel } from '../api'
+import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons'
+import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, getChannelHealth, unblockChannel, getChannelApiKey } from '../api'
 
 const CB_STATE_COLOR = { CLOSED: 'green', HALF_OPEN: 'gold', OPEN: 'red' }
 
@@ -25,6 +25,8 @@ export default function Channels() {
   const [testModelOptions, setTestModelOptions] = useState([])
   const [healthMap, setHealthMap] = useState({})
   const [showBlockedOnly, setShowBlockedOnly] = useState(false)
+  const [revealedKeys, setRevealedKeys] = useState({})
+  const [revealingId, setRevealingId] = useState(null)
 
 
   const load = () => {
@@ -48,6 +50,34 @@ export default function Channels() {
     await unblockChannel(id)
     message.success('已解除封禁')
     loadHealth()
+  }
+
+  const revealApiKey = async (id) => {
+    if (revealedKeys[id]) return revealedKeys[id]
+    setRevealingId(id)
+    try {
+      const res = await getChannelApiKey(id)
+      if (res.code === 200) {
+        const key = res.data?.apiKey
+        setRevealedKeys(prev => ({ ...prev, [id]: key }))
+        return key
+      }
+    } finally {
+      setRevealingId(null)
+    }
+    return null
+  }
+
+  const handleViewApiKey = async (id) => {
+    await revealApiKey(id)
+  }
+
+  const handleCopyApiKey = async (id) => {
+    const key = await revealApiKey(id)
+    if (key) {
+      await navigator.clipboard.writeText(key)
+      message.success('已复制')
+    }
   }
 
   const loadModels = () => {
@@ -212,6 +242,31 @@ export default function Channels() {
     { title: '名称', dataIndex: 'name', width: 120 },
     { title: '类型', dataIndex: 'type', width: 100, render: v => <Tag color="blue">{v}</Tag> },
     { title: 'Base URL', dataIndex: 'baseUrl', ellipsis: true },
+    {
+      title: 'API Key', dataIndex: 'apiKey', width: 200, render: (v, record) => (
+        <Space size="small">
+          <span style={{ fontFamily: 'monospace' }}>{revealedKeys[record.id] || v}</span>
+          <Tooltip title="查看明文">
+            <Button
+              size="small"
+              type="text"
+              icon={<EyeOutlined />}
+              loading={revealingId === record.id}
+              onClick={() => handleViewApiKey(record.id)}
+            />
+          </Tooltip>
+          <Tooltip title="复制">
+            <Button
+              size="small"
+              type="text"
+              icon={<CopyOutlined />}
+              loading={revealingId === record.id}
+              onClick={() => handleCopyApiKey(record.id)}
+            />
+          </Tooltip>
+        </Space>
+      )
+    },
     { title: '模型', dataIndex: 'modelIds', ellipsis: true, render: v => {
       if (!v) return '-'
       // 将ID转换为显示名称

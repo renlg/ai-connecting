@@ -42,6 +42,7 @@ export const updateChannel = (id, data) => api.put(`/api/admin/channels/${id}`, 
 export const deleteChannel = (id) => api.delete(`/api/admin/channels/${id}`);
 export const updateChannelStatus = (id, status) => api.put(`/api/admin/channels/${id}/status`, { status });
 export const getChannelHealth = () => api.get('/api/admin/channels/health');
+export const getChannelApiKey = (id) => api.get(`/api/admin/channels/${id}/apikey`);
 export const unblockChannel = (id) => api.post(`/api/admin/channels/${id}/unblock`);
 export const fetchChannelModels = (data) => api.post('/api/admin/channels/fetch-models', data);
 

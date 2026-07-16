@@ -67,3 +67,4 @@ app:
   admin:
     default-password: ${ADMIN_DEFAULT_PASSWORD}  # 必须通过环境变量设置
     reset-password: ${ADMIN_RESET_PASSWORD:}
+  # CHANNEL_ENCRYPTION_KEY: base64-encoded 32-byte key for AES-256-GCM encryption of channel API keys (required, no default)
