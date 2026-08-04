@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography, Tooltip } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
-import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, testTokenChatStream, getTokenModels } from '../api'
+import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCreditHistoryDetail, testTokenChatStream, getTokenModels } from '../api'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
@@ -17,6 +17,10 @@ export default function Tokens() {
   const [historyToken, setHistoryToken] = useState(null)
   const [historyData, setHistoryData] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [detailModalOpen, setDetailModalOpen] = useState(false)
+  const [detailDate, setDetailDate] = useState('')
+  const [detailData, setDetailData] = useState([])
+  const [detailLoading, setDetailLoading] = useState(false)
   const [testModalOpen, setTestModalOpen] = useState(false)
   const [testToken, setTestToken] = useState(null)
   const [testProtocol, setTestProtocol] = useState('openai')
@@ -93,6 +97,15 @@ export default function Tokens() {
     getTokenCreditHistory(token.id).then(res => {
       if (res.code === 200) setHistoryData(res.data || [])
     }).finally(() => setHistoryLoading(false))
+  }
+
+  const openCreditHistoryDetail = (record) => {
+    setDetailDate(record.date)
+    setDetailModalOpen(true)
+    setDetailLoading(true)
+    getTokenCreditHistoryDetail(historyToken.id, record.date).then(res => {
+      if (res.code === 200) setDetailData(res.data || [])
+    }).finally(() => setDetailLoading(false))
   }
 
   const copyToken = (key) => {
@@ -277,6 +290,32 @@ export default function Tokens() {
           pagination={{ pageSize: 10 }}
           size="small"
           locale={{ emptyText: '暂无消耗记录' }}
+          onRow={record => ({ onClick: () => openCreditHistoryDetail(record), style: { cursor: 'pointer' } })}
+        />
+      </Modal>
+
+      {/* 消耗记录明细弹窗 - 展示输入/输出 token 数 */}
+      <Modal
+        title={`消耗明细 - ${detailDate}`}
+        open={detailModalOpen}
+        onCancel={() => setDetailModalOpen(false)}
+        footer={null}
+        width={700}
+      >
+        <Table
+          columns={[
+            { title: '时间', dataIndex: 'time', key: 'time' },
+            { title: '模型', dataIndex: 'model', key: 'model' },
+            { title: '输入 Token', dataIndex: 'inputTokens', key: 'inputTokens' },
+            { title: '输出 Token', dataIndex: 'outputTokens', key: 'outputTokens' },
+            { title: '消耗积分', dataIndex: 'credits', key: 'credits', render: v => Math.round(Number(v)) + ' 积分' },
+          ]}
+          dataSource={detailData}
+          rowKey="id"
+          loading={detailLoading}
+          pagination={{ pageSize: 10 }}
+          size="small"
+          locale={{ emptyText: '暂无明细记录' }}
         />
       </Modal>
 

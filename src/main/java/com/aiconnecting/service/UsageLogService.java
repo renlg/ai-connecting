@@ -183,6 +183,13 @@ public class UsageLogService {
     }
 
     /**
+     * 查询指定 Token 在指定日期的消耗记录明细（含输入/输出 token 数）
+     */
+    public List<Object[]> getLogDetails(Long tokenId, String date) {
+        return usageLogRepository.findLogDetailsByTokenIdAndDate(tokenId, date);
+    }
+
+    /**
      * 按 Token ID 列表查询缓存创建/读取 token 统计（全部时间）
      */
     public long[] getCacheStats(List<Long> tokenIds) {

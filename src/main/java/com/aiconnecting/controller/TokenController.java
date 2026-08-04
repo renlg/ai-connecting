@@ -123,6 +123,29 @@ public class TokenController {
         return ApiResponse.success(result);
     }
 
+    @GetMapping("/{id}/credit-history/{date}")
+    public ApiResponse<List<Map<String, Object>>> creditHistoryDetail(@AuthenticationPrincipal User user,
+                                                                       @PathVariable Long id,
+                                                                       @PathVariable String date) {
+        Token token = tokenService.getById(id);
+        if (!"admin".equals(user.getRole()) && !token.getUserId().equals(user.getId())) {
+            throw new BusinessException(403, "无权查看该 Token 的消耗记录");
+        }
+        List<Object[]> rows = usageLogService.getLogDetails(id, date);
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object[] row : rows) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", row[0]);
+            item.put("model", row[1]);
+            item.put("inputTokens", row[2] != null ? ((Number) row[2]).longValue() : 0L);
+            item.put("outputTokens", row[3] != null ? ((Number) row[3]).longValue() : 0L);
+            item.put("credits", row[4]);
+            item.put("time", row[5]);
+            result.add(item);
+        }
+        return ApiResponse.success(result);
+    }
+
     private String formatDateValue(Object value) {
         if (value == null) return null;
         if (value instanceof LocalDateTime) {
