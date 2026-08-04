@@ -100,6 +100,9 @@ public class RelaySupport {
             throw new BusinessException(429, "Token 额度已用完");
         }
         User tokenUser = userService.getByIdCached(token.getUserId());
+        if (tokenUser.getStatus() == null || tokenUser.getStatus() != 1) {
+            throw new BusinessException(403, "账号已被禁用");
+        }
         if (!"admin".equals(tokenUser.getRole()) && tokenUser.getCredits() != null && tokenUser.getCredits().compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(402, "用户积分不足，请先充值");
         }
