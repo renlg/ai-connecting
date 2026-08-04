@@ -121,15 +121,15 @@ public class RelayController {
             ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
             requestBody = objectMapper.writeValueAsString(jsonBody);
         }
-        String result = relayService.relayRequest(tokenKey, "/v1/images/generations",
-                requestBody, resolvedModel, request);
+        String result = relayService.relayMediaRequest(tokenKey, "/v1/images/generations",
+                requestBody, resolvedModel, request, "image");
         return objectMapper.readTree(result);
     }
 
     /**
      * Video Generation API
-     * 转发视频生成请求到上游渠道，返回上游响应（id 改写为 "上游id:渠道id"）
-     * 用户凭渠道标识自行向原始渠道轮询状态，中转不轮询、不代理、不存储任何链接
+     * 预扣积分后按原始请求路径转发到上游渠道，透传上游响应（保留上游原始任务 id）
+     * 客户端通过 GET /v1/videos/{id} 经中转轮询任务状态
      */
     @PostMapping({"/v1/videos", "/v1/videos/generations"})
     public Object videoGenerations(@RequestHeader(value = "Authorization", required = false) String authHeader,
@@ -146,7 +146,20 @@ public class RelayController {
             ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
             requestBody = objectMapper.writeValueAsString(jsonBody);
         }
-        String result = relayService.relayVideoRequest(tokenKey, "/v1/videos", requestBody, resolvedModel, request);
+        String result = relayService.relayMediaRequest(tokenKey, request.getRequestURI(),
+                requestBody, resolvedModel, request, "video");
+        return objectMapper.readTree(result);
+    }
+
+    /**
+     * Video Status API
+     * 按上游任务 id 找到当初处理该任务的渠道，用渠道自身凭据向上游查询任务状态并透传结果
+     */
+    @GetMapping("/v1/videos/{videoId}")
+    public Object videoStatus(@RequestHeader(value = "Authorization", required = false) String authHeader,
+                              @PathVariable String videoId) throws IOException {
+        String tokenKey = extractTokenKey(authHeader);
+        String result = relayService.relayVideoStatusRequest(tokenKey, videoId);
         return objectMapper.readTree(result);
     }
 

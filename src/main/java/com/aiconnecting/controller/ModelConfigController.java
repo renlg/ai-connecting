@@ -39,6 +39,34 @@ public class ModelConfigController {
     }
 
     /**
+     * 校验所有价格/比例字段均为非负数（文本输入/输出/缓存比例、图片与视频各档位价格）
+     */
+    private static void validatePrices(ModelConfigRequest request) {
+        checkNonNegative("输入积分比例", request.getInputCreditRate());
+        checkNonNegative("输出积分比例", request.getOutputCreditRate());
+        checkNonNegative("缓存积分比例", request.getCacheCreditRate());
+        checkNonNegative("图片 1K 档价格", request.getImagePrice1k());
+        checkNonNegative("图片 2K 档价格", request.getImagePrice2k());
+        checkNonNegative("图片 4K 档价格", request.getImagePrice4k());
+        checkNonNegative("视频 480P 档价格", request.getVideoPrice480p());
+        checkNonNegative("视频 720P 档价格", request.getVideoPrice720p());
+        checkNonNegative("视频 1080P 档价格", request.getVideoPrice1080p());
+        checkNonNegative("视频 4K 档价格", request.getVideoPrice4k());
+    }
+
+    private static void checkNonNegative(String label, Integer value) {
+        if (value != null && value < 0) {
+            throw new BusinessException(label + "不能为负数");
+        }
+    }
+
+    private static void checkNonNegative(String label, BigDecimal value) {
+        if (value != null && value.compareTo(BigDecimal.ZERO) < 0) {
+            throw new BusinessException(label + "不能为负数");
+        }
+    }
+
+    /**
      * 获取所有模型配置（启用优先，按名称排序）
      * 管理员返回全部，普通用户只返回 adminOnly=false 的
      */
@@ -72,6 +100,7 @@ public class ModelConfigController {
         if (request.getName() == null || request.getName().isBlank()) {
             throw new BusinessException("模型名称不能为空");
         }
+        validatePrices(request);
         String type = validateType(request.getType());
         ModelConfig config = ModelConfig.builder()
                 .name(request.getName())
@@ -101,6 +130,7 @@ public class ModelConfigController {
      */
     @PutMapping("/{id}")
     public ApiResponse<ModelConfig> update(@PathVariable Long id, @RequestBody ModelConfigRequest request) {
+        validatePrices(request);
         ModelConfig config = modelConfigService.getById(id);
         if (request.getName() != null) {
             config.setName(request.getName());

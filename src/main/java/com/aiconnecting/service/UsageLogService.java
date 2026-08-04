@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.dto.DashboardDailyStats;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.User;
@@ -121,6 +122,14 @@ public class UsageLogService {
     }
 
     /**
+     * 记录已预扣积分的媒体使用日志（积分在调用上游前已原子扣减，此处仅落日志，不再重复扣减）
+     */
+    @Transactional
+    public void recordPrepaidUsage(UsageLog usageLog) {
+        usageLogRepository.save(usageLog);
+    }
+
+    /**
      * 计算积分消耗（含缓存折扣）
      */
     public BigDecimal calculateCreditCost(String model, int promptTokens, int completionTokens, int cachedTokens) {
@@ -155,7 +164,7 @@ public class UsageLogService {
 
     /**
      * 解析图片 size 参数（如 1024x1024、2048x2048）对应的分辨率档位。
-     * 最长边 < 2048 → 1K, < 4096 → 2K, 否则 → 4K；无法解析时按 1K 计。
+     * 最长边 < 2048 → 1K, < 4096 → 2K, 否则 → 4K；无法识别时返回 null（由调用方拒绝请求，避免按低档位漏计费）。
      */
     public static String resolveImageTier(String size) {
         int[] dims = parseDimensions(size);
@@ -164,8 +173,9 @@ public class UsageLogService {
                 String s = size.trim().toLowerCase();
                 if (s.equals("4k")) return "4K";
                 if (s.equals("2k")) return "2K";
+                if (s.equals("1k")) return "1K";
             }
-            return "1K";
+            return null;
         }
         int maxDim = Math.max(dims[0], dims[1]);
         if (maxDim < 2048) return "1K";
@@ -175,7 +185,7 @@ public class UsageLogService {
 
     /**
      * 解析视频 size/resolution 参数（如 1280x720、720p）对应的分辨率档位。
-     * 最短边 <= 480 → 480P, <= 720 → 720P, <= 1080 → 1080P, 否则 → 4K；无法解析时按 480P 计。
+     * 最短边 <= 480 → 480P, <= 720 → 720P, <= 1080 → 1080P, 否则 → 4K；无法识别时返回 null（由调用方拒绝请求，避免按低档位漏计费）。
      */
     public static String resolveVideoTier(String size) {
         if (size != null) {
@@ -188,7 +198,7 @@ public class UsageLogService {
             }
         }
         int[] dims = parseDimensions(size);
-        if (dims == null) return "480P";
+        if (dims == null) return null;
         int minDim = Math.min(dims[0], dims[1]);
         if (minDim <= 480) return "480P";
         if (minDim <= 720) return "720P";
@@ -210,11 +220,19 @@ public class UsageLogService {
         }
     }
 
+    /** 图片请求未携带 size 时的默认分辨率（OpenAI 默认值，对应 1K 档） */
+    public static final String DEFAULT_IMAGE_SIZE = "1024x1024";
+
     /**
-     * 图片模型积分消耗 = 对应档位单价 × 图片数量
+     * 图片模型积分消耗 = 对应档位单价 × 图片数量。
+     * size 缺省时按 {@link #DEFAULT_IMAGE_SIZE} 计；无法识别的 size 直接拒绝，不允许按低档位漏计费。
      */
     public BigDecimal calculateImageCreditCost(com.aiconnecting.entity.ModelConfig config, String size, int n) {
-        BigDecimal price = switch (resolveImageTier(size)) {
+        String tier = resolveImageTier(size == null || size.isBlank() ? DEFAULT_IMAGE_SIZE : size);
+        if (tier == null) {
+            throw new BusinessException(400, "不支持的图片分辨率: " + size + "，请使用如 1024x1024 的宽x高格式");
+        }
+        BigDecimal price = switch (tier) {
             case "2K" -> config.getImagePrice2k();
             case "4K" -> config.getImagePrice4k();
             default -> config.getImagePrice1k();
@@ -224,16 +242,26 @@ public class UsageLogService {
     }
 
     /**
-     * 视频模型积分消耗 = 对应档位单价
+     * 视频模型积分消耗 = 对应分辨率档位单价 × 时长（秒）。
+     * 分辨率无法识别或时长非法时直接拒绝，不允许按低档位漏计费。
      */
-    public BigDecimal calculateVideoCreditCost(com.aiconnecting.entity.ModelConfig config, String size) {
-        BigDecimal price = switch (resolveVideoTier(size)) {
+    public BigDecimal calculateVideoCreditCost(com.aiconnecting.entity.ModelConfig config, String size, int durationSeconds) {
+        String tier = resolveVideoTier(size);
+        if (tier == null) {
+            throw new BusinessException(400, "视频请求缺少或包含不支持的分辨率参数 (size/resolution): " + size
+                    + "，支持 480p/720p/1080p/4k 或宽x高格式");
+        }
+        if (durationSeconds <= 0) {
+            throw new BusinessException(400, "视频请求缺少有效的时长参数 (duration/seconds)，需为正整数秒数");
+        }
+        BigDecimal price = switch (tier) {
             case "720P" -> config.getVideoPrice720p();
             case "1080P" -> config.getVideoPrice1080p();
             case "4K" -> config.getVideoPrice4k();
             default -> config.getVideoPrice480p();
         };
-        return price != null ? price : BigDecimal.ZERO;
+        if (price == null) price = BigDecimal.ZERO;
+        return price.multiply(BigDecimal.valueOf(durationSeconds));
     }
 
     /**

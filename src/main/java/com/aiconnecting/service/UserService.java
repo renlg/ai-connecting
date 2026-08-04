@@ -286,6 +286,29 @@ public class UserService {
     }
 
     /**
+     * 余额充足时原子预扣积分（媒体请求调用上游前预扣，失败时通过 refundCredits 退回）
+     *
+     * @return true=扣减成功；false=余额不足，未扣减
+     */
+    @Transactional
+    public boolean tryDeductCredits(Long userId, BigDecimal amount) {
+        boolean deducted = userRepository.tryDeductCredits(userId, amount) > 0;
+        if (deducted) {
+            evictUserCache(userId);
+        }
+        return deducted;
+    }
+
+    /**
+     * 退回预扣积分（上游请求失败时调用）
+     */
+    @Transactional
+    public void refundCredits(Long userId, BigDecimal amount) {
+        userRepository.addCredits(userId, amount);
+        evictUserCache(userId);
+    }
+
+    /**
      * 判断用户是否为管理员
      */
     public boolean isAdmin(Long userId) {

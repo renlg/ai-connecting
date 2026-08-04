@@ -72,7 +72,7 @@ public class ModelConfig {
     @Column(name = "image_price_4k", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
     private BigDecimal imagePrice4k;
 
-    // ==================== 视频模型按分辨率档位计费 (积分/次) ====================
+    // ==================== 视频模型按分辨率档位计费 (积分/秒，计费 = 档位单价 × 时长秒数) ====================
 
     /** 视频 480P 档价格 */
     @Column(name = "video_price_480p", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")

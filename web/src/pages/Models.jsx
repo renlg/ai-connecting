@@ -185,16 +185,16 @@ export default function Models() {
             </Form.Item>
           </>}
           {modelType === 'video' && <>
-            <Form.Item name="videoPrice480p" label="480P 档价格（积分/次）" initialValue={0}>
+            <Form.Item name="videoPrice480p" label="480P 档价格（积分/秒）" initialValue={0}>
               <InputNumber min={0} style={{ width: '100%' }} />
             </Form.Item>
-            <Form.Item name="videoPrice720p" label="720P 档价格（积分/次）" initialValue={0}>
+            <Form.Item name="videoPrice720p" label="720P 档价格（积分/秒）" initialValue={0}>
               <InputNumber min={0} style={{ width: '100%' }} />
             </Form.Item>
-            <Form.Item name="videoPrice1080p" label="1080P 档价格（积分/次）" initialValue={0}>
+            <Form.Item name="videoPrice1080p" label="1080P 档价格（积分/秒）" initialValue={0}>
               <InputNumber min={0} style={{ width: '100%' }} />
             </Form.Item>
-            <Form.Item name="videoPrice4k" label="4K 档价格（积分/次）" initialValue={0}>
+            <Form.Item name="videoPrice4k" label="4K 档价格（积分/秒）" initialValue={0}>
               <InputNumber min={0} style={{ width: '100%' }} />
             </Form.Item>
           </>}

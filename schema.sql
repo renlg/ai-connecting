@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS "model_configs" (
     image_price_1k DECIMAL(10,2) NOT NULL DEFAULT 0,
     image_price_2k DECIMAL(10,2) NOT NULL DEFAULT 0,
     image_price_4k DECIMAL(10,2) NOT NULL DEFAULT 0,
-    -- 视频模型分辨率档位价格 (积分/次)
+    -- 视频模型分辨率档位价格 (积分/秒，计费 = 档位单价 × 时长秒数)
     video_price_480p DECIMAL(10,2) NOT NULL DEFAULT 0,
     video_price_720p DECIMAL(10,2) NOT NULL DEFAULT 0,
     video_price_1080p DECIMAL(10,2) NOT NULL DEFAULT 0,
@@ -177,3 +177,15 @@ CREATE TABLE IF NOT EXISTS "operation_logs" (
 
 CREATE INDEX IF NOT EXISTS idx_operation_logs_admin_id ON operation_logs (admin_id);
 CREATE INDEX IF NOT EXISTS idx_operation_logs_created_at ON operation_logs (created_at);
+
+-- 视频生成任务表（上游任务 id 与渠道的映射，供 GET /v1/videos/{id} 中转轮询回查原始渠道）
+CREATE TABLE IF NOT EXISTS "video_tasks" (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    upstream_id VARCHAR(200) NOT NULL,
+    channel_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    model VARCHAR(100),
+    created_at TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_tasks_upstream_id ON video_tasks (upstream_id);

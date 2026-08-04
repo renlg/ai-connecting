@@ -41,15 +41,15 @@ public class ModelConfigRequest {
     /** 图片 4K 档价格 (积分/张) */
     private BigDecimal imagePrice4k;
 
-    /** 视频 480P 档价格 (积分/次) */
+    /** 视频 480P 档价格 (积分/秒) */
     private BigDecimal videoPrice480p;
 
-    /** 视频 720P 档价格 (积分/次) */
+    /** 视频 720P 档价格 (积分/秒) */
     private BigDecimal videoPrice720p;
 
-    /** 视频 1080P 档价格 (积分/次) */
+    /** 视频 1080P 档价格 (积分/秒) */
     private BigDecimal videoPrice1080p;
 
-    /** 视频 4K 档价格 (积分/次) */
+    /** 视频 4K 档价格 (积分/秒) */
     private BigDecimal videoPrice4k;
 }

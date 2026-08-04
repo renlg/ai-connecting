@@ -23,6 +23,11 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("UPDATE User u SET u.credits = COALESCE(u.credits, 0) + :amount WHERE u.id = :userId")
     void addCredits(@Param("userId") Long userId, @Param("amount") BigDecimal amount);
 
+    /** 余额充足时原子扣减积分，返回受影响行数（0=余额不足，未扣减） */
+    @Modifying
+    @Query("UPDATE User u SET u.credits = u.credits - :amount WHERE u.id = :userId AND u.credits >= :amount")
+    int tryDeductCredits(@Param("userId") Long userId, @Param("amount") BigDecimal amount);
+
     @Query("SELECT u FROM User u WHERE " +
            "LOWER(u.username) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            "LOWER(u.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
