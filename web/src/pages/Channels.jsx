@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Tooltip, Checkbox } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined, CopyOutlined } from '@ant-design/icons'
 import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, getChannelHealth, unblockChannel, getChannelApiKey } from '../api'
 
 const CB_STATE_COLOR = { CLOSED: 'green', HALF_OPEN: 'gold', OPEN: 'red' }
@@ -26,6 +26,7 @@ export default function Channels() {
   const [healthMap, setHealthMap] = useState({})
   const [showBlockedOnly, setShowBlockedOnly] = useState(false)
   const [revealedKeys, setRevealedKeys] = useState({})
+  const [copyingId, setCopyingId] = useState(null)
 
 
   const load = () => {
@@ -60,6 +61,24 @@ export default function Channels() {
       return key
     }
     return null
+  }
+
+  // 复制完整 Key 到剪贴板，列表中不显示明文
+  const handleCopyApiKey = async (id) => {
+    setCopyingId(id)
+    try {
+      const key = await revealApiKey(id)
+      if (key) {
+        await navigator.clipboard.writeText(key)
+        message.success('已复制')
+      } else {
+        message.error('获取 API Key 失败')
+      }
+    } catch {
+      message.error('复制失败')
+    } finally {
+      setCopyingId(null)
+    }
   }
 
   const loadModels = () => {
@@ -238,18 +257,33 @@ export default function Channels() {
     { title: '类型', dataIndex: 'type', width: 100, render: v => <Tag color="blue">{v}</Tag> },
     { title: 'Base URL', dataIndex: 'baseUrl', ellipsis: true },
     {
-      title: 'API Key', dataIndex: 'apiKey', width: 200, render: (v) => (
-        <span style={{ fontFamily: 'monospace' }}>{v}</span>
+      title: 'API Key', dataIndex: 'apiKey', width: 200, render: (v, record) => (
+        <Space size="small">
+          <span style={{ fontFamily: 'monospace' }}>{v}</span>
+          <Tooltip title="复制">
+            <Button
+              size="small"
+              type="text"
+              icon={<CopyOutlined />}
+              loading={copyingId === record.id}
+              onClick={() => handleCopyApiKey(record.id)}
+            />
+          </Tooltip>
+        </Space>
       )
     },
-    { title: '模型', dataIndex: 'modelIds', ellipsis: true, render: v => {
+    { title: '模型', dataIndex: 'modelIds', width: 280, render: v => {
       if (!v) return '-'
       // 将ID转换为显示名称
       const modelNames = v.split(',').map(id => {
         const model = allLocalModels.find(m => String(m.id) === id.trim())
         return model ? (model.displayName ? `${model.name}（${model.displayName}）` : model.name) : id
       })
-      return modelNames.map(m => <Tag key={m}>{m}</Tag>)
+      return (
+        <Space size={[0, 4]} wrap>
+          {modelNames.map(m => <Tag key={m} style={{ whiteSpace: 'normal', height: 'auto' }}>{m}</Tag>)}
+        </Space>
+      )
     } },
     { title: '支持等级', dataIndex: 'supportedLevels', width: 150, render: v => {
       if (!v) return '-'
