@@ -213,6 +213,9 @@ export default function Channels() {
       values.supportedLevels = values.supportedLevels.join(',')
     }
     if (editing) {
+      if (!values.apiKey || !values.apiKey.trim()) {
+        delete values.apiKey
+      }
       await updateChannel(editing.id, values)
       message.success('更新成功')
     } else {
@@ -319,7 +322,7 @@ export default function Channels() {
           )}
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
-            const formValues = { ...record }
+            const formValues = { ...record, apiKey: undefined }
             if (formValues.modelIds && typeof formValues.modelIds === 'string') {
               // 将逗号分隔的模型ID转换为数组
               formValues.modelIds = formValues.modelIds.split(',').map(id => id.trim()).filter(id => id)
@@ -396,7 +399,9 @@ export default function Channels() {
             <Select placeholder="选择类型" options={[{ value: 'openai', label: 'OpenAI' }, { value: 'azure', label: 'Azure' }, { value: 'claude', label: 'Claude' }, { value: 'gemini', label: 'Gemini' }, { value: 'custom', label: '自定义' }]} />
           </Form.Item>
           <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true }]}><Input placeholder="https://api.openai.com" /></Form.Item>
-          <Form.Item name="apiKey" label="API Key" rules={[{ required: true }]}><Input.Password placeholder="sk-xxx" /></Form.Item>
+          <Form.Item name="apiKey" label="API Key" rules={editing ? [] : [{ required: true }]}>
+            <Input.Password placeholder={editing ? '留空则不修改' : 'sk-xxx'} />
+          </Form.Item>
           <Form.Item name="modelIds" label={
             <span>支持模型 <Button size="small" type="dashed" icon={<ApiOutlined />} loading={fetchingModels} onClick={handleFetchModels}>获取模型</Button></span>
           }>
