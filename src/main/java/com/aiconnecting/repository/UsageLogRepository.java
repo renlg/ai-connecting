@@ -40,7 +40,9 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
     long sumCachedPromptTokensSince(LocalDateTime since);
 
     @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, " +
-            "COALESCE(SUM(credit_cost), 0) as credits " +
+            "COALESCE(SUM(credit_cost), 0) as credits, " +
+            "COALESCE(SUM(prompt_tokens), 0) as input_tokens, " +
+            "COALESCE(SUM(completion_tokens), 0) as output_tokens " +
             "FROM usage_logs WHERE token_id = ?1 AND created_at >= ?2 " +
             "GROUP BY DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) ORDER BY date DESC", nativeQuery = true)
     List<Object[]> findDailyCreditCostByTokenIdSince(Long tokenId, LocalDateTime since);

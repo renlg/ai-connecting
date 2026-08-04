@@ -283,6 +283,15 @@ export default function Tokens() {
           columns={[
             { title: '日期', dataIndex: 'date', key: 'date' },
             { title: '消耗积分', dataIndex: 'credits', key: 'credits', render: v => Math.round(Number(v)) + ' 积分' },
+            { title: '总输入Token', dataIndex: 'inputTokens', key: 'inputTokens' },
+            { title: '总输出Token', dataIndex: 'outputTokens', key: 'outputTokens' },
+            {
+              title: '操作',
+              key: 'action',
+              render: (_, record) => (
+                <Button type="link" size="small" onClick={() => openCreditHistoryDetail(record)}>明细</Button>
+              ),
+            },
           ]}
           dataSource={historyData}
           rowKey="date"
@@ -290,7 +299,6 @@ export default function Tokens() {
           pagination={{ pageSize: 10 }}
           size="small"
           locale={{ emptyText: '暂无消耗记录' }}
-          onRow={record => ({ onClick: () => openCreditHistoryDetail(record), style: { cursor: 'pointer' } })}
         />
       </Modal>
 

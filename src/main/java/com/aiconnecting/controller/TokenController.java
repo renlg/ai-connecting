@@ -118,6 +118,8 @@ public class TokenController {
             Map<String, Object> item = new HashMap<>();
             item.put("date", formatDateValue(row[0]));
             item.put("credits", row[1]);
+            item.put("inputTokens", row[2] != null ? ((Number) row[2]).longValue() : 0L);
+            item.put("outputTokens", row[3] != null ? ((Number) row[3]).longValue() : 0L);
             result.add(item);
         }
         return ApiResponse.success(result);
