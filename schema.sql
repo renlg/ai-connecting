@@ -67,9 +67,20 @@ CREATE TABLE IF NOT EXISTS "model_configs" (
     display_name VARCHAR(100),
     description VARCHAR(500),
     status INTEGER NOT NULL,
+    -- 模型类型: text=文本(按 token 计费), image=图片(按分辨率档位计费), video=视频(按分辨率档位计费)
+    type VARCHAR(20) NOT NULL DEFAULT 'text',
     input_credit_rate INTEGER NOT NULL DEFAULT 0,
     output_credit_rate INTEGER NOT NULL DEFAULT 0,
     cache_credit_rate DECIMAL(5,4) NOT NULL DEFAULT 0.1,
+    -- 图片模型分辨率档位价格 (积分/张)
+    image_price_1k DECIMAL(10,2) NOT NULL DEFAULT 0,
+    image_price_2k DECIMAL(10,2) NOT NULL DEFAULT 0,
+    image_price_4k DECIMAL(10,2) NOT NULL DEFAULT 0,
+    -- 视频模型分辨率档位价格 (积分/次)
+    video_price_480p DECIMAL(10,2) NOT NULL DEFAULT 0,
+    video_price_720p DECIMAL(10,2) NOT NULL DEFAULT 0,
+    video_price_1080p DECIMAL(10,2) NOT NULL DEFAULT 0,
+    video_price_4k DECIMAL(10,2) NOT NULL DEFAULT 0,
     admin_only BOOLEAN DEFAULT 0,
     multiplier DECIMAL(10, 2) NOT NULL DEFAULT 1.0,
     created_at TIMESTAMP NOT NULL,

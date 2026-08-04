@@ -114,8 +114,39 @@ public class RelayController {
                                    @RequestBody String requestBody,
                                    HttpServletRequest request) throws IOException {
         String tokenKey = extractTokenKey(authHeader);
+        JsonNode jsonBody = objectMapper.readTree(requestBody);
+        String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "dall-e";
+        String resolvedModel = relayService.resolveModelName(model);
+        if (!resolvedModel.equals(model)) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
+            requestBody = objectMapper.writeValueAsString(jsonBody);
+        }
         String result = relayService.relayRequest(tokenKey, "/v1/images/generations",
-                requestBody, "dall-e", request);
+                requestBody, resolvedModel, request);
+        return objectMapper.readTree(result);
+    }
+
+    /**
+     * Video Generation API
+     * 转发视频生成请求到上游渠道，返回上游响应（id 改写为 "上游id:渠道id"）
+     * 用户凭渠道标识自行向原始渠道轮询状态，中转不轮询、不代理、不存储任何链接
+     */
+    @PostMapping({"/v1/videos", "/v1/videos/generations"})
+    public Object videoGenerations(@RequestHeader(value = "Authorization", required = false) String authHeader,
+                                   @RequestBody String requestBody,
+                                   HttpServletRequest request) throws IOException {
+        String tokenKey = extractTokenKey(authHeader);
+        JsonNode jsonBody = objectMapper.readTree(requestBody);
+        String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "";
+        if (model.isEmpty()) {
+            throw new BusinessException(400, "请求缺少 model 参数");
+        }
+        String resolvedModel = relayService.resolveModelName(model);
+        if (!resolvedModel.equals(model)) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
+            requestBody = objectMapper.writeValueAsString(jsonBody);
+        }
+        String result = relayService.relayVideoRequest(tokenKey, "/v1/videos", requestBody, resolvedModel, request);
         return objectMapper.readTree(result);
     }
 

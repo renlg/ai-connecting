@@ -37,6 +37,11 @@ public class RelayService {
         openAiRelayService.relayStreamRequest(tokenKey, path, requestBody, model, httpRequest, httpResponse);
     }
 
+    public String relayVideoRequest(String tokenKey, String path, String requestBody,
+                                    String model, HttpServletRequest httpRequest) {
+        return openAiRelayService.relayVideoRequest(tokenKey, path, requestBody, model, httpRequest);
+    }
+
     // ==================== Claude 协议中转 ====================
 
     public String claudeRelayRequest(String tokenKey, String requestBody,

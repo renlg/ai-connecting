@@ -70,7 +70,7 @@ public class OpenAiRelayService {
                     response = support.forwardRequest(channel, path, requestBody);
                 }
                 long duration = System.currentTimeMillis() - startTime;
-                support.recordUsage(ctx.token(), channel, model, response, duration, httpRequest, path);
+                support.recordRequestUsage(ctx.token(), channel, model, requestBody, response, duration, httpRequest, path);
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 return response;
             } catch (BusinessException e) {
@@ -85,6 +85,74 @@ public class OpenAiRelayService {
             }
         }
         throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+    }
+
+    /**
+     * 视频生成中转 (非流式)：透传上游响应，仅将响应中的 id 改写为 "上游id:渠道id"，
+     * 用户凭渠道标识自行向原始渠道轮询状态；中转不轮询、不代理、不存储任何链接
+     */
+    public String relayVideoRequest(String tokenKey, String path, String requestBody,
+                                    String model, HttpServletRequest httpRequest) {
+        RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
+        Set<Long> triedChannels = new HashSet<>();
+        long startTime = System.currentTimeMillis();
+        String lastError = null;
+        int attempt = 0;
+
+        while (attempt < RelaySupport.MAX_RETRIES) {
+            Channel channel;
+            try {
+                channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
+            } catch (BusinessException e) {
+                if (lastError != null) {
+                    throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+                }
+                throw e;
+            }
+            triedChannels.add(channel.getId());
+
+            if (support.isChannelRateLimited(channel)) {
+                lastError = "渠道 " + channel.getId() + " 请求频率超限";
+                log.warn("跳过限流渠道 {}: {}", channel.getId(), lastError);
+                continue;
+            }
+
+            attempt++;
+            try {
+                String response = support.forwardRequest(channel, path, requestBody);
+                long duration = System.currentTimeMillis() - startTime;
+                support.recordRequestUsage(ctx.token(), channel, model, requestBody, response, duration, httpRequest, path);
+                support.channelHealthTracker.recordSuccess(channel.getId());
+                return tagVideoResponseId(response, channel.getId());
+            } catch (BusinessException e) {
+                lastError = e.getMessage();
+                log.error("渠道 {} 视频请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
+                support.channelHealthTracker.recordFailure(channel.getId(),
+                        ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage());
+                if (attempt == RelaySupport.MAX_RETRIES) {
+                    throw new BusinessException(e.getCode(),
+                            "所有渠道均不可用，最后错误: " + lastError);
+                }
+            }
+        }
+        throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+    }
+
+    /**
+     * 将上游返回的视频任务 id 改写为 "id:渠道id"，其余字段原样透传
+     */
+    private String tagVideoResponseId(String response, Long channelId) {
+        try {
+            JsonNode json = support.objectMapper.readTree(response);
+            if (json.isObject() && json.hasNonNull("id")) {
+                ((com.fasterxml.jackson.databind.node.ObjectNode) json)
+                        .put("id", json.get("id").asText() + ":" + channelId);
+                return support.objectMapper.writeValueAsString(json);
+            }
+        } catch (Exception e) {
+            log.warn("改写视频响应 id 失败，原样返回上游响应: {}", e.getMessage());
+        }
+        return response;
     }
 
     /**

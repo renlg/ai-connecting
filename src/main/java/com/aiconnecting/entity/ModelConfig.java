@@ -28,6 +28,11 @@ public class ModelConfig {
     @Column(length = 100)
     private String displayName;
 
+    /** 模型类型: text=文本, image=图片, video=视频 */
+    @Builder.Default
+    @Column(name = "type", nullable = false, length = 20, columnDefinition = "VARCHAR(20) NOT NULL DEFAULT 'text'")
+    private String type = "text";
+
     /** 输入积分兑换比例 (每百万token 消耗多少积分) */
     @Column(nullable = false)
     private Integer inputCreditRate;
@@ -53,6 +58,38 @@ public class ModelConfig {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal cacheCreditRate;
 
+    // ==================== 图片模型按分辨率档位计费 (积分/张) ====================
+
+    /** 图片 1K 档价格 (最长边 < 2048) */
+    @Column(name = "image_price_1k", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
+    private BigDecimal imagePrice1k;
+
+    /** 图片 2K 档价格 (最长边 < 4096) */
+    @Column(name = "image_price_2k", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
+    private BigDecimal imagePrice2k;
+
+    /** 图片 4K 档价格 (最长边 >= 4096) */
+    @Column(name = "image_price_4k", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
+    private BigDecimal imagePrice4k;
+
+    // ==================== 视频模型按分辨率档位计费 (积分/次) ====================
+
+    /** 视频 480P 档价格 */
+    @Column(name = "video_price_480p", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
+    private BigDecimal videoPrice480p;
+
+    /** 视频 720P 档价格 */
+    @Column(name = "video_price_720p", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
+    private BigDecimal videoPrice720p;
+
+    /** 视频 1080P 档价格 */
+    @Column(name = "video_price_1080p", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
+    private BigDecimal videoPrice1080p;
+
+    /** 视频 4K 档价格 */
+    @Column(name = "video_price_4k", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
+    private BigDecimal videoPrice4k;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -67,6 +104,14 @@ public class ModelConfig {
         if (outputCreditRate == null) outputCreditRate = 0;
         if (adminOnly == null) adminOnly = false;
         if (cacheCreditRate == null) cacheCreditRate = BigDecimal.ZERO;
+        if (type == null || type.isBlank()) type = "text";
+        if (imagePrice1k == null) imagePrice1k = BigDecimal.ZERO;
+        if (imagePrice2k == null) imagePrice2k = BigDecimal.ZERO;
+        if (imagePrice4k == null) imagePrice4k = BigDecimal.ZERO;
+        if (videoPrice480p == null) videoPrice480p = BigDecimal.ZERO;
+        if (videoPrice720p == null) videoPrice720p = BigDecimal.ZERO;
+        if (videoPrice1080p == null) videoPrice1080p = BigDecimal.ZERO;
+        if (videoPrice4k == null) videoPrice4k = BigDecimal.ZERO;
     }
 
     @PreUpdate

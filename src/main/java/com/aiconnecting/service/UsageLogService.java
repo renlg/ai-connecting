@@ -151,6 +151,91 @@ public class UsageLogService {
         return inputCost.add(cacheCost).add(outputCost);
     }
 
+    // ==================== 图片/视频按分辨率档位计费 ====================
+
+    /**
+     * 解析图片 size 参数（如 1024x1024、2048x2048）对应的分辨率档位。
+     * 最长边 < 2048 → 1K, < 4096 → 2K, 否则 → 4K；无法解析时按 1K 计。
+     */
+    public static String resolveImageTier(String size) {
+        int[] dims = parseDimensions(size);
+        if (dims == null) {
+            if (size != null) {
+                String s = size.trim().toLowerCase();
+                if (s.equals("4k")) return "4K";
+                if (s.equals("2k")) return "2K";
+            }
+            return "1K";
+        }
+        int maxDim = Math.max(dims[0], dims[1]);
+        if (maxDim < 2048) return "1K";
+        if (maxDim < 4096) return "2K";
+        return "4K";
+    }
+
+    /**
+     * 解析视频 size/resolution 参数（如 1280x720、720p）对应的分辨率档位。
+     * 最短边 <= 480 → 480P, <= 720 → 720P, <= 1080 → 1080P, 否则 → 4K；无法解析时按 480P 计。
+     */
+    public static String resolveVideoTier(String size) {
+        if (size != null) {
+            String s = size.trim().toLowerCase();
+            switch (s) {
+                case "480p": return "480P";
+                case "720p": return "720P";
+                case "1080p": return "1080P";
+                case "4k", "2160p": return "4K";
+            }
+        }
+        int[] dims = parseDimensions(size);
+        if (dims == null) return "480P";
+        int minDim = Math.min(dims[0], dims[1]);
+        if (minDim <= 480) return "480P";
+        if (minDim <= 720) return "720P";
+        if (minDim <= 1080) return "1080P";
+        return "4K";
+    }
+
+    private static int[] parseDimensions(String size) {
+        if (size == null) return null;
+        String[] parts = size.trim().toLowerCase().split("[x*×]");
+        if (parts.length != 2) return null;
+        try {
+            int w = Integer.parseInt(parts[0].trim());
+            int h = Integer.parseInt(parts[1].trim());
+            if (w <= 0 || h <= 0) return null;
+            return new int[]{w, h};
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 图片模型积分消耗 = 对应档位单价 × 图片数量
+     */
+    public BigDecimal calculateImageCreditCost(com.aiconnecting.entity.ModelConfig config, String size, int n) {
+        BigDecimal price = switch (resolveImageTier(size)) {
+            case "2K" -> config.getImagePrice2k();
+            case "4K" -> config.getImagePrice4k();
+            default -> config.getImagePrice1k();
+        };
+        if (price == null) price = BigDecimal.ZERO;
+        return price.multiply(BigDecimal.valueOf(Math.max(n, 1)));
+    }
+
+    /**
+     * 视频模型积分消耗 = 对应档位单价
+     */
+    public BigDecimal calculateVideoCreditCost(com.aiconnecting.entity.ModelConfig config, String size) {
+        BigDecimal price = switch (resolveVideoTier(size)) {
+            case "720P" -> config.getVideoPrice720p();
+            case "1080P" -> config.getVideoPrice1080p();
+            case "4K" -> config.getVideoPrice4k();
+            default -> config.getVideoPrice480p();
+        };
+        return price != null ? price : BigDecimal.ZERO;
+    }
+
     /**
      * 分页查询使用日志
      */

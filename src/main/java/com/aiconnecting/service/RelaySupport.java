@@ -59,6 +59,7 @@ public class RelaySupport {
 
     private final ConcurrentHashMap<String, CachedValue> modelNameCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CachedAllowedModels> allowedModelsCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CachedModelConfig> modelConfigCache = new ConcurrentHashMap<>();
 
     static final int MAX_RETRIES = 3;
     private static final long MODEL_CACHE_TTL_MS = 2 * 60 * 1000L;
@@ -75,6 +76,12 @@ public class RelaySupport {
     private record CachedAllowedModels(Set<String> models, long cachedAt) {
         boolean isExpired() {
             return System.currentTimeMillis() - cachedAt > ALLOWED_MODELS_CACHE_TTL_MS;
+        }
+    }
+
+    private record CachedModelConfig(ModelConfig config, long cachedAt) {
+        boolean isExpired() {
+            return System.currentTimeMillis() - cachedAt > MODEL_CACHE_TTL_MS;
         }
     }
 
@@ -174,6 +181,22 @@ public class RelaySupport {
 
     public void clearModelNameCache() {
         modelNameCache.clear();
+        modelConfigCache.clear();
+    }
+
+    /**
+     * 按模型名查找模型配置（带 2 分钟缓存，未配置时缓存 null）
+     */
+    ModelConfig findModelConfigCached(String model) {
+        if (model == null || model.isEmpty()) return null;
+        CachedModelConfig cached = modelConfigCache.get(model);
+        if (cached != null && !cached.isExpired()) {
+            return cached.config();
+        }
+        List<ModelConfig> models = modelConfigService.findByName(model);
+        ModelConfig config = models.isEmpty() ? null : models.get(0);
+        modelConfigCache.put(model, new CachedModelConfig(config, System.currentTimeMillis()));
+        return config;
     }
 
     // ==================== 渠道判断 ====================
@@ -383,6 +406,60 @@ public class RelaySupport {
     }
 
     // ==================== 使用记录 ====================
+
+    /**
+     * 按模型类型记录使用：image/video 按分辨率档位计费，text 走原有 token 计费逻辑
+     */
+    void recordRequestUsage(Token token, Channel channel, String model, String requestBody,
+                            String response, long duration, HttpServletRequest httpRequest, String path) {
+        ModelConfig config = findModelConfigCached(model);
+        String type = config != null ? config.getType() : null;
+        if ("image".equals(type) || "video".equals(type)) {
+            recordMediaUsage(token, channel, model, config, requestBody, duration, httpRequest, path);
+        } else {
+            recordUsage(token, channel, model, response, duration, httpRequest, path);
+        }
+    }
+
+    /**
+     * 图片/视频请求按请求参数中的分辨率档位计费（不涉及 token 数）
+     */
+    void recordMediaUsage(Token token, Channel channel, String model, ModelConfig config,
+                          String requestBody, long duration, HttpServletRequest httpRequest, String path) {
+        String size = null;
+        int n = 1;
+        try {
+            JsonNode body = objectMapper.readTree(requestBody);
+            if (body.hasNonNull("size")) {
+                size = body.get("size").asText();
+            } else if (body.hasNonNull("resolution")) {
+                size = body.get("resolution").asText();
+            }
+            if (body.hasNonNull("n")) {
+                n = body.get("n").asInt(1);
+            }
+        } catch (Exception e) {
+            log.warn("解析媒体请求参数失败，按最低档位计费: {}", e.getMessage());
+        }
+
+        BigDecimal creditCost = "video".equals(config.getType())
+                ? usageLogService.calculateVideoCreditCost(config, size)
+                : usageLogService.calculateImageCreditCost(config, size, n);
+
+        UsageLog usageLog = UsageLog.builder()
+                .tokenId(token.getId())
+                .channelId(channel.getId())
+                .model(model)
+                .promptTokens(0)
+                .completionTokens(0)
+                .totalTokens(0)
+                .creditCost(creditCost)
+                .ip(getClientIp(httpRequest))
+                .duration(duration)
+                .requestPath(path)
+                .build();
+        usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(), 0, token.getUserId());
+    }
 
     void recordUsage(Token token, Channel channel, String model,
                      String response, long duration, HttpServletRequest httpRequest, String path) {

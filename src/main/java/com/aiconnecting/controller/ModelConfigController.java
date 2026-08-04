@@ -16,6 +16,7 @@ import jakarta.validation.Valid;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/admin/models")
@@ -24,6 +25,18 @@ public class ModelConfigController {
 
     private final ModelConfigService modelConfigService;
     private final RelayService relayService;
+
+    private static final Set<String> VALID_TYPES = Set.of("text", "image", "video");
+
+    private static String validateType(String type) {
+        if (type == null || type.isBlank()) {
+            return null;
+        }
+        if (!VALID_TYPES.contains(type)) {
+            throw new BusinessException("模型类型无效，仅支持 text/image/video");
+        }
+        return type;
+    }
 
     /**
      * 获取所有模型配置（启用优先，按名称排序）
@@ -59,14 +72,23 @@ public class ModelConfigController {
         if (request.getName() == null || request.getName().isBlank()) {
             throw new BusinessException("模型名称不能为空");
         }
+        String type = validateType(request.getType());
         ModelConfig config = ModelConfig.builder()
                 .name(request.getName())
                 .displayName(request.getDisplayName())
                 .description(request.getDescription())
+                .type(type != null ? type : "text")
                 .inputCreditRate(request.getInputCreditRate() != null ? request.getInputCreditRate() : 0)
                 .outputCreditRate(request.getOutputCreditRate() != null ? request.getOutputCreditRate() : 0)
                 .adminOnly(Boolean.TRUE.equals(request.getAdminOnly()))
                 .cacheCreditRate(request.getCacheCreditRate() != null ? request.getCacheCreditRate() : BigDecimal.ZERO)
+                .imagePrice1k(request.getImagePrice1k())
+                .imagePrice2k(request.getImagePrice2k())
+                .imagePrice4k(request.getImagePrice4k())
+                .videoPrice480p(request.getVideoPrice480p())
+                .videoPrice720p(request.getVideoPrice720p())
+                .videoPrice1080p(request.getVideoPrice1080p())
+                .videoPrice4k(request.getVideoPrice4k())
                 .status(1)
                 .build();
         ModelConfig saved = modelConfigService.save(config);
@@ -100,6 +122,31 @@ public class ModelConfigController {
         }
         if (request.getCacheCreditRate() != null) {
             config.setCacheCreditRate(request.getCacheCreditRate());
+        }
+        String type = validateType(request.getType());
+        if (type != null) {
+            config.setType(type);
+        }
+        if (request.getImagePrice1k() != null) {
+            config.setImagePrice1k(request.getImagePrice1k());
+        }
+        if (request.getImagePrice2k() != null) {
+            config.setImagePrice2k(request.getImagePrice2k());
+        }
+        if (request.getImagePrice4k() != null) {
+            config.setImagePrice4k(request.getImagePrice4k());
+        }
+        if (request.getVideoPrice480p() != null) {
+            config.setVideoPrice480p(request.getVideoPrice480p());
+        }
+        if (request.getVideoPrice720p() != null) {
+            config.setVideoPrice720p(request.getVideoPrice720p());
+        }
+        if (request.getVideoPrice1080p() != null) {
+            config.setVideoPrice1080p(request.getVideoPrice1080p());
+        }
+        if (request.getVideoPrice4k() != null) {
+            config.setVideoPrice4k(request.getVideoPrice4k());
         }
         ModelConfig saved = modelConfigService.save(config);
         relayService.clearModelNameCache();

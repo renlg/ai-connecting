@@ -251,6 +251,7 @@ class RelayControllerTest {
     void listModels_admin() throws Exception {
         Token token = Token.builder().id(1L).tokenKey("sk-test").userId(1L).status(1).build();
         when(tokenService.validateTokenKey("sk-test")).thenReturn(token);
+        when(userService.getByIdCached(1L)).thenReturn(User.builder().id(1L).status(1).role("admin").build());
         when(userService.isAdmin(1L)).thenReturn(true);
 
         ModelConfig m1 = ModelConfig.builder().id(1L).name("gpt-4").displayName("GPT-4").status(1)
@@ -271,6 +272,7 @@ class RelayControllerTest {
     void listModels_regularUser() throws Exception {
         Token token = Token.builder().id(2L).tokenKey("sk-test").userId(2L).status(1).build();
         when(tokenService.validateTokenKey("sk-test")).thenReturn(token);
+        when(userService.getByIdCached(2L)).thenReturn(User.builder().id(2L).status(1).role("user").build());
         when(userService.isAdmin(2L)).thenReturn(false);
 
         ModelConfig m1 = ModelConfig.builder().id(1L).name("gpt-4").displayName("GPT-4")
@@ -288,6 +290,7 @@ class RelayControllerTest {
     void listModels_noChannelModels() throws Exception {
         Token token = Token.builder().id(1L).tokenKey("sk-test").userId(1L).status(1).build();
         when(tokenService.validateTokenKey("sk-test")).thenReturn(token);
+        when(userService.getByIdCached(1L)).thenReturn(User.builder().id(1L).status(1).role("admin").build());
         when(userService.isAdmin(1L)).thenReturn(true);
 
         when(modelConfigService.getAvailableModels(true)).thenReturn(List.of());
@@ -313,6 +316,7 @@ class RelayControllerTest {
     void listModels_multipleChannels() throws Exception {
         Token token = Token.builder().id(1L).tokenKey("sk-test").userId(1L).status(1).build();
         when(tokenService.validateTokenKey("sk-test")).thenReturn(token);
+        when(userService.getByIdCached(1L)).thenReturn(User.builder().id(1L).status(1).role("admin").build());
         when(userService.isAdmin(1L)).thenReturn(true);
 
         ModelConfig m1 = ModelConfig.builder().id(1L).name("gpt-4").displayName("GPT-4").status(1)
