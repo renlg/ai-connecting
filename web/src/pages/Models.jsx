@@ -9,6 +9,7 @@ const TYPE_META = {
   text: { color: 'default', label: '文本' },
   image: { color: 'purple', label: '图片' },
   video: { color: 'orange', label: '视频' },
+  audio: { color: 'cyan', label: '音频' },
 }
 
 export default function Models() {
@@ -85,9 +86,9 @@ export default function Models() {
         return <Tag color={meta.color}>{meta.label}</Tag>
       }
     },
-    { title: '输入比例（积分/百万token）', dataIndex: 'inputCreditRate', width: 130, render: (v, r) => (r.type === 'image' || r.type === 'video') ? '-' : (v || 0) },
-    { title: '输出比例（积分/百万token）', dataIndex: 'outputCreditRate', width: 130, render: (v, r) => (r.type === 'image' || r.type === 'video') ? '-' : (v || 0) },
-    { title: '缓存比例（积分/百万token）', dataIndex: 'cacheCreditRate', width: 130, render: (v, r) => (r.type === 'image' || r.type === 'video') ? '-' : (v != null ? v : '0') },
+    { title: '输入比例（积分/百万token）', dataIndex: 'inputCreditRate', width: 130, render: (v, r) => (r.type === 'image' || r.type === 'video' || r.type === 'audio') ? '-' : (v || 0) },
+    { title: '输出比例（积分/百万token）', dataIndex: 'outputCreditRate', width: 130, render: (v, r) => (r.type === 'image' || r.type === 'video' || r.type === 'audio') ? '-' : (v || 0) },
+    { title: '缓存比例（积分/百万token）', dataIndex: 'cacheCreditRate', width: 130, render: (v, r) => (r.type === 'image' || r.type === 'video' || r.type === 'audio') ? '-' : (v != null ? v : '0') },
     {
       title: '档位价格（积分）', width: 220,
       render: (_, r) => {
@@ -96,6 +97,9 @@ export default function Models() {
         }
         if (r.type === 'video') {
           return `480P: ${r.videoPrice480p ?? 0} / 720P: ${r.videoPrice720p ?? 0} / 1080P: ${r.videoPrice1080p ?? 0} / 4K: ${r.videoPrice4k ?? 0}`
+        }
+        if (r.type === 'audio') {
+          return `标准: ${r.audioPriceStandard ?? 0} / 高清: ${r.audioPriceHd ?? 0}`
         }
         return '-'
       }
@@ -160,6 +164,7 @@ export default function Models() {
               { value: 'text', label: '文本（按 token 计费）' },
               { value: 'image', label: '图片（按分辨率档位计费）' },
               { value: 'video', label: '视频（按分辨率档位计费）' },
+              { value: 'audio', label: '音频（按音质档位计费）' },
             ]} />
           </Form.Item>
           {modelType === 'text' && <>
@@ -195,6 +200,14 @@ export default function Models() {
               <InputNumber min={0} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item name="videoPrice4k" label="4K 档价格（积分/秒）" initialValue={0}>
+              <InputNumber min={0} style={{ width: '100%' }} />
+            </Form.Item>
+          </>}
+          {modelType === 'audio' && <>
+            <Form.Item name="audioPriceStandard" label="标准档价格（积分/秒）" initialValue={0}>
+              <InputNumber min={0} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name="audioPriceHd" label="高清档价格（积分/秒）" initialValue={0}>
               <InputNumber min={0} style={{ width: '100%' }} />
             </Form.Item>
           </>}

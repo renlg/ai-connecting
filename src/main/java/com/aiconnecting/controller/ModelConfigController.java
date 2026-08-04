@@ -26,14 +26,14 @@ public class ModelConfigController {
     private final ModelConfigService modelConfigService;
     private final RelayService relayService;
 
-    private static final Set<String> VALID_TYPES = Set.of("text", "image", "video");
+    private static final Set<String> VALID_TYPES = Set.of("text", "image", "video", "audio");
 
     private static String validateType(String type) {
         if (type == null || type.isBlank()) {
             return null;
         }
         if (!VALID_TYPES.contains(type)) {
-            throw new BusinessException("模型类型无效，仅支持 text/image/video");
+            throw new BusinessException("模型类型无效，仅支持 text/image/video/audio");
         }
         return type;
     }
@@ -52,6 +52,8 @@ public class ModelConfigController {
         checkNonNegative("视频 720P 档价格", request.getVideoPrice720p());
         checkNonNegative("视频 1080P 档价格", request.getVideoPrice1080p());
         checkNonNegative("视频 4K 档价格", request.getVideoPrice4k());
+        checkNonNegative("音频标准档价格", request.getAudioPriceStandard());
+        checkNonNegative("音频高清档价格", request.getAudioPriceHd());
     }
 
     private static void checkNonNegative(String label, Integer value) {
@@ -118,6 +120,8 @@ public class ModelConfigController {
                 .videoPrice720p(request.getVideoPrice720p())
                 .videoPrice1080p(request.getVideoPrice1080p())
                 .videoPrice4k(request.getVideoPrice4k())
+                .audioPriceStandard(request.getAudioPriceStandard())
+                .audioPriceHd(request.getAudioPriceHd())
                 .status(1)
                 .build();
         ModelConfig saved = modelConfigService.save(config);
@@ -177,6 +181,12 @@ public class ModelConfigController {
         }
         if (request.getVideoPrice4k() != null) {
             config.setVideoPrice4k(request.getVideoPrice4k());
+        }
+        if (request.getAudioPriceStandard() != null) {
+            config.setAudioPriceStandard(request.getAudioPriceStandard());
+        }
+        if (request.getAudioPriceHd() != null) {
+            config.setAudioPriceHd(request.getAudioPriceHd());
         }
         ModelConfig saved = modelConfigService.save(config);
         relayService.clearModelNameCache();

@@ -28,7 +28,7 @@ public class ModelConfig {
     @Column(length = 100)
     private String displayName;
 
-    /** 模型类型: text=文本, image=图片, video=视频 */
+    /** 模型类型: text=文本, image=图片, video=视频, audio=音频 */
     @Builder.Default
     @Column(name = "type", nullable = false, length = 20, columnDefinition = "VARCHAR(20) NOT NULL DEFAULT 'text'")
     private String type = "text";
@@ -90,6 +90,16 @@ public class ModelConfig {
     @Column(name = "video_price_4k", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
     private BigDecimal videoPrice4k;
 
+    // ==================== 音频模型按音质档位计费 (积分/秒，计费 = 档位单价 × 时长秒数) ====================
+
+    /** 音频标准档价格 */
+    @Column(name = "audio_price_standard", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
+    private BigDecimal audioPriceStandard;
+
+    /** 音频高清档价格 */
+    @Column(name = "audio_price_hd", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
+    private BigDecimal audioPriceHd;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -112,6 +122,8 @@ public class ModelConfig {
         if (videoPrice720p == null) videoPrice720p = BigDecimal.ZERO;
         if (videoPrice1080p == null) videoPrice1080p = BigDecimal.ZERO;
         if (videoPrice4k == null) videoPrice4k = BigDecimal.ZERO;
+        if (audioPriceStandard == null) audioPriceStandard = BigDecimal.ZERO;
+        if (audioPriceHd == null) audioPriceHd = BigDecimal.ZERO;
     }
 
     @PreUpdate

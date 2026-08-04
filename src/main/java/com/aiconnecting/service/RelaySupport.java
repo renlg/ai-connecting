@@ -111,7 +111,7 @@ public class RelaySupport {
     /**
      * 转发前统一预检：Token 有效性、账号状态、余额、模型权限/状态/类型与端点匹配、限流
      *
-     * @param endpointType 端点类别: text=文本类端点, image=图片端点, video=视频端点
+     * @param endpointType 端点类别: text=文本类端点, image=图片端点, video=视频端点, audio=音频端点
      */
     RelayContext validateAndPrepare(String tokenKey, String model, String endpointType) {
         Token token = tokenService.validateTokenKey(tokenKey);
@@ -146,13 +146,15 @@ public class RelaySupport {
         return new RelayContext(token, channelModelId, tokenUser.getLevel(), tokenUser, config);
     }
 
+    private static final Set<String> MEDIA_ENDPOINT_TYPES = Set.of("image", "video", "audio");
+
     /**
-     * 端点类别与模型类型必须匹配：图片端点只接受 image 模型、视频端点只接受 video 模型，
-     * 文本类端点拒绝 image/video 模型，避免走错计费逻辑导致零计费或错计费
+     * 端点类别与模型类型必须匹配：图片端点只接受 image 模型、视频端点只接受 video 模型、
+     * 音频端点只接受 audio 模型，文本类端点拒绝媒体类模型，避免走错计费逻辑导致零计费或错计费
      */
     private void checkEndpointTypeMatch(String model, ModelConfig config, String endpointType) {
         String modelType = config != null ? config.getType() : null;
-        if ("image".equals(endpointType) || "video".equals(endpointType)) {
+        if (MEDIA_ENDPOINT_TYPES.contains(endpointType)) {
             if (config == null) {
                 throw new BusinessException(400, "模型未配置，无法用于媒体请求: " + model);
             }
@@ -160,7 +162,7 @@ public class RelaySupport {
                 throw new BusinessException(400, "模型 " + model + " 类型为 " + (modelType != null ? modelType : "text")
                         + "，不能用于 " + endpointType + " 端点");
             }
-        } else if ("image".equals(modelType) || "video".equals(modelType)) {
+        } else if (modelType != null && MEDIA_ENDPOINT_TYPES.contains(modelType)) {
             throw new BusinessException(400, "模型 " + model + " 类型为 " + modelType + "，不能用于文本类端点");
         }
     }
@@ -493,12 +495,13 @@ public class RelaySupport {
     /**
      * 媒体请求预扣：价格在调用上游前已完全可知，先原子校验余额并扣减积分，再放行请求；
      * 上游失败时由调用方通过 {@link #refundMediaCharge} 退回。
-     * 图片 = 档位单价 × 张数；视频 = 分辨率档位单价 × 时长（秒）。
-     * 分辨率/时长缺失或无法识别时直接拒绝（400），不允许按低档位漏计费。
+     * 图片 = 档位单价 × 张数；视频 = 分辨率档位单价 × 时长（秒）；音频 = 音质档位单价 × 时长（秒）。
+     * 分辨率/音质/时长缺失或无法识别时直接拒绝（400），不允许按低档位漏计费。
      */
     MediaCharge prepareMediaCharge(RelayContext ctx, String requestBody) {
         ModelConfig config = ctx.modelConfig();
         String size = null;
+        String quality = null;
         int n = 1;
         int durationSeconds = 0;
         try {
@@ -507,6 +510,9 @@ public class RelaySupport {
                 size = body.get("size").asText();
             } else if (body.hasNonNull("resolution")) {
                 size = body.get("resolution").asText();
+            }
+            if (body.hasNonNull("quality")) {
+                quality = body.get("quality").asText();
             }
             if (body.hasNonNull("n")) {
                 n = body.get("n").asInt(1);
@@ -520,9 +526,11 @@ public class RelaySupport {
             throw new BusinessException(400, "无法解析媒体请求参数: " + e.getMessage());
         }
 
-        BigDecimal creditCost = "video".equals(config.getType())
-                ? usageLogService.calculateVideoCreditCost(config, size, durationSeconds)
-                : usageLogService.calculateImageCreditCost(config, size, n);
+        BigDecimal creditCost = switch (config.getType()) {
+            case "video" -> usageLogService.calculateVideoCreditCost(config, size, durationSeconds);
+            case "audio" -> usageLogService.calculateAudioCreditCost(config, quality, durationSeconds);
+            default -> usageLogService.calculateImageCreditCost(config, size, n);
+        };
 
         boolean deducted = false;
         if (creditCost.compareTo(BigDecimal.ZERO) > 0) {

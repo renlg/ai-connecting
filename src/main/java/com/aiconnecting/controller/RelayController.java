@@ -164,15 +164,26 @@ public class RelayController {
     }
 
     /**
-     * Audio Transcription API
+     * Audio API (speech / transcriptions / translations)
+     * 预扣积分（音质档位单价 × 时长秒数）后按原始请求路径转发到上游渠道
      */
-    @PostMapping("/v1/audio/transcriptions")
-    public Object audioTranscriptions(@RequestHeader(value = "Authorization", required = false) String authHeader,
-                                      @RequestBody String requestBody,
-                                      HttpServletRequest request) throws IOException {
+    @PostMapping({"/v1/audio/speech", "/v1/audio/transcriptions", "/v1/audio/translations"})
+    public Object audioRequests(@RequestHeader(value = "Authorization", required = false) String authHeader,
+                                @RequestBody String requestBody,
+                                HttpServletRequest request) throws IOException {
         String tokenKey = extractTokenKey(authHeader);
-        String result = relayService.relayRequest(tokenKey, "/v1/audio/transcriptions",
-                requestBody, "whisper-1", request);
+        JsonNode jsonBody = objectMapper.readTree(requestBody);
+        String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "";
+        if (model.isEmpty()) {
+            throw new BusinessException(400, "请求缺少 model 参数");
+        }
+        String resolvedModel = relayService.resolveModelName(model);
+        if (!resolvedModel.equals(model)) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
+            requestBody = objectMapper.writeValueAsString(jsonBody);
+        }
+        String result = relayService.relayMediaRequest(tokenKey, request.getRequestURI(),
+                requestBody, resolvedModel, request, "audio");
         return objectMapper.readTree(result);
     }
 

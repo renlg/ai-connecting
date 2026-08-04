@@ -29,7 +29,7 @@ public class ModelConfigRequest {
     /** 缓存 token 积分兑换比例 (每百万token 消耗多少积分) */
     private BigDecimal cacheCreditRate;
 
-    /** 模型类型: text=文本, image=图片, video=视频 */
+    /** 模型类型: text=文本, image=图片, video=视频, audio=音频 */
     private String type;
 
     /** 图片 1K 档价格 (积分/张) */
@@ -52,4 +52,10 @@ public class ModelConfigRequest {
 
     /** 视频 4K 档价格 (积分/秒) */
     private BigDecimal videoPrice4k;
+
+    /** 音频标准档价格 (积分/秒) */
+    private BigDecimal audioPriceStandard;
+
+    /** 音频高清档价格 (积分/秒) */
+    private BigDecimal audioPriceHd;
 }

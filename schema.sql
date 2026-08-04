@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS "model_configs" (
     display_name VARCHAR(100),
     description VARCHAR(500),
     status INTEGER NOT NULL,
-    -- 模型类型: text=文本(按 token 计费), image=图片(按分辨率档位计费), video=视频(按分辨率档位计费)
+    -- 模型类型: text=文本(按 token 计费), image=图片(按分辨率档位计费), video=视频(按分辨率档位计费), audio=音频(按音质档位计费)
     type VARCHAR(20) NOT NULL DEFAULT 'text',
     input_credit_rate INTEGER NOT NULL DEFAULT 0,
     output_credit_rate INTEGER NOT NULL DEFAULT 0,
@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS "model_configs" (
     video_price_720p DECIMAL(10,2) NOT NULL DEFAULT 0,
     video_price_1080p DECIMAL(10,2) NOT NULL DEFAULT 0,
     video_price_4k DECIMAL(10,2) NOT NULL DEFAULT 0,
+    -- 音频模型音质档位价格 (积分/秒，计费 = 档位单价 × 时长秒数)
+    audio_price_standard DECIMAL(10,2) NOT NULL DEFAULT 0,
+    audio_price_hd DECIMAL(10,2) NOT NULL DEFAULT 0,
     admin_only BOOLEAN DEFAULT 0,
     multiplier DECIMAL(10, 2) NOT NULL DEFAULT 1.0,
     created_at TIMESTAMP NOT NULL,

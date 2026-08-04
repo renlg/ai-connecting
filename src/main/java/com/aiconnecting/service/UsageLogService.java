@@ -265,6 +265,37 @@ public class UsageLogService {
     }
 
     /**
+     * 解析音频 quality 参数对应的音质档位。standard/sd → STANDARD, hd/high → HD；
+     * 缺省时按 STANDARD 档计（OpenAI 默认音质），无法识别时返回 null（由调用方拒绝请求）。
+     */
+    public static String resolveAudioTier(String quality) {
+        if (quality == null || quality.isBlank()) return "STANDARD";
+        String q = quality.trim().toLowerCase();
+        switch (q) {
+            case "standard", "sd", "default": return "STANDARD";
+            case "hd", "high": return "HD";
+        }
+        return null;
+    }
+
+    /**
+     * 音频模型积分消耗 = 对应音质档位单价 × 时长（秒）。
+     * 音质无法识别或时长非法时直接拒绝，不允许按低档位漏计费。
+     */
+    public BigDecimal calculateAudioCreditCost(com.aiconnecting.entity.ModelConfig config, String quality, int durationSeconds) {
+        String tier = resolveAudioTier(quality);
+        if (tier == null) {
+            throw new BusinessException(400, "不支持的音频音质参数 (quality): " + quality + "，支持 standard/hd");
+        }
+        if (durationSeconds <= 0) {
+            throw new BusinessException(400, "音频请求缺少有效的时长参数 (duration/seconds)，需为正整数秒数");
+        }
+        BigDecimal price = "HD".equals(tier) ? config.getAudioPriceHd() : config.getAudioPriceStandard();
+        if (price == null) price = BigDecimal.ZERO;
+        return price.multiply(BigDecimal.valueOf(durationSeconds));
+    }
+
+    /**
      * 分页查询使用日志
      */
     public Page<UsageLog> getLogs(int page, int size) {

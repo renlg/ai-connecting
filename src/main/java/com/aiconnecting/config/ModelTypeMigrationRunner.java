@@ -33,7 +33,8 @@ public class ModelTypeMigrationRunner implements ApplicationRunner {
         Map<String, String> columns = new LinkedHashMap<>();
         columns.put("type", "VARCHAR(20) NOT NULL DEFAULT 'text'");
         for (String col : List.of("image_price_1k", "image_price_2k", "image_price_4k",
-                "video_price_480p", "video_price_720p", "video_price_1080p", "video_price_4k")) {
+                "video_price_480p", "video_price_720p", "video_price_1080p", "video_price_4k",
+                "audio_price_standard", "audio_price_hd")) {
             columns.put(col, "DECIMAL(10,2) NOT NULL DEFAULT 0");
         }
 
