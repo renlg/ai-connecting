@@ -140,6 +140,11 @@ public class RelayController {
         String tokenKey = extractTokenKey(authHeader);
         Token token = tokenService.validateTokenKey(tokenKey);
 
+        User tokenUser = userService.getByIdCached(token.getUserId());
+        if (tokenUser.getStatus() == null || tokenUser.getStatus() != 1) {
+            throw new BusinessException(403, "账号已被禁用");
+        }
+
         boolean isAdmin = userService.isAdmin(token.getUserId());
 
         List<ModelConfig> models = modelConfigService.getAvailableModels(isAdmin);
