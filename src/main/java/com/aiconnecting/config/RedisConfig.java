@@ -24,7 +24,7 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 @ConditionalOnProperty(name = "app.rate-limit.enabled", havingValue = "true")
 public class RedisConfig {
 
-    @Value("${spring.data.redis.host}")
+    @Value("${spring.data.redis.host:127.0.0.1}")
     private String redisHost;
 
     @Value("${spring.data.redis.port:6379}")
