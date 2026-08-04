@@ -46,6 +46,17 @@ public class RelayService {
         return openAiRelayService.relayVideoStatusRequest(tokenKey, videoId);
     }
 
+    public void relayAudioSpeech(String tokenKey, String requestBody, String model,
+                                 HttpServletRequest httpRequest, HttpServletResponse httpResponse) throws IOException {
+        openAiRelayService.relayAudioSpeech(tokenKey, requestBody, model, httpRequest, httpResponse);
+    }
+
+    public org.springframework.http.ResponseEntity<byte[]> relayAudioTranscription(
+            String tokenKey, String path, org.springframework.web.multipart.MultipartFile file,
+            java.util.Map<String, String> formFields, HttpServletRequest httpRequest) throws IOException {
+        return openAiRelayService.relayAudioTranscription(tokenKey, path, file, formFields, httpRequest);
+    }
+
     // ==================== Claude 协议中转 ====================
 
     public String claudeRelayRequest(String tokenKey, String requestBody,

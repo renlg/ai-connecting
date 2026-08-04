@@ -309,6 +309,15 @@ public class UserService {
     }
 
     /**
+     * 按实际用量结算时的补扣（预估预扣少于实际消耗时调用），与文本后付费一致，允许余额透支
+     */
+    @Transactional
+    public void deductCreditsSettlement(Long userId, BigDecimal amount) {
+        userRepository.deductCredits(userId, amount);
+        evictUserCache(userId);
+    }
+
+    /**
      * 判断用户是否为管理员
      */
     public boolean isAdmin(Long userId) {

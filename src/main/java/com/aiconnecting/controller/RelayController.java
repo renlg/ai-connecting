@@ -123,7 +123,7 @@ public class RelayController {
         }
         String result = relayService.relayMediaRequest(tokenKey, "/v1/images/generations",
                 requestBody, resolvedModel, request, "image");
-        return objectMapper.readTree(result);
+        return parseJsonOrRaw(result);
     }
 
     /**
@@ -148,7 +148,7 @@ public class RelayController {
         }
         String result = relayService.relayMediaRequest(tokenKey, request.getRequestURI(),
                 requestBody, resolvedModel, request, "video");
-        return objectMapper.readTree(result);
+        return parseJsonOrRaw(result);
     }
 
     /**
@@ -164,13 +164,14 @@ public class RelayController {
     }
 
     /**
-     * Audio API (speech / transcriptions / translations)
-     * 预扣积分（音质档位单价 × 时长秒数）后按原始请求路径转发到上游渠道
+     * Audio Speech API (/v1/audio/speech)
+     * JSON 请求、二进制音频响应（MP3/WAV 等），按原始字节透传；按实际生成时长结算计费
      */
-    @PostMapping({"/v1/audio/speech", "/v1/audio/transcriptions", "/v1/audio/translations"})
-    public Object audioRequests(@RequestHeader(value = "Authorization", required = false) String authHeader,
-                                @RequestBody String requestBody,
-                                HttpServletRequest request) throws IOException {
+    @PostMapping("/v1/audio/speech")
+    public void audioSpeech(@RequestHeader(value = "Authorization", required = false) String authHeader,
+                            @RequestBody String requestBody,
+                            HttpServletRequest request,
+                            HttpServletResponse response) throws IOException {
         String tokenKey = extractTokenKey(authHeader);
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "";
@@ -182,9 +183,29 @@ public class RelayController {
             ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
             requestBody = objectMapper.writeValueAsString(jsonBody);
         }
-        String result = relayService.relayMediaRequest(tokenKey, request.getRequestURI(),
-                requestBody, resolvedModel, request, "audio");
-        return objectMapper.readTree(result);
+        relayService.relayAudioSpeech(tokenKey, requestBody, resolvedModel, request, response);
+    }
+
+    /**
+     * Audio Transcriptions / Translations API
+     * multipart/form-data 文件上传，重建 multipart 转发上游；
+     * 响应（JSON 或 text/srt/vtt）按原始字节透传；按上传文件的真实音频时长计费
+     */
+    @PostMapping({"/v1/audio/transcriptions", "/v1/audio/translations"})
+    public org.springframework.http.ResponseEntity<byte[]> audioTranscriptions(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestPart("file") org.springframework.web.multipart.MultipartFile file,
+            @RequestParam Map<String, String> formFields,
+            HttpServletRequest request) throws IOException {
+        String tokenKey = extractTokenKey(authHeader);
+        String model = formFields.get("model");
+        if (model == null || model.isBlank()) {
+            throw new BusinessException(400, "请求缺少 model 参数");
+        }
+        String resolvedModel = relayService.resolveModelName(model);
+        Map<String, String> fields = new LinkedHashMap<>(formFields);
+        fields.put("model", resolvedModel);
+        return relayService.relayAudioTranscription(tokenKey, request.getRequestURI(), file, fields, request);
     }
 
     /**
@@ -263,6 +284,18 @@ public class RelayController {
 
         relayService.geminiRelayStreamRequest(tokenKey, requestBody, resolvedModel, request, response);
         return null;
+    }
+
+    /**
+     * 上游已成功且积分已结算，本地解析失败时按原文返回，绝不因解析问题向客户端报错
+     */
+    private Object parseJsonOrRaw(String result) {
+        try {
+            return objectMapper.readTree(result);
+        } catch (Exception e) {
+            log.warn("媒体响应非 JSON，按原文透传");
+            return result;
+        }
     }
 
     private String extractTokenKey(String authHeader) {

@@ -168,13 +168,17 @@ public class RelaySupport {
     }
 
     /**
-     * 校验 Token 及所属账号（不涉及模型），供视频状态查询等只读接口使用
+     * 校验 Token 及所属账号（不涉及模型），供视频状态查询等只读接口使用；
+     * 与转发端点一样执行 Token 限流，避免轮询接口绕过限流
      */
     Token validateToken(String tokenKey) {
         Token token = tokenService.validateTokenKey(tokenKey);
         User tokenUser = userService.getByIdCached(token.getUserId());
         if (tokenUser.getStatus() == null || tokenUser.getStatus() != 1) {
             throw new BusinessException(403, "账号已被禁用");
+        }
+        if (rateLimitService != null) {
+            rateLimitService.checkTokenRateLimit(token.getId(), token.getRateLimit());
         }
         return token;
     }
@@ -383,6 +387,54 @@ public class RelaySupport {
         }
     }
 
+    /** 二进制上游响应：音频等非 JSON 响应按原始字节透传 */
+    record BinaryResponse(byte[] body, String contentType) {}
+
+    /**
+     * 转发 JSON 请求并以原始字节返回上游响应（供 /v1/audio/speech 等二进制响应端点使用）
+     */
+    BinaryResponse forwardBinaryRequest(Channel channel, String path, String requestBody) {
+        String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
+        RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
+        Request.Builder requestBuilder = new Request.Builder()
+                .url(url)
+                .addHeader("Content-Type", "application/json")
+                .post(body);
+        applyChannelAuth(requestBuilder, channel);
+        return executeBinary(channel, requestBuilder.build());
+    }
+
+    /**
+     * 转发 multipart/form-data 请求并以原始字节返回上游响应
+     * （供 /v1/audio/transcriptions、/v1/audio/translations 文件上传端点使用）
+     */
+    BinaryResponse forwardMultipartRequest(Channel channel, String path, MultipartBody multipartBody) {
+        String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
+        Request.Builder requestBuilder = new Request.Builder()
+                .url(url)
+                .post(multipartBody);
+        applyChannelAuth(requestBuilder, channel);
+        return executeBinary(channel, requestBuilder.build());
+    }
+
+    private BinaryResponse executeBinary(Channel channel, Request request) {
+        try (okhttp3.Response response = httpClient.newCall(request).execute()) {
+            byte[] bytes = response.body() != null ? response.body().bytes() : new byte[0];
+            if (!response.isSuccessful()) {
+                String error = new String(bytes, StandardCharsets.UTF_8);
+                log.error("Upstream API error: {} - {}", response.code(), error);
+                throw new BusinessException(response.code(), "上游 API 错误: " + error);
+            }
+            return new BinaryResponse(bytes, response.header("Content-Type"));
+        } catch (SocketTimeoutException e) {
+            log.error("Timed out forwarding request to channel {}: {}", channel.getId(), e.getMessage());
+            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(), e);
+        } catch (IOException e) {
+            log.error("Failed to forward request to channel {}: {}", channel.getId(), e.getMessage());
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
+        }
+    }
+
     String forwardClaudeRequest(Channel channel, String requestBody) {
         if (isChannelRateLimited(channel)) {
             throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
@@ -501,7 +553,6 @@ public class RelaySupport {
     MediaCharge prepareMediaCharge(RelayContext ctx, String requestBody) {
         ModelConfig config = ctx.modelConfig();
         String size = null;
-        String quality = null;
         int n = 1;
         int durationSeconds = 0;
         try {
@@ -511,27 +562,37 @@ public class RelaySupport {
             } else if (body.hasNonNull("resolution")) {
                 size = body.get("resolution").asText();
             }
-            if (body.hasNonNull("quality")) {
-                quality = body.get("quality").asText();
+            if (body.has("quality") && !body.get("quality").isNull() && !body.get("quality").isTextual()) {
+                throw new BusinessException(400, "quality 参数必须是字符串");
             }
             if (body.hasNonNull("n")) {
                 n = body.get("n").asInt(1);
             }
-            if (body.hasNonNull("duration")) {
-                durationSeconds = body.get("duration").asInt(0);
-            } else if (body.hasNonNull("seconds")) {
-                durationSeconds = body.get("seconds").asInt(0);
+            JsonNode durationNode = body.hasNonNull("duration") ? body.get("duration")
+                    : (body.hasNonNull("seconds") ? body.get("seconds") : null);
+            if (durationNode != null) {
+                if (!durationNode.isIntegralNumber() || !durationNode.canConvertToInt() || durationNode.asInt() <= 0) {
+                    throw new BusinessException(400, "duration/seconds 参数必须是正整数秒数");
+                }
+                durationSeconds = durationNode.asInt();
             }
+        } catch (BusinessException e) {
+            throw e;
         } catch (Exception e) {
             throw new BusinessException(400, "无法解析媒体请求参数: " + e.getMessage());
         }
 
         BigDecimal creditCost = switch (config.getType()) {
             case "video" -> usageLogService.calculateVideoCreditCost(config, size, durationSeconds);
-            case "audio" -> usageLogService.calculateAudioCreditCost(config, quality, durationSeconds);
             default -> usageLogService.calculateImageCreditCost(config, size, n);
         };
+        return chargeMediaCredits(ctx, creditCost);
+    }
 
+    /**
+     * 原子校验余额并预扣积分（admin 余额不足时放行但不扣减）
+     */
+    MediaCharge chargeMediaCredits(RelayContext ctx, BigDecimal creditCost) {
         boolean deducted = false;
         if (creditCost.compareTo(BigDecimal.ZERO) > 0) {
             deducted = userService.tryDeductCredits(ctx.token().getUserId(), creditCost);
@@ -540,6 +601,34 @@ public class RelaySupport {
             }
         }
         return new MediaCharge(creditCost, deducted);
+    }
+
+    /**
+     * 按实际用量结算预扣积分：多退少补（补扣与文本后付费一致，允许透支）。
+     * 结算落库失败时保持预扣金额并记录错误，不影响已成功的上游响应。
+     *
+     * @return 最终计费金额
+     */
+    BigDecimal settleMediaCharge(RelayContext ctx, MediaCharge charge, BigDecimal actualCost) {
+        if (!charge.deducted()) {
+            return actualCost;
+        }
+        BigDecimal diff = actualCost.subtract(charge.cost());
+        if (diff.compareTo(BigDecimal.ZERO) == 0) {
+            return actualCost;
+        }
+        try {
+            if (diff.compareTo(BigDecimal.ZERO) > 0) {
+                userService.deductCreditsSettlement(ctx.token().getUserId(), diff);
+            } else {
+                userService.refundCredits(ctx.token().getUserId(), diff.negate());
+            }
+            return actualCost;
+        } catch (Exception e) {
+            log.error("媒体计费结算失败，保持预扣金额: userId={}, prepaid={}, actual={}",
+                    ctx.token().getUserId(), charge.cost(), actualCost, e);
+            return charge.cost();
+        }
     }
 
     /**
