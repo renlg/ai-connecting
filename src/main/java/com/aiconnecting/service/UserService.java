@@ -309,11 +309,12 @@ public class UserService {
     }
 
     /**
-     * 按实际用量结算时的补扣（预估预扣少于实际消耗时调用），与文本后付费一致，允许余额透支
+     * 按实际用量结算时的补扣（预估预扣少于实际消耗时调用），允许余额透支：
+     * 无下限扣减保证实际扣减金额与使用日志记录的计费金额一致
      */
     @Transactional
     public void deductCreditsSettlement(Long userId, BigDecimal amount) {
-        userRepository.deductCredits(userId, amount);
+        userRepository.deductCreditsAllowNegative(userId, amount);
         evictUserCache(userId);
     }
 

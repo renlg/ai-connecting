@@ -195,16 +195,18 @@ public class RelayController {
     public org.springframework.http.ResponseEntity<byte[]> audioTranscriptions(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestPart("file") org.springframework.web.multipart.MultipartFile file,
-            @RequestParam Map<String, String> formFields,
+            @RequestParam org.springframework.util.MultiValueMap<String, String> formFields,
             HttpServletRequest request) throws IOException {
         String tokenKey = extractTokenKey(authHeader);
-        String model = formFields.get("model");
+        String model = formFields.getFirst("model");
         if (model == null || model.isBlank()) {
             throw new BusinessException(400, "请求缺少 model 参数");
         }
         String resolvedModel = relayService.resolveModelName(model);
-        Map<String, String> fields = new LinkedHashMap<>(formFields);
-        fields.put("model", resolvedModel);
+        // MultiValueMap 保留同名表单字段的全部值（如 timestamp_granularities[]）
+        org.springframework.util.MultiValueMap<String, String> fields =
+                new org.springframework.util.LinkedMultiValueMap<>(formFields);
+        fields.set("model", resolvedModel);
         return relayService.relayAudioTranscription(tokenKey, request.getRequestURI(), file, fields, request);
     }
 

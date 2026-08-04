@@ -53,7 +53,7 @@ public class RelayService {
 
     public org.springframework.http.ResponseEntity<byte[]> relayAudioTranscription(
             String tokenKey, String path, org.springframework.web.multipart.MultipartFile file,
-            java.util.Map<String, String> formFields, HttpServletRequest httpRequest) throws IOException {
+            org.springframework.util.MultiValueMap<String, String> formFields, HttpServletRequest httpRequest) throws IOException {
         return openAiRelayService.relayAudioTranscription(tokenKey, path, file, formFields, httpRequest);
     }
 

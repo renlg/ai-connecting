@@ -266,11 +266,13 @@ public class UsageLogService {
 
     /**
      * 解析音频 quality 参数对应的音质档位。standard/sd → STANDARD, hd/high → HD；
-     * 缺省时按 STANDARD 档计（OpenAI 默认音质），无法识别时返回 null（由调用方拒绝请求）。
+     * 未传（null）时按 STANDARD 档计（OpenAI 默认音质）；传了但为空或无法识别的值
+     * 返回 null（由调用方拒绝请求），不把空字符串当作有效默认值。
      */
     public static String resolveAudioTier(String quality) {
-        if (quality == null || quality.isBlank()) return "STANDARD";
+        if (quality == null) return "STANDARD";
         String q = quality.trim().toLowerCase();
+        if (q.isEmpty()) return null;
         switch (q) {
             case "standard", "sd", "default": return "STANDARD";
             case "hd", "high": return "HD";

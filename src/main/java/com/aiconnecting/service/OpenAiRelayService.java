@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.BufferedReader;
@@ -124,8 +125,13 @@ public class OpenAiRelayService {
             try {
                 response = handleVideoResponse(response, result.channel().getId(), ctx.token().getUserId(), model);
             } catch (RuntimeException e) {
-                // 任务映射保存失败时客户端拿到的 id 将无法轮询，退回预扣并报错，不返回不可用的任务 id
-                support.refundMediaCharge(ctx, charge);
+                // 响应无效或任务映射保存失败时客户端拿到的 id 将无法轮询，
+                // 退回预扣并报错，不返回不可轮询的任务结果；退款状态如实反馈给客户端
+                boolean refunded = support.refundMediaCharge(ctx, charge);
+                String suffix = refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿";
+                if (e instanceof BusinessException be) {
+                    throw new BusinessException(be.getCode(), be.getMessage() + suffix);
+                }
                 throw e;
             }
         }
@@ -201,19 +207,21 @@ public class OpenAiRelayService {
     /**
      * 持久化上游视频任务 id 与渠道的映射，供轮询接口回查；
      * 响应保留上游原始 id，仅附加非敏感的 channel_id 字段（不暴露渠道凭据或地址）。
-     * 映射保存失败时抛错（由调用方退回预扣积分），避免客户端付了费却拿到无法轮询的任务 id
+     * 响应非法 JSON、缺少可用 id 或映射保存失败均抛错（由调用方退回预扣积分并如实反馈退款状态），
+     * 绝不向已付费的客户端返回无法轮询的任务结果
      */
     private String handleVideoResponse(String response, Long channelId, Long userId, String model) {
         JsonNode json;
         try {
             json = support.objectMapper.readTree(response);
         } catch (Exception e) {
-            log.warn("视频响应不是合法 JSON，跳过任务映射记录");
-            return response;
+            log.error("视频上游响应不是合法 JSON，无法建立任务轮询映射");
+            throw new BusinessException(502, "上游视频响应无效（非 JSON）");
         }
-        if (!json.isObject() || !json.hasNonNull("id")) {
-            log.warn("视频响应缺少 id 字段，无法记录任务映射，轮询接口将无法查询该任务");
-            return response;
+        if (!json.isObject() || !json.hasNonNull("id")
+                || !json.get("id").isTextual() || json.get("id").asText().isBlank()) {
+            log.error("视频上游响应缺少有效的 id 字段，无法建立任务轮询映射");
+            throw new BusinessException(502, "上游视频响应缺少有效的任务 id");
         }
         try {
             videoTaskRepository.save(VideoTask.builder()
@@ -224,7 +232,7 @@ public class OpenAiRelayService {
                     .build());
         } catch (Exception e) {
             log.error("视频任务映射保存失败: upstreamId={}", json.get("id").asText(), e);
-            throw new BusinessException(500, "视频任务保存失败，预扣积分已退回，请重试");
+            throw new BusinessException(500, "视频任务保存失败，请重试");
         }
         ((com.fasterxml.jackson.databind.node.ObjectNode) json).put("channel_id", channelId);
         try {
@@ -333,23 +341,33 @@ public class OpenAiRelayService {
      * 响应（JSON 或 response_format=text/srt/vtt 的纯文本）按原始字节透传。
      * 计费不信任客户端申报时长：解码上传文件的音频元数据获得真实时长，按实际秒数预扣。
      */
+    /** 上传音频大小上限（与 OpenAI 25MB 限制一致），配合限时长测量约束堆内存占用 */
+    static final long MAX_AUDIO_UPLOAD_BYTES = 25L * 1024 * 1024;
+
+    /** 这些 response_format 的响应是纯文本，按原始字节透传；其余（json/verbose_json）必须校验为合法 JSON 才计费 */
+    private static final Set<String> RAW_TEXT_RESPONSE_FORMATS = Set.of("text", "srt", "vtt");
+
     public ResponseEntity<byte[]> relayAudioTranscription(String tokenKey, String path, MultipartFile file,
-                                                          Map<String, String> formFields,
+                                                          MultiValueMap<String, String> formFields,
                                                           HttpServletRequest httpRequest) throws IOException {
-        String model = formFields.get("model");
+        String model = formFields.getFirst("model");
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model, "audio");
 
-        String quality = formFields.get("quality");
+        String quality = formFields.getFirst("quality");
         if (quality != null && UsageLogService.resolveAudioTier(quality) == null) {
             throw new BusinessException(400, "不支持的音频音质参数 (quality): " + quality + "，支持 standard/hd");
         }
         if (file == null || file.isEmpty()) {
             throw new BusinessException(400, "请求缺少音频文件 (file)");
         }
+        if (file.getSize() > MAX_AUDIO_UPLOAD_BYTES) {
+            throw new BusinessException(413, "上传音频超过大小限制 (" + MAX_AUDIO_UPLOAD_BYTES / (1024 * 1024) + "MB)");
+        }
         byte[] fileBytes = file.getBytes();
         double measured = AudioDurationUtil.measure(fileBytes);
         if (measured <= 0) {
-            throw new BusinessException(400, "无法识别上传音频的时长（按秒计费所需），支持 wav/mp3/flac/ogg/opus/m4a/mp4/aac/webm 格式");
+            throw new BusinessException(400, "无法可靠测量上传音频的时长（按秒计费所需），"
+                    + "支持 wav/mp3/flac/ogg/opus/m4a/mp4/aac/webm 格式；裸 PCM 不支持，请封装为 WAV 后上传");
         }
         int seconds = Math.max(1, (int) Math.ceil(measured));
         BigDecimal cost = usageLogService.calculateAudioCreditCost(ctx.modelConfig(), quality, seconds);
@@ -359,15 +377,22 @@ public class OpenAiRelayService {
         okhttp3.MediaType fileType = okhttp3.MediaType.parse(
                 file.getContentType() != null ? file.getContentType() : "application/octet-stream");
         mb.addFormDataPart("file", fileName, okhttp3.RequestBody.create(fileBytes, fileType));
-        for (Map.Entry<String, String> field : formFields.entrySet()) {
+        // 逐 part 重建，保留同名字段的每个值（如 timestamp_granularities[]）
+        for (Map.Entry<String, java.util.List<String>> field : formFields.entrySet()) {
             String key = field.getKey();
             // 剥离非标准计费参数，其余表单字段原样转发
             if ("quality".equals(key) || "duration".equals(key) || "seconds".equals(key)) {
                 continue;
             }
-            mb.addFormDataPart(key, field.getValue());
+            for (String value : field.getValue()) {
+                mb.addFormDataPart(key, value);
+            }
         }
         okhttp3.MultipartBody multipartBody = mb.build();
+
+        String responseFormat = formFields.getFirst("response_format");
+        boolean rawPassThrough = responseFormat != null
+                && RAW_TEXT_RESPONSE_FORMATS.contains(responseFormat.trim().toLowerCase());
 
         RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, cost);
         long startTime = System.currentTimeMillis();
@@ -378,6 +403,14 @@ public class OpenAiRelayService {
             support.refundMediaCharge(ctx, charge);
             throw e;
         }
+
+        // json/verbose_json 必须解析为含 text 字段的 JSON 对象才算成功，否则退款报错，不对坏响应计费
+        if (!rawPassThrough && !isValidTranscriptionJson(result.value().body())) {
+            boolean refunded = support.refundMediaCharge(ctx, charge);
+            throw new BusinessException(502, "上游返回无法解析的转写结果"
+                    + (refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿"));
+        }
+
         long duration = System.currentTimeMillis() - startTime;
         recordPrepaidUsageSafely(ctx.token(), result.channel(), model, charge, duration, httpRequest, path);
 
@@ -385,6 +418,18 @@ public class OpenAiRelayService {
         return ResponseEntity.ok()
                 .header("Content-Type", contentType != null ? contentType : "application/json")
                 .body(result.value().body());
+    }
+
+    private boolean isValidTranscriptionJson(byte[] body) {
+        if (body == null || body.length == 0) {
+            return false;
+        }
+        try {
+            JsonNode json = support.objectMapper.readTree(body);
+            return json != null && json.isObject() && json.has("text");
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**

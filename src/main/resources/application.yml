@@ -2,14 +2,15 @@ server:
   port: 8080
   shutdown: graceful
   tomcat:
-    max-http-form-post-size: 10MB
-  servlet:
-    multipart:
-      max-request-size: 10MB
+    max-http-form-post-size: 32MB
 
 spring:
   application:
     name: ai-connecting
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 32MB
   lifecycle:
     timeout-per-shutdown-phase: 30s
   datasource:

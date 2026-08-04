@@ -23,6 +23,11 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("UPDATE User u SET u.credits = COALESCE(u.credits, 0) + :amount WHERE u.id = :userId")
     void addCredits(@Param("userId") Long userId, @Param("amount") BigDecimal amount);
 
+    /** 结算补扣：无下限原子扣减，允许余额为负，保证实际扣减金额与使用日志记录一致 */
+    @Modifying
+    @Query("UPDATE User u SET u.credits = COALESCE(u.credits, 0) - :amount WHERE u.id = :userId")
+    void deductCreditsAllowNegative(@Param("userId") Long userId, @Param("amount") BigDecimal amount);
+
     /** 余额充足时原子扣减积分，返回受影响行数（0=余额不足，未扣减） */
     @Modifying
     @Query("UPDATE User u SET u.credits = u.credits - :amount WHERE u.id = :userId AND u.credits >= :amount")

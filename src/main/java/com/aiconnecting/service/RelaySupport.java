@@ -417,9 +417,14 @@ public class RelaySupport {
         return executeBinary(channel, requestBuilder.build());
     }
 
+    /** 二进制上游响应大小上限，防止异常上游响应占满堆内存 */
+    static final long MAX_BINARY_RESPONSE_BYTES = 64L * 1024 * 1024;
+
     private BinaryResponse executeBinary(Channel channel, Request request) {
         try (okhttp3.Response response = httpClient.newCall(request).execute()) {
-            byte[] bytes = response.body() != null ? response.body().bytes() : new byte[0];
+            byte[] bytes = response.body() != null
+                    ? readCapped(response.body().byteStream(), MAX_BINARY_RESPONSE_BYTES)
+                    : new byte[0];
             if (!response.isSuccessful()) {
                 String error = new String(bytes, StandardCharsets.UTF_8);
                 log.error("Upstream API error: {} - {}", response.code(), error);
@@ -433,6 +438,22 @@ public class RelaySupport {
             log.error("Failed to forward request to channel {}: {}", channel.getId(), e.getMessage());
             throw new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
         }
+    }
+
+    /** 限制大小地读取输入流，超限抛错而不是无限占用内存 */
+    private static byte[] readCapped(java.io.InputStream in, long maxBytes) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        long total = 0;
+        int read;
+        while ((read = in.read(buf)) != -1) {
+            total += read;
+            if (total > maxBytes) {
+                throw new BusinessException(502, "上游响应超出大小限制 (" + maxBytes / (1024 * 1024) + "MB)");
+            }
+            out.write(buf, 0, read);
+        }
+        return out.toByteArray();
     }
 
     String forwardClaudeRequest(Channel channel, String requestBody) {
@@ -568,13 +589,16 @@ public class RelaySupport {
             if (body.hasNonNull("n")) {
                 n = body.get("n").asInt(1);
             }
-            JsonNode durationNode = body.hasNonNull("duration") ? body.get("duration")
-                    : (body.hasNonNull("seconds") ? body.get("seconds") : null);
-            if (durationNode != null) {
-                if (!durationNode.isIntegralNumber() || !durationNode.canConvertToInt() || durationNode.asInt() <= 0) {
-                    throw new BusinessException(400, "duration/seconds 参数必须是正整数秒数");
-                }
-                durationSeconds = durationNode.asInt();
+            // duration 与 seconds 各自独立校验；同时出现时必须相等，防止用小值预扣、大值转发绕过按秒计费
+            Integer durationField = readPositiveIntSeconds(body, "duration");
+            Integer secondsField = readPositiveIntSeconds(body, "seconds");
+            if (durationField != null && secondsField != null && !durationField.equals(secondsField)) {
+                throw new BusinessException(400, "duration 与 seconds 参数值不一致，请只传其一或保持相等");
+            }
+            if (durationField != null) {
+                durationSeconds = durationField;
+            } else if (secondsField != null) {
+                durationSeconds = secondsField;
             }
         } catch (BusinessException e) {
             throw e;
@@ -582,6 +606,23 @@ public class RelaySupport {
             throw new BusinessException(400, "无法解析媒体请求参数: " + e.getMessage());
         }
 
+        return finishPrepareMediaCharge(ctx, config, size, n, durationSeconds);
+    }
+
+    /** 每个出现的时长字段都必须独立通过正整数校验；JSON null 视为未传 */
+    private static Integer readPositiveIntSeconds(JsonNode body, String field) {
+        if (!body.has(field) || body.get(field).isNull()) {
+            return null;
+        }
+        JsonNode node = body.get(field);
+        if (!node.isIntegralNumber() || !node.canConvertToInt() || node.asInt() <= 0) {
+            throw new BusinessException(400, field + " 参数必须是正整数秒数");
+        }
+        return node.asInt();
+    }
+
+    private MediaCharge finishPrepareMediaCharge(RelayContext ctx, ModelConfig config,
+                                                 String size, int n, int durationSeconds) {
         BigDecimal creditCost = switch (config.getType()) {
             case "video" -> usageLogService.calculateVideoCreditCost(config, size, durationSeconds);
             default -> usageLogService.calculateImageCreditCost(config, size, n);
@@ -633,14 +674,21 @@ public class RelaySupport {
 
     /**
      * 上游请求失败时退回预扣的积分
+     *
+     * @return true=已退回（或无需退回）；false=退款本身失败，已记录待人工补偿告警，
+     *         调用方必须向客户端如实反映扣费状态，不得声称已退款
      */
-    void refundMediaCharge(RelayContext ctx, MediaCharge charge) {
-        if (charge != null && charge.deducted()) {
-            try {
-                userService.refundCredits(ctx.token().getUserId(), charge.cost());
-            } catch (Exception e) {
-                log.error("退回预扣积分失败: userId={}, amount={}", ctx.token().getUserId(), charge.cost(), e);
-            }
+    boolean refundMediaCharge(RelayContext ctx, MediaCharge charge) {
+        if (charge == null || !charge.deducted()) {
+            return true;
+        }
+        try {
+            userService.refundCredits(ctx.token().getUserId(), charge.cost());
+            return true;
+        } catch (Exception e) {
+            log.error("MANUAL_COMPENSATION_REQUIRED 退回预扣积分失败，需人工补偿: userId={}, amount={}",
+                    ctx.token().getUserId(), charge.cost(), e);
+            return false;
         }
     }
 
