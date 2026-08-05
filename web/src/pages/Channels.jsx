@@ -316,7 +316,7 @@ export default function Channels() {
               videoObjectUrlRef.current = mediaUrl
               setTestResult(prev => ({ ...prev, duration: Date.now() - startTime, videoStatus: 'completed', polling: false, mediaUrl }))
             } catch (fallbackErr) {
-              console.debug('[video test] fallback content download failed', fallbackErr)
+              console.debug('[video test] fallback content download failed:', fallbackErr?.message || String(fallbackErr))
             }
           }
           if (!mediaUrl) throw new Error('上游视频文件尚未就绪，请稍后重试')

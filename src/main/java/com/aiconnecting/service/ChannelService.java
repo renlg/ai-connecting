@@ -42,6 +42,7 @@ public class ChannelService {
 
     private OkHttpClient httpClient;
     private OkHttpClient streamHttpClient;
+    private OkHttpClient videoDownloadHttpClient;
 
     @jakarta.annotation.PostConstruct
     void initHttpClients() {
@@ -61,6 +62,8 @@ public class ChannelService {
         }
         httpClient = baseBuilder.build();
         streamHttpClient = streamBuilder.build();
+        // 视频文件下载：禁止自动跟随重定向，避免重定向目标绕过主机校验
+        videoDownloadHttpClient = streamHttpClient.newBuilder().followRedirects(false).build();
     }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -352,7 +355,7 @@ public class ChannelService {
                                     model, taskId, taskStatus, response.code());
                         } else {
                             log.info("video create task failed model={} httpStatus={} body={}",
-                                    model, response.code(), abbreviateTestError(responseBody, 500));
+                                    model, response.code(), abbreviateTestError(responseBody, 200));
                         }
                     }
                     if (response.isSuccessful()) {
@@ -388,7 +391,7 @@ public class ChannelService {
                 if (response.isSuccessful()) {
                     Object parsed = parseTestJsonOrText(responseBody);
                     result.put("data", parsed);
-                    String status = parsed instanceof JsonNode node ? textOrNull(node.path("status")) : null;
+                    String status = parsed instanceof JsonNode node ? findVideoStatus(node) : null;
                     String videoUrl = parsed instanceof JsonNode node ? findVideoUrl(node) : null;
                     log.info("video status poll videoId={} status={} metadata.url={}",
                             videoId, status, videoUrl != null ? "found" : "null");
@@ -406,11 +409,16 @@ public class ChannelService {
 
     private static final int VIDEO_CONTENT_MAX_ATTEMPTS = 5;
     private static final long VIDEO_CONTENT_RETRY_DELAY_MS = 3000;
+    private static final long VIDEO_DOWNLOAD_MAX_BYTES = 100L * 1024 * 1024;
+    /** metadata.url 允许下载的跨域产物主机白名单（不是渠道 baseUrl，凭据不随此域名下发）。 */
+    private static final Set<String> VIDEO_URL_ALLOWED_HOST_SUFFIXES = Set.of("platform-outputs.agnes-ai.space");
+    private static final Set<String> TERMINAL_FAILURE_STATUSES = Set.of("failed", "failure", "cancelled", "canceled", "error");
 
     /**
      * 获取已完成视频的二进制内容。Agnes 上游没有 /v1/videos/{id}/content 端点，播放地址只会出现在
      * 任务状态响应的 metadata.url 中，且可能在 status=completed 之后仍需等待上游异步上传文件，
-     * 因此这里改为轮询状态接口拿到 metadata.url 后再下载该地址。
+     * 因此这里先轮询状态接口拿到 metadata.url 后再下载该地址；对非 Agnes 上游，若轮询后仍无 URL，
+     * 回退到旧的 GET /v1/videos/{id}/content 端点。
      */
     public TestMediaContent testVideoContent(Map<String, String> request) {
         String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key");
@@ -426,11 +434,31 @@ public class ChannelService {
             try (Response response = streamHttpClient.newCall(statusRequest).execute()) {
                 String body = response.body() != null ? response.body().string() : "";
                 if (response.isSuccessful()) {
-                    JsonNode json = objectMapper.readTree(body);
+                    JsonNode json;
+                    try {
+                        json = objectMapper.readTree(body);
+                    } catch (IOException parseError) {
+                        throw new BusinessException(502, "上游返回了无法解析的状态响应");
+                    }
+                    String status = findVideoStatus(json);
+                    if (status != null && TERMINAL_FAILURE_STATUSES.contains(status.toLowerCase())) {
+                        String errorMessage = firstTextOrNull(
+                                json.path("error").path("message"),
+                                json.path("data").path("error").path("message"),
+                                json.path("error"));
+                        log.warn("video content videoId={} terminal failure status={}", videoId, status);
+                        throw new BusinessException(502, "上游视频任务失败 (" + status + ")"
+                                + (errorMessage != null ? ": " + errorMessage : ""));
+                    }
                     videoUrl = findVideoUrl(json);
+                } else if (response.code() == 401 || response.code() == 403 || response.code() == 404) {
+                    log.info("video content retry #{} videoId={} query GET /v1/videos/{} permanent failure httpStatus={} body={}",
+                            attempt, videoId, videoId, response.code(), abbreviateTestError(body, 200));
+                    throw new BusinessException(response.code(),
+                            "上游拒绝请求 (HTTP " + response.code() + ")，请检查凭据或任务 id 是否有效");
                 } else {
                     log.info("video content retry #{} videoId={} query GET /v1/videos/{} failed httpStatus={} body={}",
-                            attempt, videoId, videoId, response.code(), abbreviateTestError(body, 500));
+                            attempt, videoId, videoId, response.code(), abbreviateTestError(body, 200));
                 }
             } catch (IOException e) {
                 log.warn("video content retry #{} videoId={} query error: {}", attempt, videoId, e.getMessage());
@@ -453,22 +481,82 @@ public class ChannelService {
         }
 
         if (videoUrl == null || videoUrl.isBlank()) {
+            if (!isAgnesTypeChannel(baseUrl, channelType)) {
+                return downloadLegacyVideoContent(baseUrl, apiKey, channelType, videoId);
+            }
             log.warn("video content videoId={} exhausted {} attempts without metadata.url",
                     videoId, VIDEO_CONTENT_MAX_ATTEMPTS);
             throw new BusinessException(504, "上游视频文件尚未就绪，请稍后重试");
         }
 
+        return downloadVideoUrl(baseUrl, apiKey, channelType, videoId, videoUrl);
+    }
+
+    /** 对非 Agnes 上游回退调用旧的 /v1/videos/{id}/content 端点（凭据始终来自渠道自身，同源）。 */
+    private TestMediaContent downloadLegacyVideoContent(String baseUrl, String apiKey, String channelType, String videoId) {
+        Request contentRequest = buildTestRequest(baseUrl, apiKey, channelType,
+                "/v1/videos/" + videoId + "/content", null, true);
+        try (Response response = streamHttpClient.newCall(contentRequest).execute()) {
+            if (!response.isSuccessful()) {
+                String body = response.body() != null ? response.body().string() : "";
+                throw new BusinessException(response.code(),
+                        "上游视频内容下载失败: " + abbreviateTestError(body, 200));
+            }
+            byte[] bytes = response.body() != null
+                    ? readCappedBody(response.body().byteStream(), VIDEO_DOWNLOAD_MAX_BYTES)
+                    : new byte[0];
+            if (bytes.length == 0) {
+                throw new BusinessException(502, "上游返回了空的视频内容");
+            }
+            String contentType = response.header("Content-Type", "video/mp4").split(";", 2)[0];
+            return new TestMediaContent(bytes, contentType);
+        } catch (IOException e) {
+            log.error("渠道视频测试内容下载失败(legacy) videoId={}: {}", videoId, e.getMessage());
+            throw new BusinessException("连接上游失败: " + e.getMessage());
+        }
+    }
+
+    /** 下载 metadata.url 指向的视频产物，校验目标主机并按情况决定是否携带渠道凭据。 */
+    private TestMediaContent downloadVideoUrl(String baseUrl, String apiKey, String channelType,
+                                               String videoId, String videoUrl) {
+        URI parsedUrl;
+        URI baseUri;
+        try {
+            parsedUrl = new URI(videoUrl);
+            baseUri = new URI(baseUrl);
+        } catch (Exception e) {
+            throw new BusinessException(400, "上游返回了非法的视频下载地址");
+        }
+        String scheme = parsedUrl.getScheme();
+        String host = parsedUrl.getHost();
+        if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https")) || host == null) {
+            throw new BusinessException(400, "上游返回了非法的视频下载地址");
+        }
+        boolean sameOriginAsChannel = host.equalsIgnoreCase(baseUri.getHost());
+        boolean whitelistedOutputHost = VIDEO_URL_ALLOWED_HOST_SUFFIXES.stream()
+                .anyMatch(allowed -> host.equalsIgnoreCase(allowed) || host.toLowerCase().endsWith("." + allowed));
+        if (!sameOriginAsChannel && !whitelistedOutputHost) {
+            throw new BusinessException(400, "上游返回了非法的视频下载地址");
+        }
+
         try {
             Request.Builder downloadBuilder = new Request.Builder().url(videoUrl).get();
-            addAuthHeader(downloadBuilder, apiKey, channelType);
-            try (Response response = streamHttpClient.newCall(downloadBuilder.build()).execute()) {
-                log.info("video content download videoId={} url={} httpStatus={}", videoId, videoUrl, response.code());
+            if (sameOriginAsChannel) {
+                addAuthHeader(downloadBuilder, apiKey, channelType);
+            }
+            try (Response response = videoDownloadHttpClient.newCall(downloadBuilder.build()).execute()) {
+                log.info("video content download videoId={} host={} httpStatus={}", videoId, host, response.code());
+                if (response.isRedirect()) {
+                    throw new BusinessException(502, "上游视频下载地址返回了重定向，已拒绝跟随");
+                }
                 if (!response.isSuccessful()) {
                     String body = response.body() != null ? response.body().string() : "";
                     throw new BusinessException(response.code(),
-                            "上游视频内容下载失败: " + abbreviateTestError(body));
+                            "上游视频内容下载失败: " + abbreviateTestError(body, 200));
                 }
-                byte[] bytes = response.body() != null ? response.body().bytes() : new byte[0];
+                byte[] bytes = response.body() != null
+                        ? readCappedBody(response.body().byteStream(), VIDEO_DOWNLOAD_MAX_BYTES)
+                        : new byte[0];
                 log.info("video content download videoId={} bytes={}", videoId, bytes.length);
                 if (bytes.length == 0) {
                     throw new BusinessException(502, "上游返回了空的视频内容");
@@ -479,6 +567,34 @@ public class ChannelService {
         } catch (IOException e) {
             log.error("渠道视频测试内容下载失败 videoId={}: {}", videoId, e.getMessage());
             throw new BusinessException("连接上游失败: " + e.getMessage());
+        }
+    }
+
+    /** 限制大小地读取输入流，超限抛错而不是无限占用内存（参考 RelaySupport#readCapped）。 */
+    private static byte[] readCappedBody(java.io.InputStream in, long maxBytes) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        long total = 0;
+        int read;
+        while ((read = in.read(buf)) != -1) {
+            total += read;
+            if (total > maxBytes) {
+                throw new BusinessException(502, "上游视频文件超出大小限制 (" + maxBytes / (1024 * 1024) + "MB)");
+            }
+            out.write(buf, 0, read);
+        }
+        return out.toByteArray();
+    }
+
+    private boolean isAgnesTypeChannel(String baseUrl, String channelType) {
+        if ("agnes".equalsIgnoreCase(channelType)) {
+            return true;
+        }
+        try {
+            String host = new URI(baseUrl).getHost();
+            return host != null && ("agnes-ai.cn".equalsIgnoreCase(host) || host.toLowerCase().endsWith(".agnes-ai.cn"));
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -523,8 +639,28 @@ public class ChannelService {
         return url;
     }
 
+    /** 任务状态可能出现在顶层 status 或 data.status / video.status 等嵌套位置。 */
+    private String findVideoStatus(JsonNode json) {
+        if (json == null) return null;
+        String status = textOrNull(json.path("status"));
+        if (status != null) return status;
+        status = textOrNull(json.path("data").path("status"));
+        if (status != null) return status;
+        status = textOrNull(json.path("video").path("status"));
+        if (status != null) return status;
+        return textOrNull(json.path("state"));
+    }
+
     private String textOrNull(JsonNode node) {
         return (node != null && node.isTextual() && !node.asText().isBlank()) ? node.asText() : null;
+    }
+
+    private String firstTextOrNull(JsonNode... nodes) {
+        for (JsonNode node : nodes) {
+            String text = textOrNull(node);
+            if (text != null) return text;
+        }
+        return null;
     }
 
     private String requireTestValue(Map<String, String> request, String key, String error) {
