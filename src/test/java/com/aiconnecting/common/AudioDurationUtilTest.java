@@ -77,23 +77,34 @@ class AudioDurationUtilTest {
         }
     }
 
-    private byte[] buildOggPage(long granule, int serial, int seq, byte[] body, boolean corruptCrc) {
+    /** 构造一个 Ogg 页，body 由若干个分组（packet）按标准 lacing 规则切分打包 */
+    private byte[] buildOggPageMulti(long granule, int serial, int seq, int headerTypeFlags,
+                                     java.util.List<byte[]> packets, boolean corruptCrc) {
+        ByteArrayOutputStream segTable = new ByteArrayOutputStream();
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        for (byte[] packet : packets) {
+            int remaining = packet.length;
+            while (remaining >= 255) {
+                segTable.write(255);
+                body.write(packet, packet.length - remaining, 255);
+                remaining -= 255;
+            }
+            segTable.write(remaining);
+            body.write(packet, packet.length - remaining, remaining);
+        }
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         writeAscii(out, "OggS");
         out.write(0); // version
-        out.write(seq == 0 ? 2 : 0); // header type
+        out.write(headerTypeFlags);
         for (int i = 0; i < 8; i++) out.write((int) (granule >>> (8 * i)) & 0xFF);
         writeU32le(out, serial);
         writeU32le(out, seq);
         writeU32le(out, 0); // CRC 占位
-        int segments = (body.length / 255) + 1;
-        out.write(segments);
-        int rest = body.length;
-        for (int i = 0; i < segments; i++) {
-            out.write(Math.min(rest, 255));
-            rest -= 255;
-        }
-        out.write(body, 0, body.length);
+        byte[] segBytes = segTable.toByteArray();
+        out.write(segBytes.length);
+        out.write(segBytes, 0, segBytes.length);
+        byte[] bodyBytes = body.toByteArray();
+        out.write(bodyBytes, 0, bodyBytes.length);
         byte[] page = out.toByteArray();
         int crc = 0;
         for (byte b : page) {
@@ -121,35 +132,49 @@ class AudioDurationUtilTest {
         return out.toByteArray();
     }
 
-    @Test
-    void oggMeasuresFromValidPages() {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] p0 = buildOggPage(0, 7, 0, opusHeadBody(), false);
-        byte[] p1 = buildOggPage(48000L * 10, 7, 1, new byte[100], false);
-        out.write(p0, 0, p0.length);
-        out.write(p1, 0, p1.length);
-        double s = AudioDurationUtil.measure(out.toByteArray());
-        assertEquals(10.0, s, 0.01);
+    private byte[] opusTagsBody() {
+        return new byte[]{'O', 'p', 'u', 's', 'T', 'a', 'g', 's'};
+    }
+
+    /** 单帧 Opus 分组：TOC config=11（SILK WB，60ms/帧），frameCountCode=0（单帧） */
+    private static final byte[] OPUS_60MS_PACKET = {(byte) ((11 << 3))};
+
+    private java.util.List<byte[]> audioPackets(int count) {
+        java.util.List<byte[]> list = new java.util.ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            list.add(OPUS_60MS_PACKET.clone());
+        }
+        return list;
     }
 
     @Test
-    void oggRejectsAppendedForgedLowGranulePage() {
-        // 追加一个 granule=1 的伪造尾页（CRC 正确），granule 非单调 → 拒绝
+    void oggMeasuresFromRealOpusPacketDurations() {
+        // 头页 (BOS)：OpusHead + OpusTags；音频页 (EOS)：50 个 60ms 分组 = 3.0 秒
+        // granule 故意留空/无意义，验证时长完全由分组 TOC 推导而非 granule
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] p0 = buildOggPage(0, 7, 0, opusHeadBody(), false);
-        byte[] p1 = buildOggPage(48000L * 600, 7, 1, new byte[100], false);
-        byte[] forged = buildOggPage(1, 7, 2, new byte[10], false);
+        byte[] p0 = buildOggPageMulti(0, 7, 0, 0x02, java.util.List.of(opusHeadBody(), opusTagsBody()), false);
+        byte[] p1 = buildOggPageMulti(0, 7, 1, 0x04, audioPackets(50), false);
         out.write(p0, 0, p0.length);
         out.write(p1, 0, p1.length);
-        out.write(forged, 0, forged.length);
-        assertEquals(-1, AudioDurationUtil.measure(out.toByteArray()));
+        assertEquals(3.0, AudioDurationUtil.measure(out.toByteArray()), 0.001);
+    }
+
+    @Test
+    void oggIgnoresForgedGranuleAndUsesPacketDuration() {
+        // granule 被篡改为一个巨大的值（CRC 重新配平后依然合法），但实际只有 5 个 60ms 分组
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] p0 = buildOggPageMulti(0, 7, 0, 0x02, java.util.List.of(opusHeadBody(), opusTagsBody()), false);
+        byte[] p1 = buildOggPageMulti(48000L * 3600, 7, 1, 0x04, audioPackets(5), false);
+        out.write(p0, 0, p0.length);
+        out.write(p1, 0, p1.length);
+        assertEquals(5 * 0.06, AudioDurationUtil.measure(out.toByteArray()), 0.001);
     }
 
     @Test
     void oggRejectsBadPageCrc() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] p0 = buildOggPage(0, 7, 0, opusHeadBody(), false);
-        byte[] p1 = buildOggPage(48000L * 10, 7, 1, new byte[100], true);
+        byte[] p0 = buildOggPageMulti(0, 7, 0, 0x02, java.util.List.of(opusHeadBody(), opusTagsBody()), false);
+        byte[] p1 = buildOggPageMulti(0, 7, 1, 0x04, audioPackets(10), true);
         out.write(p0, 0, p0.length);
         out.write(p1, 0, p1.length);
         assertEquals(-1, AudioDurationUtil.measure(out.toByteArray()));
@@ -158,11 +183,48 @@ class AudioDurationUtilTest {
     @Test
     void oggRejectsTrailingGarbage() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] p0 = buildOggPage(0, 7, 0, opusHeadBody(), false);
-        byte[] p1 = buildOggPage(48000L * 10, 7, 1, new byte[100], false);
+        byte[] p0 = buildOggPageMulti(0, 7, 0, 0x02, java.util.List.of(opusHeadBody(), opusTagsBody()), false);
+        byte[] p1 = buildOggPageMulti(0, 7, 1, 0x04, audioPackets(10), false);
         out.write(p0, 0, p0.length);
         out.write(p1, 0, p1.length);
         out.write(new byte[]{1, 2, 3, 4}, 0, 4);
+        assertEquals(-1, AudioDurationUtil.measure(out.toByteArray()));
+    }
+
+    @Test
+    void oggRejectsNonSequentialPageNumbers() {
+        // 页序号跳跃（0 -> 2），防止乱序/丢页/重放
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] p0 = buildOggPageMulti(0, 7, 0, 0x02, java.util.List.of(opusHeadBody(), opusTagsBody()), false);
+        byte[] p1 = buildOggPageMulti(0, 7, 2, 0x04, audioPackets(10), false);
+        out.write(p0, 0, p0.length);
+        out.write(p1, 0, p1.length);
+        assertEquals(-1, AudioDurationUtil.measure(out.toByteArray()));
+    }
+
+    @Test
+    void oggRejectsMissingEos() {
+        // 末页缺少 EOS 标志，流结构不完整 → 拒绝
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] p0 = buildOggPageMulti(0, 7, 0, 0x02, java.util.List.of(opusHeadBody(), opusTagsBody()), false);
+        byte[] p1 = buildOggPageMulti(0, 7, 1, 0x00, audioPackets(10), false);
+        out.write(p0, 0, p0.length);
+        out.write(p1, 0, p1.length);
+        assertEquals(-1, AudioDurationUtil.measure(out.toByteArray()));
+    }
+
+    @Test
+    void oggVorbisIsUnmeasurable() {
+        // 缺乏免解码即可信的 Vorbis 时长推导方式，一律判定为不可测而非按 granule 计费
+        ByteArrayOutputStream vorbisId = new ByteArrayOutputStream();
+        vorbisId.write(1);
+        writeAscii(vorbisId, "vorbis");
+        vorbisId.write(new byte[23], 0, 23);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] p0 = buildOggPageMulti(0, 7, 0, 0x02, java.util.List.of(vorbisId.toByteArray()), false);
+        byte[] p1 = buildOggPageMulti(48000L * 10, 7, 1, 0x04, java.util.List.of(new byte[100]), false);
+        out.write(p0, 0, p0.length);
+        out.write(p1, 0, p1.length);
         assertEquals(-1, AudioDurationUtil.measure(out.toByteArray()));
     }
 
@@ -180,8 +242,23 @@ class AudioDurationUtilTest {
         return crc;
     }
 
-    /** 构造 fLaC + STREAMINFO（声明 claimedSamples）+ frameCount 个带合法 CRC-8 帧头的帧 */
-    private byte[] buildFlac(long claimedSamples, int frameCount) {
+    private static int flacCrc16(byte[] d, int from, int to) {
+        int crc = 0;
+        for (int i = from; i < to; i++) {
+            int b = d[i] & 0xFF;
+            for (int bit = 7; bit >= 0; bit--) {
+                int inputBit = (b >>> bit) & 1;
+                int topBit = ((crc >>> 15) & 1) ^ inputBit;
+                crc = (crc << 1) & 0xFFFF;
+                if (topBit != 0) {
+                    crc ^= 0x8005;
+                }
+            }
+        }
+        return crc & 0xFFFF;
+    }
+
+    private byte[] flacStreamInfo(long claimedSamples) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         writeAscii(out, "fLaC");
         // STREAMINFO 块头：last=1, type=0, len=34
@@ -190,27 +267,51 @@ class AudioDurationUtilTest {
         out.write(0);
         out.write(34);
         byte[] info = new byte[34];
-        // 采样率 44100 (20bit) + 声道 2-1 (3bit) + 位深 16-1 (5bit) + 总样本数 (36bit)，位于偏移 10 起 8 字节
-        long v = (44100L << 44) | (1L << 41) | (15L << 36) | (claimedSamples & 0xFFFFFFFFFL);
+        // 采样率 44100 (20bit) + 声道 1-1=0 (3bit，单声道) + 位深 16-1 (5bit) + 总样本数 (36bit)，位于偏移 10 起 8 字节
+        long v = (44100L << 44) | (15L << 36) | (claimedSamples & 0xFFFFFFFFFL);
         for (int i = 0; i < 8; i++) {
             info[10 + i] = (byte) (v >>> (56 - 8 * i));
         }
         out.write(info, 0, info.length);
+        return out.toByteArray();
+    }
+
+    /**
+     * 构造一个真实可完整解码的单声道 FLAC 帧：blockSize code 12 (4096)，rate code 9 (44100)，
+     * 单声道 code 0，16bit code 4，唯一子帧为 CONSTANT(值 0)，帧体恰好 3 个全零字节 + 合法 CRC-16
+     */
+    private byte[] buildValidFlacFrame(int frameNumber) {
+        byte[] hdr = {(byte) 0xFF, (byte) 0xF8, (byte) 0xC9, (byte) 0x08, (byte) frameNumber, 0};
+        hdr[5] = (byte) flacCrc8(hdr, 0, 5);
+        ByteArrayOutputStream frameNoCrc = new ByteArrayOutputStream();
+        frameNoCrc.write(hdr, 0, hdr.length);
+        frameNoCrc.write(new byte[]{0, 0, 0}, 0, 3); // CONSTANT 子帧：pad+type+wasted位 + 16bit 值，恰好 3 字节
+        byte[] noCrc = frameNoCrc.toByteArray();
+        int crc16 = flacCrc16(noCrc, 0, noCrc.length);
+        ByteArrayOutputStream full = new ByteArrayOutputStream();
+        full.write(noCrc, 0, noCrc.length);
+        full.write((crc16 >> 8) & 0xFF);
+        full.write(crc16 & 0xFF);
+        return full.toByteArray();
+    }
+
+    /** 构造 fLaC + STREAMINFO + frameCount 个真实可解码的有效帧 */
+    private byte[] buildFlac(long claimedSamples, int frameCount) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] streamInfo = flacStreamInfo(claimedSamples);
+        out.write(streamInfo, 0, streamInfo.length);
         for (int f = 0; f < frameCount; f++) {
-            // 帧头: FF F8, blockSize code 12 (4096), rate code 9 (44100), 立体声 code 1, 16bit code 4
-            byte[] hdr = {(byte) 0xFF, (byte) 0xF8, (byte) 0xC9, (byte) 0x18, (byte) f, 0};
-            hdr[5] = (byte) flacCrc8(hdr, 0, 5);
-            out.write(hdr, 0, hdr.length);
-            out.write(new byte[64], 0, 64); // 伪帧体（扫描按同步字查找下一帧）
+            byte[] frame = buildValidFlacFrame(f);
+            out.write(frame, 0, frame.length);
         }
         return out.toByteArray();
     }
 
     @Test
     void flacBillsByActualFramesNotStreaminfoClaim() {
-        // STREAMINFO 声称仅 1 个样本，但实际有 20 帧 × 4096 样本 ≈ 1.86 秒 → 按实测帧计
+        // STREAMINFO 声称仅 1 个样本，但实际有 20 个真实可解码帧 × 4096 样本 → 按实测帧计
         double s = AudioDurationUtil.measure(buildFlac(1, 20));
-        assertEquals(20 * 4096 / 44100.0, s, 0.05);
+        assertEquals(20 * 4096 / 44100.0, s, 0.0001);
     }
 
     @Test
@@ -220,11 +321,39 @@ class AudioDurationUtilTest {
 
     @Test
     void flacRejectsNonSequentialFrames() {
-        byte[] flac = buildFlac(1, 3);
-        int secondHeader = 42 + 70;
-        flac[secondHeader + 4] = 7;
-        flac[secondHeader + 5] = (byte) flacCrc8(flac, secondHeader, secondHeader + 5);
-        assertEquals(-1, AudioDurationUtil.measure(flac));
+        // 篡改第二帧的帧号后需同步重算 CRC-8 与覆盖整帧的 CRC-16，
+        // 确保拒绝原因确实是"帧号不连续"而不仅是 CRC 校验失败
+        byte[] streamInfo = flacStreamInfo(1);
+        byte[] f0 = buildValidFlacFrame(0);
+        byte[] f1 = buildValidFlacFrame(1);
+        byte[] f2 = buildValidFlacFrame(2);
+        f1[4] = 7; // 帧号改为 7，破坏连续性
+        f1[5] = (byte) flacCrc8(f1, 0, 5);
+        int crc16 = flacCrc16(f1, 0, f1.length - 2);
+        f1[f1.length - 2] = (byte) ((crc16 >> 8) & 0xFF);
+        f1[f1.length - 1] = (byte) (crc16 & 0xFF);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(streamInfo, 0, streamInfo.length);
+        out.write(f0, 0, f0.length);
+        out.write(f1, 0, f1.length);
+        out.write(f2, 0, f2.length);
+        assertEquals(-1, AudioDurationUtil.measure(out.toByteArray()));
+    }
+
+    @Test
+    void flacRejectsFakeFrameBodyPastValidHeader() {
+        // 复现旧漏洞的攻击样本：帧头 CRC-8 合法，但帧体是任意 64 字节全零垃圾数据
+        // （不是真实编码的子帧），必须被拒绝而不是被当作有效帧部分计费
+        byte[] streamInfo = flacStreamInfo(1);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(streamInfo, 0, streamInfo.length);
+        for (int f = 0; f < 20; f++) {
+            byte[] hdr = {(byte) 0xFF, (byte) 0xF8, (byte) 0xC9, (byte) 0x08, (byte) f, 0};
+            hdr[5] = (byte) flacCrc8(hdr, 0, 5);
+            out.write(hdr, 0, hdr.length);
+            out.write(new byte[64], 0, 64);
+        }
+        assertEquals(-1, AudioDurationUtil.measure(out.toByteArray()));
     }
 
     // ==================== MP3 / ADTS ====================

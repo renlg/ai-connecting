@@ -272,6 +272,13 @@ public class OpenAiRelayService {
             log.error("视频上游响应不是合法 JSON，无法建立任务轮询映射");
             throw new BusinessException(502, "上游视频响应无效（非 JSON）");
         }
+        // readTree 对空白/空字符串输入不抛异常而是直接返回 null，必须显式判空，
+        // 否则下一行 json.isObject() 将抛 NPE，被外层当作普通 RuntimeException 处理，
+        // 丢失"上游响应无效"这一明确的业务错误信息
+        if (json == null) {
+            log.error("视频上游响应为空，无法建立任务轮询映射");
+            throw new BusinessException(502, "上游视频响应无效（空响应）");
+        }
         if (!json.isObject() || !json.hasNonNull("id")
                 || !json.get("id").isTextual() || json.get("id").asText().isBlank()) {
             log.error("视频上游响应缺少有效的 id 字段，无法建立任务轮询映射");
@@ -540,18 +547,20 @@ public class OpenAiRelayService {
         byte[] audio = result.value().body();
         long duration = System.currentTimeMillis() - startTime;
 
-        // 按实际生成音频时长结算（无法测量时保持预估计费并告警，绝不因本地解析失败报错）
-        BigDecimal finalCost = charge.cost();
+        // 按实际生成音频时长结算：无法测量时视为上游返回不可信（格式未知/容器损坏/伪造结构），
+        // 退回预扣积分并拒绝请求，绝不在无法验证时长的情况下仍按预估金额计费、返回 200
         double measured = "pcm".equalsIgnoreCase(responseFormat)
                 ? AudioDurationUtil.pcmSeconds(audio)
                 : AudioDurationUtil.measure(audio);
-        if (measured > 0) {
-            int actualSeconds = Math.max(1, (int) Math.ceil(measured));
-            BigDecimal actualCost = usageLogService.calculateAudioCreditCost(ctx.modelConfig(), quality, actualSeconds);
-            finalCost = support.settleMediaCharge(ctx, charge, actualCost);
-        } else {
-            log.warn("无法测量生成音频的实际时长 (format={})，按预估 {} 秒计费", responseFormat, estimatedSeconds);
+        if (measured <= 0) {
+            boolean refunded = support.refundMediaCharge(ctx, charge);
+            log.error("无法测量生成音频的实际时长 (format={})，拒绝计费并退回预扣积分", responseFormat);
+            throw new BusinessException(400, "生成的音频无法测量有效时长，上游返回可能已损坏或格式不受支持"
+                    + (refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿"));
         }
+        int actualSeconds = Math.max(1, (int) Math.ceil(measured));
+        BigDecimal actualCost = usageLogService.calculateAudioCreditCost(ctx.modelConfig(), quality, actualSeconds);
+        BigDecimal finalCost = support.settleMediaCharge(ctx, charge, actualCost);
         recordPrepaidUsageSafely(ctx.token(), result.channel(), model,
                 new RelaySupport.MediaCharge(finalCost, charge.deducted()),
                 duration, httpRequest, "/v1/audio/speech");
@@ -582,6 +591,7 @@ public class OpenAiRelayService {
     public ResponseEntity<byte[]> relayAudioTranscription(String tokenKey, String path, MultipartFile file,
                                                           MultiValueMap<String, String> formFields,
                                                           HttpServletRequest httpRequest) throws IOException {
+        rejectInconsistentDuplicateFields(formFields);
         String model = formFields.getFirst("model");
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model, "audio");
 
@@ -609,15 +619,23 @@ public class OpenAiRelayService {
         okhttp3.MediaType fileType = okhttp3.MediaType.parse(
                 file.getContentType() != null ? file.getContentType() : "application/octet-stream");
         mb.addFormDataPart("file", fileName, okhttp3.RequestBody.create(fileBytes, fileType));
-        // 逐 part 重建，保留同名字段的每个值（如 timestamp_granularities[]）
+        // 逐 part 重建：数组参数（如 timestamp_granularities[]）保留每个值；
+        // 单值参数（如 model、response_format）此前已校验过不存在取值冲突的重复，
+        // 去重为单值转发，避免本地按第一个值做的校验（如 rawPassThrough 判定）
+        // 与实际转发给上游、可能被上游按最后一个值处理的语义不一致
         for (Map.Entry<String, java.util.List<String>> field : formFields.entrySet()) {
             String key = field.getKey();
             // 剥离非标准计费参数，其余表单字段原样转发
             if ("quality".equals(key) || "duration".equals(key) || "seconds".equals(key)) {
                 continue;
             }
-            for (String value : field.getValue()) {
-                mb.addFormDataPart(key, value);
+            java.util.List<String> values = field.getValue();
+            if (!key.endsWith("[]") && values.size() > 1) {
+                mb.addFormDataPart(key, values.get(0));
+            } else {
+                for (String value : values) {
+                    mb.addFormDataPart(key, value);
+                }
             }
         }
         okhttp3.MultipartBody multipartBody = mb.build();
@@ -650,6 +668,24 @@ public class OpenAiRelayService {
         return ResponseEntity.ok()
                 .header("Content-Type", contentType != null ? contentType : "application/json")
                 .body(result.value().body());
+    }
+
+    /**
+     * 单值参数（表单字段名不以 "[]" 结尾，如 model、response_format）若重复传值且取值不一致，
+     * 直接拒绝：本地校验（如按 response_format 第一个值判定是否跳过 JSON 校验）只会采信其中一个值，
+     * 若上游按不同规则（如最后一个值）解析，会导致本地校验通过的语义与实际转发生效的语义不一致
+     */
+    private void rejectInconsistentDuplicateFields(MultiValueMap<String, String> formFields) {
+        for (Map.Entry<String, java.util.List<String>> field : formFields.entrySet()) {
+            String key = field.getKey();
+            if (key.endsWith("[]")) {
+                continue;
+            }
+            java.util.List<String> values = field.getValue();
+            if (values.size() > 1 && new HashSet<>(values).size() > 1) {
+                throw new BusinessException(400, "参数 " + key + " 重复传值且取值不一致，请只传一个值");
+            }
+        }
     }
 
     private boolean isValidTranscriptionJson(byte[] body) {

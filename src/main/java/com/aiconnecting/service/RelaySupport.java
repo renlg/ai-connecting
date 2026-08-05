@@ -805,6 +805,15 @@ public class RelaySupport {
     }
 
     /**
+     * 使用日志必须记录实际扣减的金额，而非"本应收取"的名义金额：admin 余额不足被放行、
+     * 未实际扣减（{@link MediaCharge#deducted()} 为 false）时记 0，避免日志显示已收费
+     * 而实际余额分文未动，造成对账/统计口径不一致
+     */
+    private static BigDecimal billedCost(MediaCharge charge) {
+        return charge.deducted() ? charge.cost() : BigDecimal.ZERO;
+    }
+
+    /**
      * 记录已预扣积分的媒体使用日志（不再重复扣减积分）
      *
      * @return 落库后的使用日志 id，供视频任务保存该 id 以便结算阶段回写最终计费金额
@@ -818,7 +827,7 @@ public class RelaySupport {
                 .promptTokens(0)
                 .completionTokens(0)
                 .totalTokens(0)
-                .creditCost(charge.cost())
+                .creditCost(billedCost(charge))
                 .ip(getClientIp(httpRequest))
                 .duration(duration)
                 .requestPath(path)
@@ -844,7 +853,7 @@ public class RelaySupport {
                 .promptTokens(0)
                 .completionTokens(0)
                 .totalTokens(0)
-                .creditCost(charge.cost())
+                .creditCost(billedCost(charge))
                 .ip(getClientIp(httpRequest))
                 .duration(duration)
                 .requestPath(path)

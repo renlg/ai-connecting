@@ -78,8 +78,9 @@ public class VideoTaskSettlementService {
             return Outcome.SETTLED;
         }
         BigDecimal actualCost = unitPrice.multiply(BigDecimal.valueOf(actualSeconds));
-        // 余额调整仅在实际扣减过（deducted）时进行；使用日志回写不受此限制，
-        // 否则 admin 放行未扣减的任务其日志会永久停留在预扣估算金额，与实际用量不符
+        // 余额调整与使用日志回写口径必须一致：admin 放行未扣减（deducted=false）的任务
+        // 从未真正收费，日志也必须记 0，而不是"本应收取"的名义金额，
+        // 否则会与 settleFailed 的归零口径不一致，也与 RelaySupport 创建阶段的记账口径矛盾
         if (task.isDeducted()) {
             BigDecimal prepaid = task.getPrepaidCost() != null ? task.getPrepaidCost() : BigDecimal.ZERO;
             BigDecimal diff = actualCost.subtract(prepaid);
@@ -89,7 +90,7 @@ public class VideoTaskSettlementService {
                 userService.refundCredits(task.getUserId(), diff.negate());
             }
         }
-        adjustUsageLog(task, actualCost);
+        adjustUsageLog(task, task.isDeducted() ? actualCost : BigDecimal.ZERO);
         return Outcome.SETTLED;
     }
 
