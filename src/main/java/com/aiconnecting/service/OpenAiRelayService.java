@@ -324,8 +324,8 @@ public class OpenAiRelayService {
         // 的顺序处理——先写入携带 IP/耗时的正常使用日志并回链，避免结算内部的 ensureLinked() 抢先创建
         // 缺少这些字段的降级日志，导致随后正常写入因 usage_log_id 已被占用而判重复回滚，只留下降级日志
         boolean usageLogRecorded = false;
-        String status = ossMediaStorageService.extractVideoStatus(json);
-        boolean synchronousTerminal = status != null && isTerminalStatus(status);
+        OssMediaStorageService.VideoTaskStatus resolved = ossMediaStorageService.extractVideoStatus(json);
+        boolean synchronousTerminal = resolved != null && isTerminalStatus(resolved.status());
         if (synchronousTerminal) {
             try {
                 support.recordPrepaidMediaUsageAndLink(token, channel, model, charge, duration, httpRequest, path, taskId);
@@ -433,16 +433,19 @@ public class OpenAiRelayService {
         if (task.isSettled() || json == null || !json.isObject()) {
             return true;
         }
-        String status = ossMediaStorageService.extractVideoStatus(json);
-        if (status == null || !isTerminalStatus(status)) {
+        OssMediaStorageService.VideoTaskStatus resolved = ossMediaStorageService.extractVideoStatus(json);
+        if (resolved == null || !isTerminalStatus(resolved.status())) {
             return true;
         }
-        boolean failed = VIDEO_FAILED_STATUSES.contains(status.toLowerCase(java.util.Locale.ROOT));
+        boolean failed = VIDEO_FAILED_STATUSES.contains(resolved.status().toLowerCase(java.util.Locale.ROOT));
         try {
             if (failed) {
                 videoTaskSettlementService.settleFailed(task.getId());
             } else {
-                Integer actualSeconds = extractActualVideoDurationSeconds(json);
+                // 时长必须从状态实际来源的同一节点读取（video/data/顶层），而非固定读顶层字段——
+                // 否则终态从 data.status 解析出来时，顶层没有时长字段将导致结算永远拿到 null，
+                // 任务被永久按预扣金额结算而非实际时长
+                Integer actualSeconds = parsePositiveSecondsField(resolved.duration());
                 videoTaskSettlementService.settleCompleted(task.getId(), actualSeconds);
             }
             return true;
@@ -518,34 +521,8 @@ public class OpenAiRelayService {
         return null;
     }
 
-    /**
-     * 尝试从上游视频任务响应中提取实际生成时长（秒）。除若干常见的自定义扩展字段名外，
-     * 也识别 OpenAI 视频任务对象标准的根级 "seconds" 字段（该字段以字符串形式表示生成时长），
-     * 均未命中时返回 null，由调用方保持预扣金额计费
-     */
     /** 单个视频任务的合理时长上限（秒），超出视为异常数据，回退到无实际时长的预扣计费而非按此天价结算 */
     private static final double MAX_VIDEO_DURATION_SECONDS = 24 * 3600;
-
-    private Integer extractActualVideoDurationSeconds(JsonNode json) {
-        for (String field : new String[]{"actual_seconds", "actual_duration", "actual_duration_seconds", "real_seconds"}) {
-            JsonNode node = json.get(field);
-            if (node != null && node.isNumber() && isValidVideoSeconds(node.asDouble())) {
-                return (int) Math.ceil(node.asDouble());
-            }
-        }
-        JsonNode video = json.get("video");
-        if (video != null && video.isObject()) {
-            JsonNode d = video.get("duration");
-            if (d != null && d.isNumber() && isValidVideoSeconds(d.asDouble())) {
-                return (int) Math.ceil(d.asDouble());
-            }
-        }
-        Integer seconds = parsePositiveSecondsField(json.get("seconds"));
-        if (seconds != null) {
-            return seconds;
-        }
-        return null;
-    }
 
     /** 时长必须是有限正数且不超过合理上限，拒绝 Infinity/NaN/溢出型输入（如 "1e309"） */
     private boolean isValidVideoSeconds(double value) {

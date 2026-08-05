@@ -48,6 +48,7 @@ import java.util.function.Function;
 public class OssMediaStorageService {
 
     private static final Set<String> VIDEO_COMPLETED_STATUSES = Set.of("completed", "succeeded");
+    private static final Set<String> GENERIC_VIDEO_ACK_STATUSES = Set.of("ok", "processing");
 
     private static final long IMAGE_MAX_BYTES = 25L * 1024 * 1024;
     private static final long AUDIO_MAX_BYTES = 50L * 1024 * 1024;
@@ -172,18 +173,26 @@ public class OssMediaStorageService {
      * 精确计算 base64 解码后的字节数（忽略末尾空白，并按结尾 '=' padding 数量修正），
      * 而非粗略的 ceil(编码长度*3/4)，避免临界大小（如恰好 25MiB）的合法数据被过度估算而误判超限。
      */
-    private long estimateBase64DecodedBytes(String base64) {
+    private long estimateBase64DecodedBytes(String base64) throws IOException {
         int end = base64.length();
         while (end > 0 && Character.isWhitespace(base64.charAt(end - 1))) {
             end--;
         }
         int padding = 0;
-        int i = end - 1;
-        while (i >= 0 && padding < 2 && base64.charAt(i) == '=') {
+        while (end - padding > 0 && padding < 2 && base64.charAt(end - padding - 1) == '=') {
             padding++;
-            i--;
         }
-        return (end / 4L) * 3L - padding;
+        // 以排除 padding 后的有效编码长度计算，同时覆盖 Java decoder 接受的未补齐尾组：
+        // 余 2/3 字符分别产生 1/2 字节；余 1 字符不可能构成合法 Base64。
+        int encodedChars = end - padding;
+        int rem = encodedChars % 4;
+        if (rem == 1) {
+            throw new IOException("图片 base64 数据格式无效（长度不合法）");
+        }
+        long bytes = (encodedChars / 4L) * 3L;
+        if (rem == 2) bytes += 1;
+        else if (rem == 3) bytes += 2;
+        return bytes;
     }
 
     private boolean rewriteImageItem(ObjectNode item) throws IOException {
@@ -245,19 +254,18 @@ public class OssMediaStorageService {
         if (root == null || !root.isObject()) {
             return response;
         }
-        String status = findVideoStatus(root);
-        if (status == null || !VIDEO_COMPLETED_STATUSES.contains(status.toLowerCase(Locale.ROOT))) {
+        VideoTaskStatus resolved = extractVideoStatus(root);
+        if (resolved == null || !VIDEO_COMPLETED_STATUSES.contains(resolved.status().toLowerCase(Locale.ROOT))) {
             return response;
         }
-        ObjectNode obj = (ObjectNode) root;
         try {
             if (existingOssUrl != null && !existingOssUrl.isBlank()) {
-                if (!replaceFirstVideoUrl(obj, existingOssUrl)) {
+                if (!resolved.replaceUrl(existingOssUrl)) {
                     return response;
                 }
                 return objectMapper.writeValueAsString(root);
             }
-            String uploadedUrl = uploadFirstVideoUrl(obj);
+            String uploadedUrl = uploadResolvedVideoUrl(resolved);
             if (uploadedUrl == null) {
                 return response;
             }
@@ -276,118 +284,125 @@ public class OssMediaStorageService {
      * 供本类的 OSS 重写与 {@link OpenAiRelayService} 的计费结算共用同一套解析逻辑，
      * 避免两处识别范围不一致导致「已转存 OSS 但从未结算」的计费遗漏。
      */
-    public String extractVideoStatus(JsonNode json) {
-        return findVideoStatus(json);
+    /**
+     * 状态解析结果：除状态字符串外，同时携带状态实际来源的任务对象节点（video/data/顶层），
+     * 供调用方从同一节点读取时长/URL 等字段，避免"状态从内层节点读到，时长/URL 却从顶层或其它
+     * 节点读到"的错位（例如结算永远读不到真实时长、或 OSS 转存缓存了错误节点的地址）。
+     */
+    public static final class VideoTaskStatus {
+        private final String status;
+        private final JsonNode node;
+        private final JsonNode duration;
+        private final ObjectNode urlHolder;
+
+        private VideoTaskStatus(String status, JsonNode node, JsonNode duration, ObjectNode urlHolder) {
+            this.status = status;
+            this.node = node;
+            this.duration = duration;
+            this.urlHolder = urlHolder;
+        }
+
+        public String status() {
+            return status;
+        }
+
+        public JsonNode node() {
+            return node;
+        }
+
+        public JsonNode duration() {
+            return duration;
+        }
+
+        public String url() {
+            JsonNode url = urlHolder != null ? urlHolder.get("url") : null;
+            return url != null && url.isTextual() ? url.asText() : null;
+        }
+
+        private boolean replaceUrl(String replacementUrl) {
+            if (urlHolder == null) {
+                return false;
+            }
+            urlHolder.put("url", replacementUrl);
+            return true;
+        }
     }
 
-    /** 依次尝试 OpenAI 兼容视频任务对象中出现过的地址位置，命中第一个即下载上传并回写，返回新 OSS 直链；均未命中返回 null */
-    private String uploadFirstVideoUrl(ObjectNode root) throws IOException {
-        String uploaded = uploadUrlFieldIfPresent(root, "url");
-        if (uploaded != null) {
-            return uploaded;
+    /**
+     * 解析上游视频任务响应中的终态状态及其来源节点。优先取最深的任务对象 video，其次 data，
+     * 最后才回退到顶层 status/state——因为顶层往往只是轮询壳层的泛化字段（如 "processing"），
+     * 而 video/data 是真正携带任务终态的内层对象；video 又比 data 更贴近具体任务本身，
+     * 但节点只有 "ok"/"processing" 这类壳层确认值时不视为任务状态来源，会继续向后查找，
+     * 防止泛化非终态遮蔽另一任务节点上的真实终态。
+     */
+    public VideoTaskStatus extractVideoStatus(JsonNode json) {
+        if (json == null || !json.isObject()) {
+            return null;
         }
-        ObjectNode data = asObject(root.get("data"));
-        if (data != null) {
-            uploaded = uploadUrlFieldIfPresent(data, "url");
-            if (uploaded != null) {
-                return uploaded;
-            }
+        JsonNode video = json.path("video");
+        String status = nestedTaskStatus(video);
+        if (status != null) {
+            return videoTaskStatus(status, video);
         }
-        ObjectNode metadata = asObject(root.get("metadata"));
-        if (metadata != null) {
-            uploaded = uploadUrlFieldIfPresent(metadata, "url");
-            if (uploaded != null) {
-                return uploaded;
-            }
+        JsonNode data = json.path("data");
+        status = nestedTaskStatus(data);
+        if (status != null) {
+            return videoTaskStatus(status, data);
         }
-        if (data != null) {
-            ObjectNode dataMetadata = asObject(data.get("metadata"));
-            if (dataMetadata != null) {
-                uploaded = uploadUrlFieldIfPresent(dataMetadata, "url");
-                if (uploaded != null) {
-                    return uploaded;
-                }
-            }
+        status = nestedTaskStatus(json);
+        if (status != null) {
+            return videoTaskStatus(status, json);
         }
-        ObjectNode video = asObject(root.get("video"));
-        if (video != null) {
-            ObjectNode videoMetadata = asObject(video.get("metadata"));
-            if (videoMetadata != null) {
-                uploaded = uploadUrlFieldIfPresent(videoMetadata, "url");
-                if (uploaded != null) {
-                    return uploaded;
-                }
+        return null;
+    }
+
+    private VideoTaskStatus videoTaskStatus(String status, JsonNode taskNode) {
+        JsonNode duration = firstPresent(taskNode, "actual_duration", "seconds", "duration_seconds",
+                "actual_seconds", "actual_duration_seconds", "real_seconds", "duration");
+        ObjectNode node = asObject(taskNode);
+        ObjectNode urlHolder = hasHttpUrl(node) ? node : asObject(node != null ? node.get("metadata") : null);
+        if (!hasHttpUrl(urlHolder)) {
+            urlHolder = null;
+        }
+        return new VideoTaskStatus(status, taskNode, duration, urlHolder);
+    }
+
+    private JsonNode firstPresent(JsonNode node, String... fields) {
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        for (String field : fields) {
+            JsonNode value = node.get(field);
+            if (value != null && !value.isNull()) {
+                return value;
             }
         }
         return null;
     }
 
-    /** 与 {@link #uploadFirstVideoUrl} 相同的位置探测顺序，但不下载，直接用缓存的 OSS 直链覆盖 */
-    private boolean replaceFirstVideoUrl(ObjectNode root, String replacementUrl) {
-        if (setUrlFieldIfPresent(root, "url", replacementUrl)) {
-            return true;
+    private boolean hasHttpUrl(ObjectNode node) {
+        JsonNode url = node != null ? node.get("url") : null;
+        return url != null && url.isTextual() && isHttpUrl(url.asText());
+    }
+
+    /**
+     * 在状态实际来源的任务节点（video/data/顶层）内探测可下载的播放地址，命中第一个即下载上传
+     * 并回写，返回新 OSS 直链；均未命中返回 null。仅在该节点自身及其 metadata 子节点内查找，
+     * 不再跨节点探测，避免上传了与状态来源不一致的地址。
+     */
+    private String uploadResolvedVideoUrl(VideoTaskStatus resolved) throws IOException {
+        String sourceUrl = resolved.url();
+        if (sourceUrl == null) {
+            return null;
         }
-        ObjectNode data = asObject(root.get("data"));
-        if (data != null && setUrlFieldIfPresent(data, "url", replacementUrl)) {
-            return true;
-        }
-        ObjectNode metadata = asObject(root.get("metadata"));
-        if (metadata != null && setUrlFieldIfPresent(metadata, "url", replacementUrl)) {
-            return true;
-        }
-        if (data != null) {
-            ObjectNode dataMetadata = asObject(data.get("metadata"));
-            if (dataMetadata != null && setUrlFieldIfPresent(dataMetadata, "url", replacementUrl)) {
-                return true;
-            }
-        }
-        ObjectNode video = asObject(root.get("video"));
-        if (video != null) {
-            ObjectNode videoMetadata = asObject(video.get("metadata"));
-            if (videoMetadata != null && setUrlFieldIfPresent(videoMetadata, "url", replacementUrl)) {
-                return true;
-            }
-        }
-        return false;
+        String uploaded = downloadAndUpload(sourceUrl, VIDEO_MAX_BYTES, "videos",
+                null, "video/mp4", this::extensionForVideo);
+        resolved.replaceUrl(uploaded);
+        return uploaded;
     }
 
     private ObjectNode asObject(JsonNode node) {
         return node != null && node.isObject() ? (ObjectNode) node : null;
-    }
-
-    private String uploadUrlFieldIfPresent(ObjectNode holder, String field) throws IOException {
-        JsonNode node = holder.get(field);
-        if (node == null || !node.isTextual() || !isHttpUrl(node.asText())) {
-            return null;
-        }
-        String ossUrl = downloadAndUpload(node.asText(), VIDEO_MAX_BYTES, "videos",
-                null, "video/mp4", this::extensionForVideo);
-        holder.put(field, ossUrl);
-        return ossUrl;
-    }
-
-    private boolean setUrlFieldIfPresent(ObjectNode holder, String field, String replacementUrl) {
-        JsonNode node = holder.get(field);
-        if (node == null || !node.isTextual() || !isHttpUrl(node.asText())) {
-            return false;
-        }
-        holder.put(field, replacementUrl);
-        return true;
-    }
-
-    /**
-     * 优先取嵌套任务对象（data/video）自身的 status/state，只有当响应中不存在这类嵌套任务对象、
-     * 或该对象自身未携带 status/state 时才回退到顶层同名字段——防止顶层泛化状态（如轮询壳层的
-     * "processing"）遮蔽内层真正的任务终态（如 data.status="completed"），反之亦然。
-     */
-    private String findVideoStatus(JsonNode json) {
-        String status = nestedTaskStatus(json.path("data"));
-        if (status != null) return status;
-        status = nestedTaskStatus(json.path("video"));
-        if (status != null) return status;
-        status = textOrNull(json.path("status"));
-        if (status != null) return status;
-        return textOrNull(json.path("state"));
     }
 
     private String nestedTaskStatus(JsonNode taskObject) {
@@ -395,8 +410,14 @@ public class OssMediaStorageService {
             return null;
         }
         String status = textOrNull(taskObject.path("status"));
-        if (status != null) return status;
-        return textOrNull(taskObject.path("state"));
+        if (status == null) {
+            status = textOrNull(taskObject.path("state"));
+        }
+        return isMeaningfulVideoStatus(status) ? status : null;
+    }
+
+    private boolean isMeaningfulVideoStatus(String status) {
+        return status != null && !GENERIC_VIDEO_ACK_STATUSES.contains(status.toLowerCase(Locale.ROOT));
     }
 
     private String textOrNull(JsonNode node) {
