@@ -33,12 +33,16 @@ public class GlobalExceptionHandler {
     private HttpStatus mapToHttpStatus(int code) {
         return switch (code) {
             case 401 -> HttpStatus.UNAUTHORIZED;
+            case 402 -> HttpStatus.PAYMENT_REQUIRED;
             case 403 -> HttpStatus.FORBIDDEN;
             case 404 -> HttpStatus.NOT_FOUND;
             case 409 -> HttpStatus.CONFLICT;
+            case 413 -> HttpStatus.PAYLOAD_TOO_LARGE;
             case 429 -> HttpStatus.TOO_MANY_REQUESTS;
+            case 500 -> HttpStatus.INTERNAL_SERVER_ERROR;
             case 502 -> HttpStatus.BAD_GATEWAY;
             case 503 -> HttpStatus.SERVICE_UNAVAILABLE;
+            case 504 -> HttpStatus.GATEWAY_TIMEOUT;
             default -> HttpStatus.BAD_REQUEST;
         };
     }
