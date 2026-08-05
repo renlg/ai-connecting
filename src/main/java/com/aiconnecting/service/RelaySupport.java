@@ -47,6 +47,7 @@ public class RelaySupport {
     private final UsageLogService usageLogService;
     private final ModelConfigService modelConfigService;
     private final UserService userService;
+    private final com.aiconnecting.repository.VideoTaskRepository videoTaskRepository;
 
     @Autowired(required = false)
     RateLimitService rateLimitService;
@@ -792,6 +793,25 @@ public class RelaySupport {
                 .requestPath(path)
                 .build();
         return usageLogService.recordPrepaidUsage(usageLog).getId();
+    }
+
+    /**
+     * 视频任务专用：使用日志落库与 usage_log_id 回链在同一个本地事务内完成，
+     * 避免两次独立提交之间的崩溃窗口导致"日志和任务都已存在但关联丢失、结算阶段无法回写最终金额"；
+     * 任一环节失败整体回滚（不会留下没有关联的孤立日志），调用方需捕获异常，
+     * 保证失败不影响创建响应（任务与预扣积分已在此之前落地，不受影响）
+     *
+     * @return 落库后的使用日志 id，失败时抛出异常由调用方捕获
+     */
+    @org.springframework.transaction.annotation.Transactional
+    Long recordPrepaidMediaUsageAndLink(Token token, Channel channel, String model, MediaCharge charge,
+                                        long duration, HttpServletRequest httpRequest, String path,
+                                        Long videoTaskId) {
+        Long usageLogId = recordPrepaidMediaUsage(token, channel, model, charge, duration, httpRequest, path);
+        if (videoTaskId != null) {
+            videoTaskRepository.linkUsageLog(videoTaskId, usageLogId);
+        }
+        return usageLogId;
     }
 
     // ==================== 使用记录 ====================

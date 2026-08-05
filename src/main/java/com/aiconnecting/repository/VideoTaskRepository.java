@@ -27,10 +27,26 @@ public interface VideoTaskRepository extends JpaRepository<VideoTask, Long> {
     int markSettled(@Param("id") Long id);
 
     /**
-     * 查找尚未结算、且创建时间早于阈值的任务（供后台对账任务扫描处理客户端未轮询到终态的任务），
-     * 排除刚创建不久、大概率仍在客户端正常轮询中的任务，减少对上游的重复查询
+     * 查找尚未结算、创建时间早于阈值（排除刚创建不久、大概率仍在客户端正常轮询中的任务）、
+     * 且到达可重新扫描时间（nextReconcileAt 为空或已过期）的任务，按 nextReconcileAt 升序排列
+     * （新任务/最久未被检查过的任务优先），供后台对账任务扫描处理客户端未轮询到终态的任务。
+     * 按 nextReconcileAt 排序 + 每次扫描后推迟该字段，保证长期卡住的任务不会永久占据每轮固定的批次名额，
+     * 使其后创建的任务也能被轮到（而不是无排序地反复读到同一批最早创建的任务）
      */
-    List<VideoTask> findBySettledFalseAndCreatedAtBefore(LocalDateTime cutoff, Pageable pageable);
+    @Query("select t from VideoTask t where t.settled = false and t.createdAt < :cutoff "
+            + "and (t.nextReconcileAt is null or t.nextReconcileAt <= :now) "
+            + "order by t.nextReconcileAt asc nulls first")
+    List<VideoTask> findReconcileCandidates(@Param("cutoff") LocalDateTime cutoff,
+                                             @Param("now") LocalDateTime now,
+                                             Pageable pageable);
+
+    /**
+     * 对账尝试后推迟该任务的下次可扫描时间，供其后创建但尚未被检查过的任务优先进入下一轮批次
+     */
+    @Modifying
+    @Transactional
+    @Query("update VideoTask t set t.nextReconcileAt = :next where t.id = :id")
+    int touchNextReconcileAt(@Param("id") Long id, @Param("next") LocalDateTime next);
 
     /**
      * 关联创建任务时写入的预扣使用日志 id，供退款/差额结算时回写该日志的最终计费金额

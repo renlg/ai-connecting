@@ -48,8 +48,10 @@ public class VideoTaskSettlementService {
             if (prepaid.compareTo(BigDecimal.ZERO) > 0) {
                 userService.refundCredits(task.getUserId(), prepaid);
             }
-            adjustUsageLog(task, BigDecimal.ZERO);
         }
+        // 使用日志回写不受 deducted 影响：admin 放行未扣减时创建阶段仍按预扣金额写入了日志，
+        // 失败时同样要归零，否则账单/Dashboard 会显示一笔从未真正结算过的预扣金额
+        adjustUsageLog(task, BigDecimal.ZERO);
         return Outcome.SETTLED;
     }
 
@@ -64,7 +66,7 @@ public class VideoTaskSettlementService {
         }
         VideoTask task = videoTaskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalStateException("视频任务不存在: " + taskId));
-        if (actualSeconds == null || !task.isDeducted()) {
+        if (actualSeconds == null) {
             return Outcome.SETTLED;
         }
         BigDecimal unitPrice = resolveOriginalUnitPrice(task);
@@ -73,12 +75,16 @@ public class VideoTaskSettlementService {
             return Outcome.SETTLED;
         }
         BigDecimal actualCost = unitPrice.multiply(BigDecimal.valueOf(actualSeconds));
-        BigDecimal prepaid = task.getPrepaidCost() != null ? task.getPrepaidCost() : BigDecimal.ZERO;
-        BigDecimal diff = actualCost.subtract(prepaid);
-        if (diff.compareTo(BigDecimal.ZERO) > 0) {
-            userService.deductCreditsSettlement(task.getUserId(), diff);
-        } else if (diff.compareTo(BigDecimal.ZERO) < 0) {
-            userService.refundCredits(task.getUserId(), diff.negate());
+        // 余额调整仅在实际扣减过（deducted）时进行；使用日志回写不受此限制，
+        // 否则 admin 放行未扣减的任务其日志会永久停留在预扣估算金额，与实际用量不符
+        if (task.isDeducted()) {
+            BigDecimal prepaid = task.getPrepaidCost() != null ? task.getPrepaidCost() : BigDecimal.ZERO;
+            BigDecimal diff = actualCost.subtract(prepaid);
+            if (diff.compareTo(BigDecimal.ZERO) > 0) {
+                userService.deductCreditsSettlement(task.getUserId(), diff);
+            } else if (diff.compareTo(BigDecimal.ZERO) < 0) {
+                userService.refundCredits(task.getUserId(), diff.negate());
+            }
         }
         adjustUsageLog(task, actualCost);
         return Outcome.SETTLED;

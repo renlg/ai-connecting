@@ -150,10 +150,18 @@ public class OpenAiRelayService {
             charge = new RelaySupport.MediaCharge(finalCost, charge.deducted());
         }
         long duration = System.currentTimeMillis() - startTime;
-        Long usageLogId = recordPrepaidUsageSafely(ctx.token(), result.channel(), model, charge, duration, httpRequest, path);
-        if (isVideo && videoTaskId != null && usageLogId != null) {
-            // 关联预扣使用日志，供任务终态结算（退款/多退少补）时回写该日志的最终计费金额
-            videoTaskRepository.linkUsageLog(videoTaskId, usageLogId);
+        if (isVideo && videoTaskId != null) {
+            // 使用日志落库与 usage_log_id 回链在同一个事务内完成（见 RelaySupport），
+            // 任一环节失败都不写入孤立记录；失败不影响响应——任务与预扣积分已落地，仅本次日志缺失，
+            // 结算阶段会因 usageLogId 为空跳过金额回写（安全，不影响余额正确性）
+            try {
+                support.recordPrepaidMediaUsageAndLink(ctx.token(), result.channel(), model, charge, duration, httpRequest, path, videoTaskId);
+            } catch (Exception e) {
+                log.error("视频使用日志写入/关联失败（积分已扣减，保持扣减，不影响响应）: model={}, cost={}",
+                        model, charge.cost(), e);
+            }
+        } else {
+            recordPrepaidUsageSafely(ctx.token(), result.channel(), model, charge, duration, httpRequest, path);
         }
         return response;
     }
@@ -355,6 +363,12 @@ public class OpenAiRelayService {
     private static final int RECONCILE_BATCH_SIZE = 50;
     /** 创建时间早于该时长的未结算任务才纳入对账扫描，避免与仍在正常轮询中的新任务抢跑 */
     private static final long RECONCILE_MIN_AGE_MINUTES = 2;
+    /**
+     * 每次对账尝试后，将任务的下次可扫描时间推迟该时长（与调度间隔一致）。
+     * 配合按 nextReconcileAt 升序排序，卡住的任务会被推到队列末尾，让其后创建、
+     * 尚未检查过的任务在下一轮优先进入批次，避免长期不可达的任务永久占满固定的 50 个名额
+     */
+    private static final long RECONCILE_RETRY_DELAY_MINUTES = 5;
 
     /**
      * 后台对账：定期扫描长时间未结算的视频任务，主动向上游查询状态并结算，
@@ -364,9 +378,10 @@ public class OpenAiRelayService {
      */
     @Scheduled(fixedDelay = 5 * 60 * 1000L, initialDelay = 5 * 60 * 1000L)
     public void reconcileUnsettledVideoTasks() {
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(RECONCILE_MIN_AGE_MINUTES);
-        List<VideoTask> pending = videoTaskRepository.findBySettledFalseAndCreatedAtBefore(
-                cutoff, PageRequest.of(0, RECONCILE_BATCH_SIZE));
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime cutoff = now.minusMinutes(RECONCILE_MIN_AGE_MINUTES);
+        List<VideoTask> pending = videoTaskRepository.findReconcileCandidates(
+                cutoff, now, PageRequest.of(0, RECONCILE_BATCH_SIZE));
         if (pending.isEmpty()) {
             return;
         }
@@ -378,6 +393,10 @@ public class OpenAiRelayService {
                 settleVideoTaskIfTerminal(task, response);
             } catch (Exception e) {
                 log.warn("视频任务对账失败，将于下次调度重试: taskId={}, upstreamId={}", task.getId(), task.getUpstreamId(), e);
+            } finally {
+                // 无论本轮是否结算成功都推迟 nextReconcileAt：已结算的任务后续查询会被 settled=false
+                // 条件过滤掉，不受影响；仍未结算的任务借此让位给其它任务，避免同一批任务被反复选中
+                videoTaskRepository.touchNextReconcileAt(task.getId(), LocalDateTime.now().plusMinutes(RECONCILE_RETRY_DELAY_MINUTES));
             }
         }
     }
@@ -387,17 +406,20 @@ public class OpenAiRelayService {
      * 也识别 OpenAI 视频任务对象标准的根级 "seconds" 字段（该字段以字符串形式表示生成时长），
      * 均未命中时返回 null，由调用方保持预扣金额计费
      */
+    /** 单个视频任务的合理时长上限（秒），超出视为异常数据，回退到无实际时长的预扣计费而非按此天价结算 */
+    private static final double MAX_VIDEO_DURATION_SECONDS = 24 * 3600;
+
     private Integer extractActualVideoDurationSeconds(JsonNode json) {
         for (String field : new String[]{"actual_seconds", "actual_duration", "actual_duration_seconds", "real_seconds"}) {
             JsonNode node = json.get(field);
-            if (node != null && node.isNumber() && node.asDouble() > 0) {
+            if (node != null && node.isNumber() && isValidVideoSeconds(node.asDouble())) {
                 return (int) Math.ceil(node.asDouble());
             }
         }
         JsonNode video = json.get("video");
         if (video != null && video.isObject()) {
             JsonNode d = video.get("duration");
-            if (d != null && d.isNumber() && d.asDouble() > 0) {
+            if (d != null && d.isNumber() && isValidVideoSeconds(d.asDouble())) {
                 return (int) Math.ceil(d.asDouble());
             }
         }
@@ -408,18 +430,23 @@ public class OpenAiRelayService {
         return null;
     }
 
+    /** 时长必须是有限正数且不超过合理上限，拒绝 Infinity/NaN/溢出型输入（如 "1e309"） */
+    private boolean isValidVideoSeconds(double value) {
+        return Double.isFinite(value) && value > 0 && value <= MAX_VIDEO_DURATION_SECONDS;
+    }
+
     /** 解析 seconds 字段：OpenAI 标准字段为字符串数字，同时兼容 JSON 数字类型 */
     private Integer parsePositiveSecondsField(JsonNode node) {
         if (node == null || node.isNull()) {
             return null;
         }
-        if (node.isNumber() && node.asDouble() > 0) {
+        if (node.isNumber() && isValidVideoSeconds(node.asDouble())) {
             return (int) Math.ceil(node.asDouble());
         }
         if (node.isTextual()) {
             try {
                 double value = Double.parseDouble(node.asText().trim());
-                if (value > 0) {
+                if (isValidVideoSeconds(value)) {
                     return (int) Math.ceil(value);
                 }
             } catch (NumberFormatException ignored) {
