@@ -359,10 +359,7 @@ public class ChannelService {
     public Map<String, Object> testVideoStatus(Map<String, String> request) {
         String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key");
         String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key");
-        String videoId = requireTestValue(request, "videoId", "缺少视频任务 id");
-        if (!videoId.matches("[A-Za-z0-9_\\-.:]+")) {
-            throw new BusinessException("无效的视频任务 id");
-        }
+        String videoId = requireVideoId(request);
         validateBaseUrlForSsrf(baseUrl);
         long startTime = System.currentTimeMillis();
         try {
@@ -385,6 +382,44 @@ public class ChannelService {
             log.error("渠道视频测试轮询失败: {}", e.getMessage());
             throw new BusinessException("连接上游失败: " + e.getMessage());
         }
+    }
+
+    /** 获取已完成视频的二进制内容；与状态轮询一样只在服务端使用渠道凭据。 */
+    public TestMediaContent testVideoContent(Map<String, String> request) {
+        String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key");
+        String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key");
+        String videoId = requireVideoId(request);
+        validateBaseUrlForSsrf(baseUrl);
+        try {
+            Request upstreamRequest = buildTestRequest(baseUrl, apiKey, request.get("type"),
+                    "/v1/videos/" + videoId + "/content", null, true);
+            try (Response response = streamHttpClient.newCall(upstreamRequest).execute()) {
+                if (!response.isSuccessful()) {
+                    String body = response.body() != null ? response.body().string() : "";
+                    throw new BusinessException(response.code(),
+                            "上游视频内容下载失败: " + abbreviateTestError(body));
+                }
+                byte[] bytes = response.body() != null ? response.body().bytes() : new byte[0];
+                if (bytes.length == 0) {
+                    throw new BusinessException(502, "上游返回了空的视频内容");
+                }
+                String contentType = response.header("Content-Type", "video/mp4").split(";", 2)[0];
+                return new TestMediaContent(bytes, contentType);
+            }
+        } catch (IOException e) {
+            log.error("渠道视频测试内容下载失败: {}", e.getMessage());
+            throw new BusinessException("连接上游失败: " + e.getMessage());
+        }
+    }
+
+    public record TestMediaContent(byte[] bytes, String contentType) {}
+
+    private String requireVideoId(Map<String, String> request) {
+        String videoId = requireTestValue(request, "videoId", "缺少视频任务 id");
+        if (!videoId.matches("[A-Za-z0-9_\\-.:]+")) {
+            throw new BusinessException("无效的视频任务 id");
+        }
+        return videoId;
     }
 
     private Request buildTestRequest(String baseUrl, String apiKey, String channelType,

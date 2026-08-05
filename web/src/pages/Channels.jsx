@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Tooltip, Checkbox, Image, Spin } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined, CopyOutlined, SearchOutlined } from '@ant-design/icons'
-import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, testChannelMedia, pollChannelTestVideo, getChannelHealth, unblockChannel, getChannelApiKey } from '../api'
+import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, testChannelMedia, pollChannelTestVideo, downloadChannelTestVideo, getChannelHealth, unblockChannel, getChannelApiKey } from '../api'
 
 const CB_STATE_COLOR = { CLOSED: 'green', HALF_OPEN: 'gold', OPEN: 'red' }
 
@@ -25,11 +25,30 @@ const extractVideoSource = (data) => firstString(
   data?.video_url,
   data?.output_url,
   data?.video?.url,
+  data?.video?.video_url,
   data?.output?.url,
-  Array.isArray(data?.data) ? data.data[0]?.url : data?.data?.url
+  data?.output?.video_url,
+  data?.result?.url,
+  data?.result?.video_url,
+  data?.outputs?.[0]?.url,
+  data?.data?.video?.url,
+  data?.data?.output?.url,
+  data?.data?.result?.url,
+  Array.isArray(data?.data) ? firstString(data.data[0]?.url, data.data[0]?.video_url) : firstString(data?.data?.url, data?.data?.video_url, data?.data?.output_url)
 )
 
-const videoStatus = (data) => String(data?.status || data?.state || '').toLowerCase()
+const extractVideoTaskId = (data) => firstString(
+  data?.id,
+  data?.task_id,
+  data?.video_id,
+  data?.taskId,
+  data?.data?.id,
+  data?.data?.task_id,
+  data?.data?.video_id,
+  data?.data?.taskId,
+  data?.video?.id
+)
+const videoStatus = (data) => String(data?.status || data?.state || data?.data?.status || data?.data?.state || data?.video?.status || '').toLowerCase()
 const isVideoFailed = (status) => ['failed', 'cancelled', 'canceled', 'error'].includes(status)
 const isVideoComplete = (status) => ['completed', 'succeeded', 'success', 'done'].includes(status)
 
@@ -50,6 +69,7 @@ export default function Channels() {
   const [streamContent, setStreamContent] = useState('')
   const [testModelOptions, setTestModelOptions] = useState([])
   const testRunRef = useRef(0)
+  const videoObjectUrlRef = useRef(null)
   const [healthMap, setHealthMap] = useState({})
   const [showBlockedOnly, setShowBlockedOnly] = useState(false)
   const [revealedKeys, setRevealedKeys] = useState({})
@@ -130,6 +150,10 @@ export default function Channels() {
   }
 
   useEffect(() => { load(); loadModels(); loadHealth() }, [])
+
+  useEffect(() => () => {
+    if (videoObjectUrlRef.current) URL.revokeObjectURL(videoObjectUrlRef.current)
+  }, [])
 
   useEffect(() => {
     const timer = setInterval(loadHealth, HEALTH_REFRESH_MS)
@@ -221,6 +245,10 @@ export default function Channels() {
     const selectedModel = testModelOptions.find(option => option.value === testModel)
     const modelType = String(selectedModel?.type || 'text').toLowerCase()
     const runId = ++testRunRef.current
+    if (videoObjectUrlRef.current) {
+      URL.revokeObjectURL(videoObjectUrlRef.current)
+      videoObjectUrlRef.current = null
+    }
     setTestLoading(true)
     setStreamContent('')
     setTestResult({ success: true, statusCode: 200, duration: 0, modelType })
@@ -249,11 +277,15 @@ export default function Channels() {
           if (!result.dataUrl) throw new Error('上游响应中未返回音频数据')
           setTestResult({ ...result, success: true, modelType, mediaUrl: result.dataUrl })
         } else {
-          const taskId = firstString(result.data?.id, result.data?.task_id, result.data?.taskId)
+          const taskId = extractVideoTaskId(result.data)
           let currentData = result.data
           let mediaUrl = extractVideoSource(currentData)
+          const initialStatus = videoStatus(currentData)
+          if (isVideoFailed(initialStatus)) {
+            throw new Error(firstString(currentData?.error?.message, currentData?.data?.error?.message, currentData?.error, currentData?.message) || `视频生成失败 (${initialStatus})`)
+          }
           if (!taskId && !mediaUrl) throw new Error('上游响应中未找到视频任务 id 或视频 URL')
-          setTestResult({ ...result, success: true, modelType, polling: !mediaUrl, videoStatus: videoStatus(currentData) || 'queued' })
+          setTestResult({ ...result, success: true, modelType, polling: !mediaUrl, videoStatus: initialStatus || 'queued' })
 
           for (let attempt = 0; !mediaUrl && attempt < VIDEO_POLL_LIMIT; attempt += 1) {
             await new Promise(resolve => setTimeout(resolve, VIDEO_POLL_INTERVAL_MS))
@@ -264,11 +296,17 @@ export default function Channels() {
             currentData = pollResult.data
             const status = videoStatus(currentData)
             if (isVideoFailed(status)) {
-              throw new Error(firstString(currentData?.error?.message, currentData?.error, currentData?.message) || `视频生成失败 (${status})`)
+              throw new Error(firstString(currentData?.error?.message, currentData?.data?.error?.message, currentData?.error, currentData?.message) || `视频生成失败 (${status})`)
             }
             mediaUrl = extractVideoSource(currentData)
             setTestResult(prev => ({ ...prev, duration: Date.now() - startTime, videoStatus: status || 'processing', polling: !mediaUrl, mediaUrl }))
-            if (isVideoComplete(status) && !mediaUrl) throw new Error('视频已生成，但上游响应中未找到可播放地址')
+            if (isVideoComplete(status) && !mediaUrl) {
+              const videoBlob = await downloadChannelTestVideo({ ...values, apiKey, videoId: taskId })
+              if (testRunRef.current !== runId) return
+              mediaUrl = URL.createObjectURL(videoBlob)
+              videoObjectUrlRef.current = mediaUrl
+              setTestResult(prev => ({ ...prev, duration: Date.now() - startTime, videoStatus: status, polling: false, mediaUrl }))
+            }
           }
           if (!mediaUrl) throw new Error('视频生成等待超时，请稍后重试')
         }
@@ -577,7 +615,15 @@ export default function Channels() {
       <Modal
         title="渠道测试"
         open={testModalOpen}
-        onCancel={() => { testRunRef.current += 1; setTestLoading(false); setTestModalOpen(false) }}
+        onCancel={() => {
+          testRunRef.current += 1
+          setTestLoading(false)
+          if (videoObjectUrlRef.current) {
+            URL.revokeObjectURL(videoObjectUrlRef.current)
+            videoObjectUrlRef.current = null
+          }
+          setTestModalOpen(false)
+        }}
         footer={null}
         width={600}
       >

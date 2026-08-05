@@ -10,6 +10,7 @@ import com.aiconnecting.service.ChannelHealthTracker;
 import com.aiconnecting.service.ChannelService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.servlet.http.HttpServletResponse;
@@ -127,5 +128,18 @@ public class ChannelController {
     @PostMapping("/test-video-status")
     public ApiResponse<Map<String, Object>> testVideoStatus(@RequestBody Map<String, String> request) {
         return ApiResponse.success(channelService.testVideoStatus(request));
+    }
+
+    /** 下载已完成的渠道视频测试结果，视频字节始终由后端携带渠道凭据获取。 */
+    @PostMapping("/test-video-content")
+    public ResponseEntity<byte[]> testVideoContent(@RequestBody Map<String, String> request) {
+        ChannelService.TestMediaContent content = channelService.testVideoContent(request);
+        MediaType contentType;
+        try {
+            contentType = MediaType.parseMediaType(content.contentType());
+        } catch (Exception ignored) {
+            contentType = MediaType.APPLICATION_OCTET_STREAM;
+        }
+        return ResponseEntity.ok().contentType(contentType).body(content.bytes());
     }
 }
