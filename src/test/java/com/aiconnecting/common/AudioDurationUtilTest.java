@@ -218,6 +218,68 @@ class AudioDurationUtilTest {
         assertEquals(-1, AudioDurationUtil.measure(buildFlac(44100L * 3600, 0)));
     }
 
+    @Test
+    void flacRejectsNonSequentialFrames() {
+        byte[] flac = buildFlac(1, 3);
+        int secondHeader = 42 + 70;
+        flac[secondHeader + 4] = 7;
+        flac[secondHeader + 5] = (byte) flacCrc8(flac, secondHeader, secondHeader + 5);
+        assertEquals(-1, AudioDurationUtil.measure(flac));
+    }
+
+    // ==================== MP3 / ADTS ====================
+
+    private byte[] buildMp3(int[] rateIndexes, int channels) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        int[] rates = {44100, 48000, 32000};
+        for (int rateIndex : rateIndexes) {
+            int frameLength = 144 * 128000 / rates[rateIndex];
+            byte[] frame = new byte[frameLength];
+            frame[0] = (byte) 0xFF;
+            frame[1] = (byte) 0xFB; // MPEG1 Layer III
+            frame[2] = (byte) (0x90 | (rateIndex << 2)); // 128kbps
+            frame[3] = (byte) (channels == 1 ? 0xC0 : 0);
+            out.write(frame, 0, frame.length);
+        }
+        return out.toByteArray();
+    }
+
+    @Test
+    void mp3MeasuresOnlyConsistentAdjacentFrames() {
+        assertEquals(3 * 1152 / 44100.0,
+                AudioDurationUtil.measure(buildMp3(new int[]{0, 0, 0}, 2)), 0.0001);
+        assertEquals(-1, AudioDurationUtil.measure(buildMp3(new int[]{0, 1, 0}, 2)));
+    }
+
+    private byte[] buildAdts(int[] rateIndexes, int[] channels) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        int frameLength = 32;
+        for (int i = 0; i < rateIndexes.length; i++) {
+            int rateIndex = rateIndexes[i];
+            int channelConfig = channels[i];
+            byte[] frame = new byte[frameLength];
+            frame[0] = (byte) 0xFF;
+            frame[1] = (byte) 0xF1;
+            frame[2] = (byte) (0x40 | (rateIndex << 2) | (channelConfig >> 2));
+            frame[3] = (byte) ((channelConfig & 3) << 6 | (frameLength >> 11));
+            frame[4] = (byte) (frameLength >> 3);
+            frame[5] = (byte) ((frameLength & 7) << 5 | 0x1F);
+            frame[6] = (byte) 0xFC;
+            out.write(frame, 0, frame.length);
+        }
+        return out.toByteArray();
+    }
+
+    @Test
+    void adtsMeasuresOnlyConsistentAdjacentFrames() {
+        assertEquals(3 * 1024 / 44100.0,
+                AudioDurationUtil.measure(buildAdts(new int[]{4, 4, 4}, new int[]{2, 2, 2})), 0.0001);
+        assertEquals(-1,
+                AudioDurationUtil.measure(buildAdts(new int[]{4, 3, 4}, new int[]{2, 2, 2})));
+        assertEquals(-1,
+                AudioDurationUtil.measure(buildAdts(new int[]{4, 4, 4}, new int[]{2, 1, 2})));
+    }
+
     // ==================== MP4 ====================
 
     @Test

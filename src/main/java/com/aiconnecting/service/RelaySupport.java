@@ -410,7 +410,7 @@ public class RelaySupport {
                 .addHeader("Content-Type", "application/json")
                 .post(body);
         applyChannelAuth(requestBuilder, channel);
-        return executeBinary(channel, requestBuilder.build());
+        return executeBinary(channel, requestBuilder.build(), MAX_AUDIO_RESPONSE_BYTES);
     }
 
     /**
@@ -423,16 +423,19 @@ public class RelaySupport {
                 .url(url)
                 .post(multipartBody);
         applyChannelAuth(requestBuilder, channel);
-        return executeBinary(channel, requestBuilder.build());
+        return executeBinary(channel, requestBuilder.build(), MAX_TRANSCRIPTION_RESPONSE_BYTES);
     }
 
-    /** 二进制上游响应大小上限，防止异常上游响应占满堆内存 */
-    static final long MAX_BINARY_RESPONSE_BYTES = 64L * 1024 * 1024;
+    /** TTS 二进制音频响应上限，避免与请求体等副本叠加造成单请求内存峰值过高 */
+    static final long MAX_AUDIO_RESPONSE_BYTES = 32L * 1024 * 1024;
 
-    private BinaryResponse executeBinary(Channel channel, Request request) {
+    /** 转写/翻译响应仅为 JSON 或纯文本，使用更小的独立上限 */
+    static final long MAX_TRANSCRIPTION_RESPONSE_BYTES = 4L * 1024 * 1024;
+
+    private BinaryResponse executeBinary(Channel channel, Request request, long maxResponseBytes) {
         try (okhttp3.Response response = httpClient.newCall(request).execute()) {
             byte[] bytes = response.body() != null
-                    ? readCapped(response.body().byteStream(), MAX_BINARY_RESPONSE_BYTES)
+                    ? readCapped(response.body().byteStream(), maxResponseBytes)
                     : new byte[0];
             if (!response.isSuccessful()) {
                 String error = new String(bytes, StandardCharsets.UTF_8);
@@ -577,8 +580,8 @@ public class RelaySupport {
     /**
      * 媒体请求预扣：价格在调用上游前已完全可知，先原子校验余额并扣减积分，再放行请求；
      * 上游失败时由调用方通过 {@link #refundMediaCharge} 退回。
-     * 图片 = 档位单价 × 张数；视频 = 分辨率档位单价 × 时长（秒）；音频 = 音质档位单价 × 时长（秒）。
-     * 分辨率/音质/时长缺失或无法识别时直接拒绝（400），不允许按低档位漏计费。
+     * 图片 = 分辨率档位单价 × 张数；视频 = 分辨率档位单价 × 时长（秒）。
+     * 分辨率/时长缺失或无法识别时直接拒绝（400），不允许按低档位漏计费。
      */
     MediaCharge prepareMediaCharge(RelayContext ctx, String requestBody) {
         MediaParams params = parseMediaParams(requestBody);
@@ -607,9 +610,6 @@ public class RelaySupport {
                 size = body.get("size").asText();
             } else if (body.hasNonNull("resolution")) {
                 size = body.get("resolution").asText();
-            }
-            if (body.has("quality") && !body.get("quality").isNull() && !body.get("quality").isTextual()) {
-                throw new BusinessException(400, "quality 参数必须是字符串");
             }
             if (body.hasNonNull("n")) {
                 n = body.get("n").asInt(1);

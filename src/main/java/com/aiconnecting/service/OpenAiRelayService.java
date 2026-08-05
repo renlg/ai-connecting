@@ -568,6 +568,9 @@ public class OpenAiRelayService {
     /** 上传音频大小上限（与 OpenAI 25MB 限制一致），配合限时长测量约束堆内存占用 */
     static final long MAX_AUDIO_UPLOAD_BYTES = 25L * 1024 * 1024;
 
+    /** OpenAI speech input 的字符数上限 */
+    static final int MAX_SPEECH_INPUT_CHARACTERS = 4096;
+
     /** 这些 response_format 的响应是纯文本，按原始字节透传；其余（json/verbose_json）必须校验为合法 JSON 才计费 */
     private static final Set<String> RAW_TEXT_RESPONSE_FORMATS = Set.of("text", "srt", "vtt");
 
@@ -676,6 +679,9 @@ public class OpenAiRelayService {
      */
     private int estimateSpeechSeconds(String input, double speed) {
         int chars = input.codePointCount(0, input.length());
+        if (chars > MAX_SPEECH_INPUT_CHARACTERS) {
+            throw new BusinessException(413, "语音合成 input 超过字符数限制 (4096)");
+        }
         return Math.max(1, (int) Math.ceil(chars / (14.0 * speed)));
     }
 

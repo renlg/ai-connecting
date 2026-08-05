@@ -21,6 +21,8 @@ import java.nio.charset.StandardCharsets;
  */
 public final class AudioDurationUtil {
 
+    private static final double MAX_AUDIO_DURATION_SECONDS = 24 * 3600;
+
     private AudioDurationUtil() {
     }
 
@@ -32,38 +34,48 @@ public final class AudioDurationUtil {
             return -1;
         }
         try {
-            if (match(d, 0, "RIFF") && match(d, 8, "WAVE")) {
-                return wavSeconds(d);
-            }
-            if (match(d, 0, "fLaC")) {
-                return flacSeconds(d);
-            }
-            if (match(d, 0, "OggS")) {
-                return oggSeconds(d);
-            }
-            if (match(d, 4, "ftyp")) {
-                return mp4Seconds(d);
-            }
-            if ((d[0] & 0xFF) == 0x1A && (d[1] & 0xFF) == 0x45
-                    && (d[2] & 0xFF) == 0xDF && (d[3] & 0xFF) == 0xA3) {
-                return webmSeconds(d);
-            }
-            int off = 0;
-            if (match(d, 0, "ID3")) {
-                off = 10 + syncSafe(d, 6);
-            }
-            if (off + 7 <= d.length && (d[off] & 0xFF) == 0xFF && (d[off + 1] & 0xF6) == 0xF0) {
-                return adtsSeconds(d, off);
-            }
-            return mp3Seconds(d, off);
+            double seconds = measureSupportedFormat(d);
+            return isSaneDuration(seconds) ? seconds : -1;
         } catch (Exception e) {
             return -1;
         }
     }
 
+    private static double measureSupportedFormat(byte[] d) {
+        if (match(d, 0, "RIFF") && match(d, 8, "WAVE")) {
+            return wavSeconds(d);
+        }
+        if (match(d, 0, "fLaC")) {
+            return flacSeconds(d);
+        }
+        if (match(d, 0, "OggS")) {
+            return oggSeconds(d);
+        }
+        if (match(d, 4, "ftyp")) {
+            return mp4Seconds(d);
+        }
+        if ((d[0] & 0xFF) == 0x1A && (d[1] & 0xFF) == 0x45
+                && (d[2] & 0xFF) == 0xDF && (d[3] & 0xFF) == 0xA3) {
+            return webmSeconds(d);
+        }
+        int off = 0;
+        if (match(d, 0, "ID3")) {
+            off = 10 + syncSafe(d, 6);
+        }
+        if (off + 7 <= d.length && (d[off] & 0xFF) == 0xFF && (d[off + 1] & 0xF6) == 0xF0) {
+            return adtsSeconds(d, off);
+        }
+        return mp3Seconds(d, off);
+    }
+
     /** 仅供 speech 输出路径使用：OpenAI speech pcm 输出由规范固定为 24kHz 16bit 单声道小端裸样本 */
     public static double pcmSeconds(byte[] d) {
-        return d == null || d.length == 0 ? -1 : d.length / 48000.0;
+        double seconds = d == null || d.length == 0 ? -1 : d.length / 48000.0;
+        return isSaneDuration(seconds) ? seconds : -1;
+    }
+
+    private static boolean isSaneDuration(double seconds) {
+        return Double.isFinite(seconds) && seconds > 0 && seconds <= MAX_AUDIO_DURATION_SECONDS;
     }
 
     // ==================== WAV ====================
@@ -131,6 +143,7 @@ public final class AudioDurationUtil {
         // 遍历元数据块定位音频帧起始；STREAMINFO 仅用于取采样率兜底，总样本数不采信
         int pos = 4;
         long streamRate = -1;
+        int streamChannels = -1;
         boolean last = false;
         while (!last) {
             if (pos + 4 > d.length) {
@@ -141,7 +154,9 @@ public final class AudioDurationUtil {
             int type = header & 0x7F;
             int len = ((d[pos + 1] & 0xFF) << 16) | ((d[pos + 2] & 0xFF) << 8) | (d[pos + 3] & 0xFF);
             if (type == 0 && len >= 18 && pos + 4 + 18 <= d.length) {
-                streamRate = u64be(d, pos + 4 + 10) >>> 44;
+                long streamInfo = u64be(d, pos + 4 + 10);
+                streamRate = streamInfo >>> 44;
+                streamChannels = (int) ((streamInfo >>> 41) & 0x7) + 1;
             }
             pos += 4 + len;
             if (pos < 0 || pos > d.length) {
@@ -152,29 +167,42 @@ public final class AudioDurationUtil {
         double seconds = 0;
         int frames = 0;
         int p = pos;
+        FlacFrame previous = null;
         while (p + 6 <= d.length) {
-            double s = flacFrameSeconds(d, p, streamRate);
-            if (s < 0) {
+            FlacFrame frame = parseFlacFrame(d, p, streamRate, streamChannels);
+            if (frame == null) {
                 p++;
                 continue;
             }
-            seconds += s;
+            if (previous != null && !isNextFlacFrame(previous, frame)) {
+                return -1;
+            }
+            seconds += frame.seconds();
             frames++;
+            previous = frame;
             p += 6; // FLAC 帧长不自描述，跳过帧头后继续搜索下一个同步字
         }
         return frames >= 1 && seconds > 0 ? seconds : -1;
     }
 
-    /** 解析并校验一个 FLAC 帧头（含 CRC-8），返回该帧时长（秒），无效返回 -1 */
-    private static double flacFrameSeconds(byte[] d, int p, long streamRate) {
+    private static boolean isNextFlacFrame(FlacFrame previous, FlacFrame current) {
+        if (previous.variableBlock() != current.variableBlock()) {
+            return false;
+        }
+        long expected = previous.number() + (previous.variableBlock() ? previous.blockSize() : 1);
+        return current.number() == expected;
+    }
+
+    /** 解析并校验一个 FLAC 帧头（含 CRC-8），无效返回 null */
+    private static FlacFrame parseFlacFrame(byte[] d, int p, long streamRate, int streamChannels) {
         if ((d[p] & 0xFF) != 0xFF || (d[p + 1] & 0xFC) != 0xF8) {
-            return -1;
+            return null;
         }
         int bsCode = (d[p + 2] >> 4) & 0xF;
         int srCode = d[p + 2] & 0xF;
         int chCode = (d[p + 3] >> 4) & 0xF;
         if ((d[p + 3] & 1) != 0 || bsCode == 0 || srCode == 15 || chCode > 10) {
-            return -1;
+            return null;
         }
         int idx = p + 4;
         int first = d[idx] & 0xFF;
@@ -186,12 +214,14 @@ public final class AudioDurationUtil {
         else if ((first & 0xFC) == 0xF8) extra = 4;
         else if ((first & 0xFE) == 0xFC) extra = 5;
         else if (first == 0xFE) extra = 6;
-        else return -1;
+        else return null;
+        long frameNumber = first & (0x3F >> extra);
         idx++;
         for (int i = 0; i < extra; i++) {
             if (idx >= d.length || (d[idx] & 0xC0) != 0x80) {
-                return -1;
+                return null;
             }
+            frameNumber = (frameNumber << 6) | (d[idx] & 0x3F);
             idx++;
         }
         long blockSize;
@@ -200,11 +230,11 @@ public final class AudioDurationUtil {
         } else if (bsCode <= 5) {
             blockSize = 576L << (bsCode - 2);
         } else if (bsCode == 6) {
-            if (idx + 1 > d.length) return -1;
+            if (idx + 1 > d.length) return null;
             blockSize = (d[idx] & 0xFF) + 1L;
             idx += 1;
         } else if (bsCode == 7) {
-            if (idx + 2 > d.length) return -1;
+            if (idx + 2 > d.length) return null;
             blockSize = (((d[idx] & 0xFF) << 8) | (d[idx + 1] & 0xFF)) + 1L;
             idx += 2;
         } else {
@@ -225,36 +255,43 @@ public final class AudioDurationUtil {
             case 10 -> rate = 48000;
             case 11 -> rate = 96000;
             case 12 -> {
-                if (idx + 1 > d.length) return -1;
+                if (idx + 1 > d.length) return null;
                 rate = (d[idx] & 0xFF) * 1000L;
                 idx += 1;
             }
             case 13 -> {
-                if (idx + 2 > d.length) return -1;
+                if (idx + 2 > d.length) return null;
                 rate = ((d[idx] & 0xFF) << 8) | (d[idx + 1] & 0xFF);
                 idx += 2;
             }
             case 14 -> {
-                if (idx + 2 > d.length) return -1;
+                if (idx + 2 > d.length) return null;
                 rate = (((d[idx] & 0xFF) << 8) | (d[idx + 1] & 0xFF)) * 10L;
                 idx += 2;
             }
             default -> {
-                return -1;
+                return null;
             }
         }
         if (idx >= d.length) {
-            return -1;
+            return null;
+        }
+        int frameChannels = chCode <= 7 ? chCode + 1 : 2;
+        if (rate <= 0 || (streamRate > 0 && rate != streamRate)
+                || (streamChannels > 0 && frameChannels != streamChannels)) {
+            return null;
         }
         int crc = 0;
         for (int i = p; i < idx; i++) {
             crc = FLAC_CRC8_TABLE[(crc ^ (d[i] & 0xFF)) & 0xFF];
         }
         if ((d[idx] & 0xFF) != crc) {
-            return -1;
+            return null;
         }
-        return rate > 0 && blockSize > 0 ? blockSize / (double) rate : -1;
+        return new FlacFrame(blockSize / (double) rate, blockSize, frameNumber, (d[p + 1] & 1) != 0);
     }
+
+    private record FlacFrame(double seconds, long blockSize, long number, boolean variableBlock) {}
 
     // ==================== OGG (Vorbis / Opus) ====================
 
@@ -612,40 +649,61 @@ public final class AudioDurationUtil {
     };
 
     private static double mp3Seconds(byte[] d, int off) {
-        double seconds = 0;
-        int frames = 0;
         int pos = Math.max(off, 0);
         while (pos + 4 <= d.length) {
-            if ((d[pos] & 0xFF) != 0xFF || (d[pos + 1] & 0xE0) != 0xE0) {
+            Mp3Frame first = parseMp3Frame(d, pos);
+            if (first == null) {
                 pos++;
                 continue;
             }
-            int b1 = d[pos + 1] & 0xFF;
-            int b2 = d[pos + 2] & 0xFF;
-            int versionBits = (b1 >> 3) & 3; // 0=MPEG2.5, 2=MPEG2, 3=MPEG1
-            int layerBits = (b1 >> 1) & 3;   // 1=Layer III
-            int bitrateIdx = (b2 >> 4) & 0xF;
-            int rateIdx = (b2 >> 2) & 3;
-            int padding = (b2 >> 1) & 1;
-            if (versionBits == 1 || layerBits != 1 || bitrateIdx == 0 || bitrateIdx == 15 || rateIdx == 3) {
-                pos++;
-                continue;
+            double seconds = 0;
+            int frames = 0;
+            int framePos = pos;
+            while (framePos + 4 <= d.length) {
+                Mp3Frame frame = parseMp3Frame(d, framePos);
+                if (frame == null || frame.versionBits() != first.versionBits()
+                        || frame.sampleRate() != first.sampleRate() || frame.channels() != first.channels()) {
+                    break;
+                }
+                seconds += frame.samplesPerFrame() / (double) frame.sampleRate();
+                frames++;
+                framePos += frame.length();
             }
-            boolean mpeg1 = versionBits == 3;
-            int sampleRate = MP3_SAMPLE_RATES[mpeg1 ? 0 : (versionBits == 2 ? 1 : 2)][rateIdx];
-            int bitrate = L3_BITRATES[mpeg1 ? 0 : 1][bitrateIdx] * 1000;
-            int samplesPerFrame = mpeg1 ? 1152 : 576;
-            int frameLen = samplesPerFrame / 8 * bitrate / sampleRate + padding;
-            if (frameLen <= 4) {
-                pos++;
-                continue;
+            if (frames >= 3) {
+                return seconds;
             }
-            seconds += samplesPerFrame / (double) sampleRate;
-            frames++;
-            pos += frameLen;
+            pos++;
         }
-        return frames >= 3 ? seconds : -1;
+        return -1;
     }
+
+    private static Mp3Frame parseMp3Frame(byte[] d, int pos) {
+        if (pos + 4 > d.length || (d[pos] & 0xFF) != 0xFF || (d[pos + 1] & 0xE0) != 0xE0) {
+            return null;
+        }
+        int b1 = d[pos + 1] & 0xFF;
+        int b2 = d[pos + 2] & 0xFF;
+        int versionBits = (b1 >> 3) & 3; // 0=MPEG2.5, 2=MPEG2, 3=MPEG1
+        int layerBits = (b1 >> 1) & 3;   // 1=Layer III
+        int bitrateIdx = (b2 >> 4) & 0xF;
+        int rateIdx = (b2 >> 2) & 3;
+        int padding = (b2 >> 1) & 1;
+        if (versionBits == 1 || layerBits != 1 || bitrateIdx == 0 || bitrateIdx == 15 || rateIdx == 3) {
+            return null;
+        }
+        boolean mpeg1 = versionBits == 3;
+        int sampleRate = MP3_SAMPLE_RATES[mpeg1 ? 0 : (versionBits == 2 ? 1 : 2)][rateIdx];
+        int bitrate = L3_BITRATES[mpeg1 ? 0 : 1][bitrateIdx] * 1000;
+        int samplesPerFrame = mpeg1 ? 1152 : 576;
+        int frameLen = samplesPerFrame / 8 * bitrate / sampleRate + padding;
+        if (frameLen <= 4 || frameLen > d.length - pos) {
+            return null;
+        }
+        int channels = ((d[pos + 3] >> 6) & 3) == 3 ? 1 : 2;
+        return new Mp3Frame(frameLen, sampleRate, samplesPerFrame, channels, versionBits);
+    }
+
+    private record Mp3Frame(int length, int sampleRate, int samplesPerFrame, int channels, int versionBits) {}
 
     // ==================== ADTS AAC ====================
 
@@ -654,27 +712,53 @@ public final class AudioDurationUtil {
     };
 
     private static double adtsSeconds(byte[] d, int off) {
-        double seconds = 0;
-        int frames = 0;
         int pos = Math.max(off, 0);
         while (pos + 7 <= d.length) {
-            if ((d[pos] & 0xFF) != 0xFF || (d[pos + 1] & 0xF6) != 0xF0) {
+            AdtsFrame first = parseAdtsFrame(d, pos);
+            if (first == null) {
                 pos++;
                 continue;
             }
-            int rateIdx = (d[pos + 2] >> 2) & 0xF;
-            int frameLen = ((d[pos + 3] & 3) << 11) | ((d[pos + 4] & 0xFF) << 3) | ((d[pos + 5] & 0xFF) >> 5);
-            if (rateIdx >= AAC_RATES.length || frameLen < 7) {
-                pos++;
-                continue;
+            double seconds = 0;
+            int frames = 0;
+            int framePos = pos;
+            while (framePos + 7 <= d.length) {
+                AdtsFrame frame = parseAdtsFrame(d, framePos);
+                if (frame == null || frame.sampleRate() != first.sampleRate()
+                        || frame.channels() != first.channels()) {
+                    break;
+                }
+                seconds += frame.rawBlocks() * 1024.0 / frame.sampleRate();
+                frames++;
+                framePos += frame.length();
             }
-            int rawBlocks = (d[pos + 6] & 3) + 1;
-            seconds += rawBlocks * 1024.0 / AAC_RATES[rateIdx];
-            frames++;
-            pos += frameLen;
+            if (frames >= 2) {
+                return seconds;
+            }
+            pos++;
         }
-        return frames >= 1 ? seconds : -1;
+        return -1;
     }
+
+    private static AdtsFrame parseAdtsFrame(byte[] d, int pos) {
+        if (pos + 7 > d.length || (d[pos] & 0xFF) != 0xFF || (d[pos + 1] & 0xF6) != 0xF0) {
+            return null;
+        }
+        int rateIdx = (d[pos + 2] >> 2) & 0xF;
+        int frameLen = ((d[pos + 3] & 3) << 11) | ((d[pos + 4] & 0xFF) << 3) | ((d[pos + 5] & 0xFF) >> 5);
+        int headerLen = (d[pos + 1] & 1) == 0 ? 9 : 7;
+        if (rateIdx >= AAC_RATES.length || frameLen < headerLen || frameLen > d.length - pos) {
+            return null;
+        }
+        int rawBlocks = (d[pos + 6] & 3) + 1;
+        int channels = ((d[pos + 2] & 1) << 2) | ((d[pos + 3] >> 6) & 3);
+        if (channels == 0) {
+            return null;
+        }
+        return new AdtsFrame(frameLen, AAC_RATES[rateIdx], rawBlocks, channels);
+    }
+
+    private record AdtsFrame(int length, int sampleRate, int rawBlocks, int channels) {}
 
     // ==================== 工具方法 ====================
 
