@@ -107,7 +107,7 @@ public class OpenAiRelayService {
 
     /**
      * 图片/视频生成中转 (非流式)：价格在请求前完全可知，先原子校验余额并预扣积分，再转发上游；
-     * 上游失败时退回预扣积分。视频响应保留上游原始 id，并持久化 id→渠道 映射，
+     * 上游失败时退回预扣积分。视频响应使用可轮询的 video_id，并持久化 video_id→渠道映射，
      * 供 GET /v1/videos/{id} 通过中转向原始渠道轮询任务状态（不向客户端暴露渠道凭据）。
      *
      * @param mediaType image 或 video，入口处强制模型类型与端点匹配
@@ -258,8 +258,8 @@ public class OpenAiRelayService {
     private record VideoResponseResult(String response, Long taskId) {}
 
     /**
-     * 持久化上游视频任务 id 与渠道的映射，供轮询接口回查；
-     * 响应保留上游原始 id，仅附加非敏感的 channel_id 字段（不暴露渠道凭据或地址）。
+     * 持久化上游视频任务 id 与渠道的映射，供轮询接口回查；优先使用 Agnes 创建响应中的
+     * video_id，并将响应 id 规范化为该值，使兼容 OpenAI 的客户端后续轮询正确的标识。
      * 响应非法 JSON、缺少可用 id 或映射保存失败均抛错（由调用方退回预扣积分并如实反馈退款状态），
      * 绝不向已付费的客户端返回无法轮询的任务结果
      */
@@ -279,15 +279,15 @@ public class OpenAiRelayService {
             log.error("视频上游响应为空，无法建立任务轮询映射");
             throw new BusinessException(502, "上游视频响应无效（空响应）");
         }
-        if (!json.isObject() || !json.hasNonNull("id")
-                || !json.get("id").isTextual() || json.get("id").asText().isBlank()) {
-            log.error("视频上游响应缺少有效的 id 字段，无法建立任务轮询映射");
+        String upstreamVideoId = json.isObject() ? firstText(json.get("video_id"), json.get("id")) : null;
+        if (upstreamVideoId == null) {
+            log.error("视频上游响应缺少有效的 video_id/id 字段，无法建立任务轮询映射");
             throw new BusinessException(502, "上游视频响应缺少有效的任务 id");
         }
         Long taskId;
         try {
             VideoTask saved = videoTaskRepository.save(VideoTask.builder()
-                    .upstreamId(json.get("id").asText())
+                    .upstreamId(upstreamVideoId)
                     .channelId(channelId)
                     .tokenId(tokenId)
                     .userId(userId)
@@ -301,10 +301,13 @@ public class OpenAiRelayService {
                     .build());
             taskId = saved.getId();
         } catch (Exception e) {
-            log.error("视频任务映射保存失败: upstreamId={}", json.get("id").asText(), e);
+            log.error("视频任务映射保存失败: upstreamId={}", upstreamVideoId, e);
             throw new BusinessException(500, "视频任务保存失败，请重试");
         }
-        ((com.fasterxml.jackson.databind.node.ObjectNode) json).put("channel_id", channelId);
+        com.fasterxml.jackson.databind.node.ObjectNode responseObject =
+                (com.fasterxml.jackson.databind.node.ObjectNode) json;
+        responseObject.put("id", upstreamVideoId);
+        responseObject.put("channel_id", channelId);
         try {
             return new VideoResponseResult(support.objectMapper.writeValueAsString(json), taskId);
         } catch (Exception e) {
@@ -320,7 +323,7 @@ public class OpenAiRelayService {
      */
     public String relayVideoStatusRequest(String tokenKey, String videoId) {
         Token token = support.validateToken(tokenKey);
-        if (videoId == null || videoId.isBlank() || !videoId.matches("[A-Za-z0-9_\\-.:]+")) {
+        if (videoId == null || videoId.isBlank() || !videoId.matches("[A-Za-z0-9_\\-.:+/=]+")) {
             throw new BusinessException(400, "无效的视频任务 id");
         }
         VideoTask task = videoTaskRepository
@@ -334,7 +337,8 @@ public class OpenAiRelayService {
         try {
             videoTaskUsageLogService.ensureLinked(task.getId());
             Channel channel = channelService.getById(task.getChannelId());
-            String response = support.forwardGetRequest(channel, "/v1/videos/" + videoId);
+            String response = support.forwardGetRequest(channel,
+                    support.videoStatusPath(channel, task.getUpstreamId(), task.getModel()));
             settleVideoTaskIfTerminal(task, response);
             return response;
         } finally {
@@ -422,7 +426,8 @@ public class OpenAiRelayService {
             try {
                 videoTaskUsageLogService.ensureLinked(task.getId());
                 Channel channel = channelService.getById(task.getChannelId());
-                String response = support.forwardGetRequest(channel, "/v1/videos/" + task.getUpstreamId());
+                String response = support.forwardGetRequest(channel,
+                        support.videoStatusPath(channel, task.getUpstreamId(), task.getModel()));
                 settleVideoTaskIfTerminal(task, response);
             } catch (Exception e) {
                 log.warn("视频任务对账失败，将于下次调度重试: taskId={}, upstreamId={}", task.getId(), task.getUpstreamId(), e);
@@ -437,6 +442,15 @@ public class OpenAiRelayService {
                 }
             }
         }
+    }
+
+    private String firstText(JsonNode... nodes) {
+        for (JsonNode node : nodes) {
+            if (node != null && node.isTextual() && !node.asText().isBlank()) {
+                return node.asText();
+            }
+        }
+        return null;
     }
 
     /**

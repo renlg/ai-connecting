@@ -6,7 +6,7 @@ import { getChannels, createChannel, updateChannel, deleteChannel, updateChannel
 const CB_STATE_COLOR = { CLOSED: 'green', HALF_OPEN: 'gold', OPEN: 'red' }
 
 const HEALTH_REFRESH_MS = 30000
-const VIDEO_POLL_INTERVAL_MS = 2000
+const VIDEO_POLL_INTERVAL_MS = 5000
 const VIDEO_POLL_LIMIT = 150
 
 const firstString = (...values) => values.find(value => typeof value === 'string' && value.trim())
@@ -21,10 +21,14 @@ const extractImageSource = (data) => {
 
 const extractVideoSource = (data) => firstString(
   typeof data === 'string' ? data : null,
+  data?.url,
+  data?.data?.url,
   data?.metadata?.url,
   data?.data?.metadata?.url,
   data?.video?.metadata?.url,
-  data?.url,
+  data?.remixed_from_video_id,
+  data?.data?.remixed_from_video_id,
+  data?.video?.remixed_from_video_id,
   data?.video_url,
   data?.output_url,
   data?.video?.url,
@@ -41,13 +45,13 @@ const extractVideoSource = (data) => firstString(
 )
 
 const extractVideoTaskId = (data) => firstString(
+  data?.video_id,
+  data?.data?.video_id,
   data?.id,
   data?.task_id,
-  data?.video_id,
   data?.taskId,
   data?.data?.id,
   data?.data?.task_id,
-  data?.data?.video_id,
   data?.data?.taskId,
   data?.video?.id
 )
@@ -302,13 +306,13 @@ export default function Channels() {
             }
             mediaUrl = extractVideoSource(currentData)
             console.debug(`[video test] poll attempt=${attempt + 1} taskId=${taskId} status=${status} urlFound=${!!mediaUrl}`)
-            // 上游 completed 后仍可能需要一段时间才能上传出最终文件（metadata.url 延迟出现），
+            // 上游 completed 后仍可能需要一段时间才能返回最终 URL，
             // 因此即使状态已 completed 但尚无 URL 也继续轮询，而不是立即报错或调用不存在的 /content 接口。
             setTestResult(prev => ({ ...prev, duration: Date.now() - startTime, videoStatus: status || 'processing', polling: !mediaUrl, mediaUrl }))
           }
 
           if (!mediaUrl && testRunRef.current === runId) {
-            // 兜底：对不支持 metadata.url 的其它渠道，仍尝试旧的 /content 下载方式
+            // 兜底：对不返回 URL 的其它渠道，仍尝试旧的 /content 下载方式
             try {
               const videoBlob = await downloadChannelTestVideo({ ...values, apiKey, videoId: taskId })
               if (testRunRef.current !== runId) return

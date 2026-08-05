@@ -24,6 +24,7 @@ import java.math.BigDecimal;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.SocketTimeoutException;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
@@ -304,6 +305,18 @@ public class RelaySupport {
         } catch (IllegalArgumentException e) {
             return false;
         }
+    }
+
+    /** Agnes 视频任务只能使用创建响应中的 video_id 通过 /agnesapi 查询。 */
+    String videoStatusPath(Channel channel, String videoId, String model) {
+        if (!isAgnesTypeChannel(channel)) {
+            return "/v1/videos/" + videoId;
+        }
+        if (model == null || model.isBlank()) {
+            throw new BusinessException(500, "Agnes 视频任务缺少模型名称");
+        }
+        return "/agnesapi?video_id=" + URLEncoder.encode(videoId, StandardCharsets.UTF_8)
+                + "&model_name=" + URLEncoder.encode(model, StandardCharsets.UTF_8);
     }
 
     String prepareImageRequestBody(Channel channel, String requestBody) {
