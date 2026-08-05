@@ -19,6 +19,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
+import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -289,6 +291,131 @@ public class ChannelService {
         } catch (IOException e) {
             log.error("渠道测试请求失败: {}", e.getMessage());
             throw new BusinessException("连接上游失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 直接使用表单中的渠道配置测试媒体模型。该路径不参与路由和计费，仅供管理员在保存渠道前验证上游。
+     * 图片、视频保持上游 JSON 结构；音频二进制编码为 data URL，方便管理页直接播放。
+     */
+    public Map<String, Object> testMedia(Map<String, String> request) {
+        String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key");
+        String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key");
+        String channelType = request.get("type");
+        String modelType = requireTestValue(request, "modelType", "缺少模型类型").toLowerCase();
+        String model = requireTestValue(request, "model", "请选择模型");
+        String prompt = request.getOrDefault("message", "hi");
+        validateBaseUrlForSsrf(baseUrl);
+
+        if (!Set.of("image", "video", "audio").contains(modelType)) {
+            throw new BusinessException("不支持的媒体模型类型: " + modelType);
+        }
+
+        String path;
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", model);
+        if ("audio".equals(modelType)) {
+            path = "/v1/audio/speech";
+            body.put("input", prompt);
+            body.put("voice", "alloy");
+            body.put("response_format", "mp3");
+        } else {
+            path = "image".equals(modelType) ? "/v1/images/generations" : "/v1/videos";
+            body.put("prompt", prompt);
+        }
+
+        long startTime = System.currentTimeMillis();
+        try {
+            Request upstreamRequest = buildTestRequest(baseUrl, apiKey, channelType, path,
+                    objectMapper.writeValueAsString(body), false);
+            try (Response response = streamHttpClient.newCall(upstreamRequest).execute()) {
+                long duration = System.currentTimeMillis() - startTime;
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("success", response.isSuccessful());
+                result.put("statusCode", response.code());
+                result.put("duration", duration);
+                if ("audio".equals(modelType) && response.isSuccessful()) {
+                    byte[] bytes = response.body() != null ? response.body().bytes() : new byte[0];
+                    String contentType = response.header("Content-Type", "audio/mpeg");
+                    contentType = contentType.split(";", 2)[0];
+                    result.put("dataUrl", "data:" + contentType + ";base64," + Base64.getEncoder().encodeToString(bytes));
+                } else {
+                    String responseBody = response.body() != null ? response.body().string() : "";
+                    if (response.isSuccessful()) {
+                        result.put("data", parseTestJsonOrText(responseBody));
+                    } else {
+                        result.put("error", abbreviateTestError(responseBody));
+                    }
+                }
+                return result;
+            }
+        } catch (IOException e) {
+            log.error("渠道媒体测试请求失败: {}", e.getMessage());
+            throw new BusinessException("连接上游失败: " + e.getMessage());
+        }
+    }
+
+    /** 使用同一渠道配置轮询视频任务，等价于媒体中转的 GET /v1/videos/{id} 上游调用。 */
+    public Map<String, Object> testVideoStatus(Map<String, String> request) {
+        String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key");
+        String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key");
+        String videoId = requireTestValue(request, "videoId", "缺少视频任务 id");
+        if (!videoId.matches("[A-Za-z0-9_\\-.:]+")) {
+            throw new BusinessException("无效的视频任务 id");
+        }
+        validateBaseUrlForSsrf(baseUrl);
+        long startTime = System.currentTimeMillis();
+        try {
+            Request upstreamRequest = buildTestRequest(baseUrl, apiKey, request.get("type"),
+                    "/v1/videos/" + videoId, null, true);
+            try (Response response = streamHttpClient.newCall(upstreamRequest).execute()) {
+                String responseBody = response.body() != null ? response.body().string() : "";
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("success", response.isSuccessful());
+                result.put("statusCode", response.code());
+                result.put("duration", System.currentTimeMillis() - startTime);
+                if (response.isSuccessful()) {
+                    result.put("data", parseTestJsonOrText(responseBody));
+                } else {
+                    result.put("error", abbreviateTestError(responseBody));
+                }
+                return result;
+            }
+        } catch (IOException e) {
+            log.error("渠道视频测试轮询失败: {}", e.getMessage());
+            throw new BusinessException("连接上游失败: " + e.getMessage());
+        }
+    }
+
+    private Request buildTestRequest(String baseUrl, String apiKey, String channelType,
+                                     String path, String jsonBody, boolean get) {
+        Request.Builder builder = new Request.Builder().url(baseUrl.replaceAll("/+$", "") + path);
+        if ("claude".equalsIgnoreCase(channelType) || "anthropic".equalsIgnoreCase(channelType)) {
+            builder.addHeader("x-api-key", apiKey).addHeader("anthropic-version", "2023-06-01");
+        } else {
+            builder.addHeader("Authorization", "Bearer " + apiKey);
+        }
+        if (get) return builder.get().build();
+        return builder.addHeader("Content-Type", "application/json")
+                .post(RequestBody.create(jsonBody, MediaType.parse("application/json"))).build();
+    }
+
+    private String requireTestValue(Map<String, String> request, String key, String error) {
+        String value = request.get(key);
+        if (value == null || value.isBlank()) throw new BusinessException(error);
+        return value;
+    }
+
+    private String abbreviateTestError(String body) {
+        return body.length() > 1000 ? body.substring(0, 1000) : body;
+    }
+
+    private Object parseTestJsonOrText(String body) {
+        try {
+            JsonNode json = objectMapper.readTree(body);
+            return json != null ? json : body;
+        } catch (IOException ignored) {
+            return body;
         }
     }
 

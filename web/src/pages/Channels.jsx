@@ -1,11 +1,37 @@
-import React, { useEffect, useState } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Tooltip, Checkbox } from 'antd'
+import React, { useEffect, useRef, useState } from 'react'
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Tooltip, Checkbox, Image, Spin } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined, CopyOutlined, SearchOutlined } from '@ant-design/icons'
-import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, getChannelHealth, unblockChannel, getChannelApiKey } from '../api'
+import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, testChannelMedia, pollChannelTestVideo, getChannelHealth, unblockChannel, getChannelApiKey } from '../api'
 
 const CB_STATE_COLOR = { CLOSED: 'green', HALF_OPEN: 'gold', OPEN: 'red' }
 
 const HEALTH_REFRESH_MS = 30000
+const VIDEO_POLL_INTERVAL_MS = 2000
+const VIDEO_POLL_LIMIT = 150
+
+const firstString = (...values) => values.find(value => typeof value === 'string' && value.trim())
+
+const extractImageSource = (data) => {
+  const item = Array.isArray(data?.data) ? data.data[0] : data?.data || data
+  const url = firstString(item?.url, item?.image_url, data?.url, typeof item === 'string' ? item : null)
+  if (url) return url
+  const base64 = firstString(item?.b64_json, item?.base64, item?.image_base64, data?.b64_json)
+  return base64 ? (base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`) : null
+}
+
+const extractVideoSource = (data) => firstString(
+  typeof data === 'string' ? data : null,
+  data?.url,
+  data?.video_url,
+  data?.output_url,
+  data?.video?.url,
+  data?.output?.url,
+  Array.isArray(data?.data) ? data.data[0]?.url : data?.data?.url
+)
+
+const videoStatus = (data) => String(data?.status || data?.state || '').toLowerCase()
+const isVideoFailed = (status) => ['failed', 'cancelled', 'canceled', 'error'].includes(status)
+const isVideoComplete = (status) => ['completed', 'succeeded', 'success', 'done'].includes(status)
 
 export default function Channels() {
   const [channels, setChannels] = useState([])
@@ -23,6 +49,7 @@ export default function Channels() {
   const [testLoading, setTestLoading] = useState(false)
   const [streamContent, setStreamContent] = useState('')
   const [testModelOptions, setTestModelOptions] = useState([])
+  const testRunRef = useRef(0)
   const [healthMap, setHealthMap] = useState({})
   const [showBlockedOnly, setShowBlockedOnly] = useState(false)
   const [revealedKeys, setRevealedKeys] = useState({})
@@ -191,12 +218,67 @@ export default function Channels() {
       message.warning('请先填写 Base URL 和 API Key')
       return
     }
+    const selectedModel = testModelOptions.find(option => option.value === testModel)
+    const modelType = String(selectedModel?.type || 'text').toLowerCase()
+    const runId = ++testRunRef.current
     setTestLoading(true)
     setStreamContent('')
-    setTestResult({ success: true, statusCode: 200, duration: 0 })
+    setTestResult({ success: true, statusCode: 200, duration: 0, modelType })
 
     const startTime = Date.now()
     try {
+      if (modelType !== 'text') {
+        const request = {
+          ...values,
+          apiKey,
+          model: testModel,
+          modelType,
+          message: testMessage || 'hi'
+        }
+        const response = await testChannelMedia(request)
+        const result = response?.data
+        if (!result?.success) {
+          throw new Error(result?.error || `HTTP ${result?.statusCode || 'error'}`)
+        }
+
+        if (modelType === 'image') {
+          const mediaUrl = extractImageSource(result.data)
+          if (!mediaUrl) throw new Error('上游响应中未找到图片 URL 或 base64 数据')
+          setTestResult({ ...result, success: true, modelType, mediaUrl })
+        } else if (modelType === 'audio') {
+          if (!result.dataUrl) throw new Error('上游响应中未返回音频数据')
+          setTestResult({ ...result, success: true, modelType, mediaUrl: result.dataUrl })
+        } else {
+          const taskId = firstString(result.data?.id, result.data?.task_id, result.data?.taskId)
+          let currentData = result.data
+          let mediaUrl = extractVideoSource(currentData)
+          if (!taskId && !mediaUrl) throw new Error('上游响应中未找到视频任务 id 或视频 URL')
+          setTestResult({ ...result, success: true, modelType, polling: !mediaUrl, videoStatus: videoStatus(currentData) || 'queued' })
+
+          for (let attempt = 0; !mediaUrl && attempt < VIDEO_POLL_LIMIT; attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, VIDEO_POLL_INTERVAL_MS))
+            if (testRunRef.current !== runId) return
+            const pollResponse = await pollChannelTestVideo({ ...values, apiKey, videoId: taskId })
+            const pollResult = pollResponse?.data
+            if (!pollResult?.success) throw new Error(pollResult?.error || `视频状态查询失败 (HTTP ${pollResult?.statusCode || 'error'})`)
+            currentData = pollResult.data
+            const status = videoStatus(currentData)
+            if (isVideoFailed(status)) {
+              throw new Error(firstString(currentData?.error?.message, currentData?.error, currentData?.message) || `视频生成失败 (${status})`)
+            }
+            mediaUrl = extractVideoSource(currentData)
+            setTestResult(prev => ({ ...prev, duration: Date.now() - startTime, videoStatus: status || 'processing', polling: !mediaUrl, mediaUrl }))
+            if (isVideoComplete(status) && !mediaUrl) throw new Error('视频已生成，但上游响应中未找到可播放地址')
+          }
+          if (!mediaUrl) throw new Error('视频生成等待超时，请稍后重试')
+        }
+        if (testRunRef.current === runId) {
+          setTestLoading(false)
+          message.success('测试完成')
+        }
+        return
+      }
+
       await testChannelChatStream(
         {
           ...values,
@@ -214,18 +296,22 @@ export default function Channels() {
         },
         () => {
           // 完成
+          if (testRunRef.current !== runId) return
           setTestLoading(false)
           message.success('测试完成')
         },
         (err) => {
+          if (testRunRef.current !== runId) return
           setTestLoading(false)
           setTestResult({ success: false, error: err.message || '请求失败' })
           message.error(err.message || '请求失败')
         }
       )
     } catch (err) {
+      if (testRunRef.current !== runId) return
       setTestLoading(false)
-      setTestResult({ success: false, error: err.message || '请求失败' })
+      setTestResult({ success: false, error: err?.message || '请求失败', modelType })
+      message.error(err?.message || '请求失败')
     }
   }
 
@@ -418,7 +504,7 @@ export default function Channels() {
                 const matched = allLocalModels.find(m => String(m.id) === String(id))
                 if (matched) {
                   const sendValue = matched.displayName || matched.name
-                  opts.push({ value: sendValue, label: matched.displayName ? `${matched.name}（${matched.displayName}）` : matched.name })
+                  opts.push({ value: sendValue, label: matched.displayName ? `${matched.name}（${matched.displayName}）` : matched.name, type: matched.type || 'text' })
                 }
               })
             }
@@ -428,7 +514,7 @@ export default function Channels() {
                 const matched = allLocalModels.find(m => String(m.id) === opt.value)
                 if (matched) {
                   const sendValue = matched.displayName || matched.name
-                  opts.push({ value: sendValue, label: matched.displayName ? `${matched.name}（${matched.displayName}）` : matched.name })
+                  opts.push({ value: sendValue, label: matched.displayName ? `${matched.name}（${matched.displayName}）` : matched.name, type: matched.type || 'text' })
                 }
               })
             }
@@ -491,7 +577,7 @@ export default function Channels() {
       <Modal
         title="渠道测试"
         open={testModalOpen}
-        onCancel={() => setTestModalOpen(false)}
+        onCancel={() => { testRunRef.current += 1; setTestLoading(false); setTestModalOpen(false) }}
         footer={null}
         width={600}
       >
@@ -538,8 +624,20 @@ export default function Channels() {
             </div>
             {testResult.success ? (
               <div>
-                <div style={{ background: '#f5f5f5', padding: 12, borderRadius: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 14, minHeight: 80 }}>
-                  {streamContent || (testLoading ? '正在接收...' : '(空响应)')}
+                <div style={{ background: '#f5f5f5', padding: 12, borderRadius: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 14, minHeight: 80, textAlign: testResult.modelType === 'text' ? 'left' : 'center' }}>
+                  {testResult.modelType === 'image' && testResult.mediaUrl && (
+                    <Image src={testResult.mediaUrl} alt="渠道测试生成图片" style={{ maxHeight: 420, objectFit: 'contain' }} />
+                  )}
+                  {testResult.modelType === 'video' && testResult.mediaUrl && (
+                    <video src={testResult.mediaUrl} controls style={{ width: '100%', maxHeight: 420 }} />
+                  )}
+                  {testResult.modelType === 'audio' && testResult.mediaUrl && (
+                    <audio src={testResult.mediaUrl} controls style={{ width: '100%' }} />
+                  )}
+                  {testResult.modelType === 'video' && testResult.polling && (
+                    <Space direction="vertical"><Spin /><span>视频生成中（{testResult.videoStatus || 'processing'}）...</span></Space>
+                  )}
+                  {testResult.modelType === 'text' && (streamContent || (testLoading ? '正在接收...' : '(空响应)'))}
                 </div>
               </div>
             ) : (

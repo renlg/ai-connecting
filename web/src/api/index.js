@@ -45,6 +45,8 @@ export const getChannelHealth = () => api.get('/api/admin/channels/health');
 export const getChannelApiKey = (id) => api.get(`/api/admin/channels/${id}/apikey`);
 export const unblockChannel = (id) => api.post(`/api/admin/channels/${id}/unblock`);
 export const fetchChannelModels = (data) => api.post('/api/admin/channels/fetch-models', data);
+export const testChannelMedia = (data) => api.post('/api/admin/channels/test-media', data, { timeout: 120000 });
+export const pollChannelTestVideo = (data) => api.post('/api/admin/channels/test-video-status', data, { timeout: 120000 });
 
 // 流式测试渠道聊天（返回 ReadableStream）
 export async function testChannelChatStream(data, onChunk, onComplete, onError) {

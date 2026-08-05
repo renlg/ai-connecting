@@ -116,4 +116,16 @@ public class ChannelController {
     public void testChatStream(@RequestBody Map<String, String> request, HttpServletResponse response) throws Exception {
         channelService.testChatStream(request, response);
     }
+
+    /** 测试图片、视频或音频模型（非流式）。 */
+    @PostMapping("/test-media")
+    public ApiResponse<Map<String, Object>> testMedia(@RequestBody Map<String, String> request) {
+        return ApiResponse.success(channelService.testMedia(request));
+    }
+
+    /** 轮询渠道视频测试任务状态。 */
+    @PostMapping("/test-video-status")
+    public ApiResponse<Map<String, Object>> testVideoStatus(@RequestBody Map<String, String> request) {
+        return ApiResponse.success(channelService.testVideoStatus(request));
+    }
 }
