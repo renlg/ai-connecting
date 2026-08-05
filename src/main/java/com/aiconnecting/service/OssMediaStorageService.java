@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.common.MediaDurationLimits;
 import com.aliyun.oss.OSS;
 import com.aliyun.oss.OSSClientBuilder;
 import com.aliyun.oss.model.CannedAccessControlList;
@@ -53,8 +54,6 @@ public class OssMediaStorageService {
             "pending", "queued", "running", "in_progress", "in-progress", "submitted", "generating");
     private static final Set<String> GENERIC_VIDEO_ACK_STATUSES = Set.of(
             "ok", "success", "ack", "acknowledged", "received", "created", "accepted", "processing");
-    private static final double MAX_VIDEO_DURATION_SECONDS = 3600;
-
     private static final long IMAGE_MAX_BYTES = 25L * 1024 * 1024;
     private static final long AUDIO_MAX_BYTES = 50L * 1024 * 1024;
     private static final long VIDEO_MAX_BYTES = 200L * 1024 * 1024;
@@ -401,7 +400,8 @@ public class OssMediaStorageService {
         } else {
             return false;
         }
-        return Double.isFinite(seconds) && seconds > 0 && seconds <= MAX_VIDEO_DURATION_SECONDS;
+        return Double.isFinite(seconds) && seconds > 0
+                && seconds <= MediaDurationLimits.MAX_VIDEO_DURATION_SECONDS;
     }
 
     private boolean hasHttpUrl(ObjectNode node) {

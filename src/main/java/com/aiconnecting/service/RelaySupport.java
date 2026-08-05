@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.MediaDurationLimits;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.Token;
@@ -716,7 +717,7 @@ public class RelaySupport {
         return 1;
     }
 
-    /** 每个出现的时长字段都必须独立通过正整数校验；JSON null 视为未传 */
+    /** 每个出现的时长字段都必须独立通过正整数和共享上限校验；JSON null 视为未传 */
     private static Integer readPositiveIntSeconds(JsonNode body, String field) {
         if (!body.has(field) || body.get(field).isNull()) {
             return null;
@@ -724,6 +725,10 @@ public class RelaySupport {
         JsonNode node = body.get(field);
         if (!node.isIntegralNumber() || !node.canConvertToInt() || node.asInt() <= 0) {
             throw new BusinessException(400, field + " 参数必须是正整数秒数");
+        }
+        if (node.asInt() > MediaDurationLimits.MAX_VIDEO_DURATION_SECONDS) {
+            throw new BusinessException(400, field + " 参数不能超过 "
+                    + MediaDurationLimits.MAX_VIDEO_DURATION_SECONDS + " 秒");
         }
         return node.asInt();
     }

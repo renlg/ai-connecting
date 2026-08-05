@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.AudioDurationUtil;
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.MediaDurationLimits;
 import com.aiconnecting.common.ProtocolConverter;
 import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.entity.Channel;
@@ -522,12 +523,10 @@ public class OpenAiRelayService {
         return null;
     }
 
-    /** 单个视频任务的合理时长上限（秒），超出视为异常数据，回退到无实际时长的预扣计费而非按此天价结算 */
-    private static final double MAX_VIDEO_DURATION_SECONDS = 3600;
-
     /** 时长必须是有限正数且不超过合理上限，拒绝 Infinity/NaN/溢出型输入（如 "1e309"） */
     private boolean isValidVideoSeconds(double value) {
-        return Double.isFinite(value) && value > 0 && value <= MAX_VIDEO_DURATION_SECONDS;
+        return Double.isFinite(value) && value > 0
+                && value <= MediaDurationLimits.MAX_VIDEO_DURATION_SECONDS;
     }
 
     /** 解析 seconds 字段：OpenAI 标准字段为字符串数字，同时兼容 JSON 数字类型 */
