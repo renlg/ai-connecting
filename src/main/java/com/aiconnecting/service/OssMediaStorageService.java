@@ -48,7 +48,12 @@ import java.util.function.Function;
 public class OssMediaStorageService {
 
     private static final Set<String> VIDEO_COMPLETED_STATUSES = Set.of("completed", "succeeded");
-    private static final Set<String> GENERIC_VIDEO_ACK_STATUSES = Set.of("ok", "processing");
+    private static final Set<String> VIDEO_TASK_STATUSES = Set.of(
+            "completed", "succeeded", "failed", "failure", "error", "cancelled", "canceled",
+            "pending", "queued", "running", "in_progress", "in-progress", "submitted", "generating");
+    private static final Set<String> GENERIC_VIDEO_ACK_STATUSES = Set.of(
+            "ok", "success", "ack", "acknowledged", "received", "created", "accepted", "processing");
+    private static final double MAX_VIDEO_DURATION_SECONDS = 3600;
 
     private static final long IMAGE_MAX_BYTES = 25L * 1024 * 1024;
     private static final long AUDIO_MAX_BYTES = 50L * 1024 * 1024;
@@ -357,7 +362,7 @@ public class OssMediaStorageService {
     }
 
     private VideoTaskStatus videoTaskStatus(String status, JsonNode taskNode) {
-        JsonNode duration = firstPresent(taskNode, "actual_duration", "seconds", "duration_seconds",
+        JsonNode duration = firstValidVideoDuration(taskNode, "actual_duration", "seconds", "duration_seconds",
                 "actual_seconds", "actual_duration_seconds", "real_seconds", "duration");
         ObjectNode node = asObject(taskNode);
         ObjectNode urlHolder = hasHttpUrl(node) ? node : asObject(node != null ? node.get("metadata") : null);
@@ -367,17 +372,36 @@ public class OssMediaStorageService {
         return new VideoTaskStatus(status, taskNode, duration, urlHolder);
     }
 
-    private JsonNode firstPresent(JsonNode node, String... fields) {
+    private JsonNode firstValidVideoDuration(JsonNode node, String... fields) {
         if (node == null || !node.isObject()) {
             return null;
         }
         for (String field : fields) {
             JsonNode value = node.get(field);
-            if (value != null && !value.isNull()) {
+            if (isValidVideoDuration(value)) {
                 return value;
             }
         }
         return null;
+    }
+
+    private boolean isValidVideoDuration(JsonNode value) {
+        if (value == null || value.isNull()) {
+            return false;
+        }
+        double seconds;
+        if (value.isNumber()) {
+            seconds = value.asDouble();
+        } else if (value.isTextual()) {
+            try {
+                seconds = Double.parseDouble(value.asText().trim());
+            } catch (NumberFormatException ignored) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        return Double.isFinite(seconds) && seconds > 0 && seconds <= MAX_VIDEO_DURATION_SECONDS;
     }
 
     private boolean hasHttpUrl(ObjectNode node) {
@@ -410,14 +434,19 @@ public class OssMediaStorageService {
             return null;
         }
         String status = textOrNull(taskObject.path("status"));
-        if (status == null) {
-            status = textOrNull(taskObject.path("state"));
+        if (isMeaningfulVideoStatus(status)) {
+            return status;
         }
-        return isMeaningfulVideoStatus(status) ? status : null;
+        String state = textOrNull(taskObject.path("state"));
+        return isMeaningfulVideoStatus(state) ? state : null;
     }
 
     private boolean isMeaningfulVideoStatus(String status) {
-        return status != null && !GENERIC_VIDEO_ACK_STATUSES.contains(status.toLowerCase(Locale.ROOT));
+        if (status == null) {
+            return false;
+        }
+        String normalized = status.toLowerCase(Locale.ROOT);
+        return VIDEO_TASK_STATUSES.contains(normalized) && !GENERIC_VIDEO_ACK_STATUSES.contains(normalized);
     }
 
     private String textOrNull(JsonNode node) {

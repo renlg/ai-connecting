@@ -393,7 +393,8 @@ public class OpenAiRelayService {
         }
     }
 
-    private static final Set<String> VIDEO_FAILED_STATUSES = Set.of("failed", "cancelled", "canceled");
+    private static final Set<String> VIDEO_FAILED_STATUSES = Set.of(
+            "failed", "failure", "error", "cancelled", "canceled");
     private static final Set<String> VIDEO_COMPLETED_STATUSES = Set.of("completed", "succeeded");
 
     private boolean isTerminalStatus(String status) {
@@ -522,7 +523,7 @@ public class OpenAiRelayService {
     }
 
     /** 单个视频任务的合理时长上限（秒），超出视为异常数据，回退到无实际时长的预扣计费而非按此天价结算 */
-    private static final double MAX_VIDEO_DURATION_SECONDS = 24 * 3600;
+    private static final double MAX_VIDEO_DURATION_SECONDS = 3600;
 
     /** 时长必须是有限正数且不超过合理上限，拒绝 Infinity/NaN/溢出型输入（如 "1e309"） */
     private boolean isValidVideoSeconds(double value) {
