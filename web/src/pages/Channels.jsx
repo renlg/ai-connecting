@@ -105,12 +105,21 @@ export default function Channels() {
   const handleFetchModels = async () => {
     try {
       const values = form.getFieldsValue(['baseUrl', 'apiKey', 'type'])
-      if (!values.baseUrl || !values.apiKey) {
+      if (!values.baseUrl) {
+        message.warning('请先填写 Base URL 和 API Key')
+        return
+      }
+      let apiKey = values.apiKey
+      if (!apiKey && editing?.id) {
+        // 编辑已有渠道时，若未重新输入 Key，则使用数据库中已保存的真实 Key 获取模型
+        apiKey = await revealApiKey(editing.id)
+      }
+      if (!apiKey) {
         message.warning('请先填写 Base URL 和 API Key')
         return
       }
       setFetchingModels(true)
-      const res = await fetchChannelModels(values)
+      const res = await fetchChannelModels({ ...values, apiKey })
       if (res.code === 200) {
         const upstreamModels = res.data || []
         if (upstreamModels.length === 0) {
