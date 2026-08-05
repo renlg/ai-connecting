@@ -3,6 +3,7 @@ package com.aiconnecting.repository;
 import com.aiconnecting.entity.ModelConfig;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import java.util.List;
 
 public interface ModelConfigRepository extends JpaRepository<ModelConfig, Long> {
@@ -24,4 +25,17 @@ public interface ModelConfigRepository extends JpaRepository<ModelConfig, Long> 
 
     @Query("SELECT m FROM ModelConfig m WHERE m.adminOnly = false ORDER BY COALESCE(m.updatedAt, m.createdAt) DESC")
     List<ModelConfig> findByAdminOnlyFalseOrderByUpdatedAtDesc();
+
+    @Query("SELECT m FROM ModelConfig m " +
+           "WHERE (:name IS NULL OR LOWER(m.name) LIKE LOWER(CONCAT('%', :name, '%'))) " +
+           "AND (:type IS NULL OR LOWER(m.type) LIKE LOWER(CONCAT('%', :type, '%'))) " +
+           "ORDER BY COALESCE(m.updatedAt, m.createdAt) DESC")
+    List<ModelConfig> searchAll(@Param("name") String name, @Param("type") String type);
+
+    @Query("SELECT m FROM ModelConfig m " +
+           "WHERE m.adminOnly = false " +
+           "AND (:name IS NULL OR LOWER(m.name) LIKE LOWER(CONCAT('%', :name, '%'))) " +
+           "AND (:type IS NULL OR LOWER(m.type) LIKE LOWER(CONCAT('%', :type, '%'))) " +
+           "ORDER BY COALESCE(m.updatedAt, m.createdAt) DESC")
+    List<ModelConfig> searchNonAdmin(@Param("name") String name, @Param("type") String type);
 }

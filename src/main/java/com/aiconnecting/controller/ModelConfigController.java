@@ -73,12 +73,19 @@ public class ModelConfigController {
      * 管理员返回全部，普通用户只返回 adminOnly=false 的
      */
     @GetMapping
-    public ApiResponse<List<ModelConfig>> list(@AuthenticationPrincipal User user) {
+    public ApiResponse<List<ModelConfig>> list(@AuthenticationPrincipal User user,
+                                                @RequestParam(required = false) String name,
+                                                @RequestParam(required = false) String type) {
         boolean isAdmin = user != null && "admin".equalsIgnoreCase(user.getRole());
+        boolean hasFilters = (name != null && !name.isBlank()) || (type != null && !type.isBlank());
         if (isAdmin) {
-            return ApiResponse.success(modelConfigService.listAll());
+            return ApiResponse.success(hasFilters
+                    ? modelConfigService.listAll(name, type)
+                    : modelConfigService.listAll());
         }
-        return ApiResponse.success(modelConfigService.listNonAdmin());
+        return ApiResponse.success(hasFilters
+                ? modelConfigService.listNonAdmin(name, type)
+                : modelConfigService.listNonAdmin());
     }
 
     /**

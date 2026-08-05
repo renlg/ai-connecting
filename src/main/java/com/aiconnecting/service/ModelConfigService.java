@@ -27,8 +27,20 @@ public class ModelConfigService {
         return modelConfigRepository.findAllOrderByUpdatedAtDesc();
     }
 
+    public List<ModelConfig> listAll(String name, String type) {
+        return modelConfigRepository.searchAll(normalizeFilter(name), normalizeFilter(type));
+    }
+
     public List<ModelConfig> listNonAdmin() {
         return modelConfigRepository.findByAdminOnlyFalseOrderByUpdatedAtDesc();
+    }
+
+    public List<ModelConfig> listNonAdmin(String name, String type) {
+        return modelConfigRepository.searchNonAdmin(normalizeFilter(name), normalizeFilter(type));
+    }
+
+    private String normalizeFilter(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     public List<ModelConfig> listEnabled(boolean isAdmin) {

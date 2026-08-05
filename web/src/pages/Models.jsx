@@ -1,9 +1,7 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Tooltip } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { getModels, createModel, updateModel, deleteModel, updateModelStatus, batchCreateModels } from '../api'
-
-const { TextArea } = Input
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch } from 'antd'
+import { PlusOutlined, DeleteOutlined, EditOutlined, SearchOutlined } from '@ant-design/icons'
+import { getModels, createModel, updateModel, deleteModel, updateModelStatus } from '../api'
 
 const TYPE_META = {
   text: { color: 'default', label: '文本' },
@@ -16,15 +14,18 @@ export default function Models() {
   const [models, setModels] = useState([])
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
-  const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [searchName, setSearchName] = useState('')
+  const [searchType, setSearchType] = useState(undefined)
   const [form] = Form.useForm()
-  const [batchForm] = Form.useForm()
   const modelType = Form.useWatch('type', form) || 'text'
 
-  const load = () => {
+  const load = (filters) => {
     setLoading(true)
-    getModels().then(res => {
+    const params = {}
+    if (filters?.name) params.name = filters.name
+    if (filters?.type) params.type = filters.type
+    getModels(params).then(res => {
       if (res.code === 200) setModels(res.data || [])
     }).finally(() => setLoading(false))
   }
@@ -43,36 +44,19 @@ export default function Models() {
     setModalOpen(false)
     form.resetFields()
     setEditing(null)
-    load()
-  }
-
-  const handleBatchCreate = async () => {
-    const values = await batchForm.validateFields()
-    const names = values.names
-      .split(/[\n,，]/)
-      .map(n => n.trim())
-      .filter(n => n)
-    if (names.length === 0) {
-      message.warning('请输入至少一个模型名称')
-      return
-    }
-    await batchCreateModels(names)
-    message.success(`成功添加 ${names.length} 个模型`)
-    setBatchModalOpen(false)
-    batchForm.resetFields()
-    load()
+    load({ name: searchName || undefined, type: searchType })
   }
 
   const handleDelete = async (id) => {
     await deleteModel(id)
     message.success('删除成功')
-    load()
+    load({ name: searchName || undefined, type: searchType })
   }
 
   const handleStatusChange = async (id, status) => {
     await updateModelStatus(id, status ? 1 : 0)
     message.success('状态已更新')
-    load()
+    load({ name: searchName || undefined, type: searchType })
   }
 
   const columns = [
@@ -143,10 +127,33 @@ export default function Models() {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>模型管理</h2>
         <Space>
-          <Button icon={<ThunderboltOutlined />} onClick={() => { batchForm.resetFields(); setBatchModalOpen(true) }}>批量添加</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true) }}>新增模型</Button>
         </Space>
       </div>
+
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Input.Search
+          placeholder="按模型名称模糊搜索"
+          allowClear
+          onSearch={(value) => {
+            setSearchName(value)
+            load({ name: value || undefined, type: searchType })
+          }}
+          style={{ width: 240 }}
+          prefix={<SearchOutlined />}
+        />
+        <Select
+          placeholder="按模型类型搜索"
+          allowClear
+          value={searchType}
+          onChange={(value) => {
+            setSearchType(value)
+            load({ name: searchName || undefined, type: value })
+          }}
+          options={Object.entries(TYPE_META).map(([value, meta]) => ({ value, label: meta.label }))}
+          style={{ width: 180 }}
+        />
+      </Space>
 
       <Table columns={columns} dataSource={models} rowKey="id" loading={loading} scroll={{ x: 1400 }} />
 
@@ -218,16 +225,6 @@ export default function Models() {
             <Switch />
           </Form.Item>
         </Form>
-      </Modal>
-
-      {/* 批量添加 */}
-      <Modal title="批量添加模型" open={batchModalOpen} onOk={handleBatchCreate} onCancel={() => setBatchModalOpen(false)} width={500}>
-        <Form form={batchForm} layout="vertical">
-          <Form.Item name="names" label="模型名称列表" rules={[{ required: true, message: '请输入模型名称' }]}>
-            <TextArea rows={8} placeholder={'每行一个模型名称，或用逗号分隔\n例如:\ngpt-4o\ngpt-4o-mini\nclaude-3-5-sonnet-20241022'} />
-          </Form.Item>
-        </Form>
-        <div style={{ color: '#999', fontSize: 12 }}>提示：已存在的模型名称会自动跳过</div>
       </Modal>
 
     </div>

@@ -162,13 +162,12 @@ export const getTokenCreditHistoryDetail = (id, date) => api.get(`/api/tokens/${
 export const getTokenModels = () => api.get('/api/tokens/models');
 
 // Models (Admin)
-export const getModels = () => api.get('/api/admin/models');
+export const getModels = (params) => api.get('/api/admin/models', { params });
 export const getEnabledModels = () => api.get('/api/admin/models/enabled');
 export const createModel = (data) => api.post('/api/admin/models', data);
 export const updateModel = (id, data) => api.put(`/api/admin/models/${id}`, data);
 export const deleteModel = (id) => api.delete(`/api/admin/models/${id}`);
 export const updateModelStatus = (id, status) => api.put(`/api/admin/models/${id}/status`, { status });
-export const batchCreateModels = (names) => api.post('/api/admin/models/batch', { names });
 
 // Admin
 export const getDashboard = () => api.get('/api/admin/dashboard');
