@@ -13,7 +13,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
@@ -24,7 +26,9 @@ import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -41,6 +45,7 @@ public class OpenAiRelayService {
     private final VideoTaskRepository videoTaskRepository;
     private final ChannelService channelService;
     private final UsageLogService usageLogService;
+    private final VideoTaskSettlementService videoTaskSettlementService;
 
     /**
      * 中转请求 (非流式) - 最多重试 3 次，每次选择不同渠道
@@ -123,9 +128,12 @@ public class OpenAiRelayService {
         }
 
         String response = result.value();
+        Long videoTaskId = null;
         if (isVideo) {
             try {
-                response = handleVideoResponse(response, result.channel().getId(), ctx.token().getUserId(), model, videoChargeInfo);
+                VideoResponseResult videoResult = handleVideoResponse(response, result.channel().getId(), ctx.token().getUserId(), model, videoChargeInfo);
+                response = videoResult.response();
+                videoTaskId = videoResult.taskId();
             } catch (RuntimeException e) {
                 // 响应无效或任务映射保存失败时客户端拿到的 id 将无法轮询，
                 // 退回预扣并报错，不返回不可轮询的任务结果；退款状态如实反馈给客户端
@@ -142,7 +150,11 @@ public class OpenAiRelayService {
             charge = new RelaySupport.MediaCharge(finalCost, charge.deducted());
         }
         long duration = System.currentTimeMillis() - startTime;
-        recordPrepaidUsageSafely(ctx.token(), result.channel(), model, charge, duration, httpRequest, path);
+        Long usageLogId = recordPrepaidUsageSafely(ctx.token(), result.channel(), model, charge, duration, httpRequest, path);
+        if (isVideo && videoTaskId != null && usageLogId != null) {
+            // 关联预扣使用日志，供任务终态结算（退款/多退少补）时回写该日志的最终计费金额
+            videoTaskRepository.linkUsageLog(videoTaskId, usageLogId);
+        }
         return response;
     }
 
@@ -212,17 +224,23 @@ public class OpenAiRelayService {
 
     /**
      * 记录已预扣积分的媒体使用日志；上游已成功，日志落库失败不回退积分也不影响响应（仅记录错误）
+     *
+     * @return 落库后的使用日志 id，失败时返回 null
      */
-    private void recordPrepaidUsageSafely(Token token, Channel channel, String model,
+    private Long recordPrepaidUsageSafely(Token token, Channel channel, String model,
                                           RelaySupport.MediaCharge charge, long duration,
                                           HttpServletRequest httpRequest, String path) {
         try {
-            support.recordPrepaidMediaUsage(token, channel, model, charge, duration, httpRequest, path);
+            return support.recordPrepaidMediaUsage(token, channel, model, charge, duration, httpRequest, path);
         } catch (Exception e) {
             log.error("媒体使用日志写入失败（积分已扣减，保持扣减，不影响响应）: model={}, cost={}",
                     model, charge.cost(), e);
+            return null;
         }
     }
+
+    /** 视频任务映射保存结果：透传给客户端的响应体，及新建任务的本地 id（供关联预扣使用日志） */
+    private record VideoResponseResult(String response, Long taskId) {}
 
     /**
      * 持久化上游视频任务 id 与渠道的映射，供轮询接口回查；
@@ -230,7 +248,7 @@ public class OpenAiRelayService {
      * 响应非法 JSON、缺少可用 id 或映射保存失败均抛错（由调用方退回预扣积分并如实反馈退款状态），
      * 绝不向已付费的客户端返回无法轮询的任务结果
      */
-    private String handleVideoResponse(String response, Long channelId, Long userId, String model,
+    private VideoResponseResult handleVideoResponse(String response, Long channelId, Long userId, String model,
                                        RelaySupport.VideoChargeInfo videoChargeInfo) {
         JsonNode json;
         try {
@@ -244,8 +262,9 @@ public class OpenAiRelayService {
             log.error("视频上游响应缺少有效的 id 字段，无法建立任务轮询映射");
             throw new BusinessException(502, "上游视频响应缺少有效的任务 id");
         }
+        Long taskId;
         try {
-            videoTaskRepository.save(VideoTask.builder()
+            VideoTask saved = videoTaskRepository.save(VideoTask.builder()
                     .upstreamId(json.get("id").asText())
                     .channelId(channelId)
                     .userId(userId)
@@ -254,17 +273,19 @@ public class OpenAiRelayService {
                     .deducted(videoChargeInfo.charge().deducted())
                     .size(videoChargeInfo.size())
                     .durationSeconds(videoChargeInfo.durationSeconds())
+                    .unitPrice(videoChargeInfo.unitPrice())
                     .settled(false)
                     .build());
+            taskId = saved.getId();
         } catch (Exception e) {
             log.error("视频任务映射保存失败: upstreamId={}", json.get("id").asText(), e);
             throw new BusinessException(500, "视频任务保存失败，请重试");
         }
         ((com.fasterxml.jackson.databind.node.ObjectNode) json).put("channel_id", channelId);
         try {
-            return support.objectMapper.writeValueAsString(json);
+            return new VideoResponseResult(support.objectMapper.writeValueAsString(json), taskId);
         } catch (Exception e) {
-            return response;
+            return new VideoResponseResult(response, taskId);
         }
     }
 
@@ -293,8 +314,9 @@ public class OpenAiRelayService {
 
     /**
      * 视频任务终态计费结算：failed 退回预扣积分；completed 按实际时长（若上游暴露）多退少补，
-     * 否则保持预扣金额。settled 标志位通过数据库原子更新保证并发/重复轮询下只结算一次，
-     * 结算过程中的任何异常都不向客户端抛出，不影响状态透传
+     * 否则保持预扣金额。实际的置位与退款/补扣、使用日志回写在 {@link VideoTaskSettlementService}
+     * 中位于同一个数据库事务，任一环节失败都会整体回滚（任务保持未结算，供下次轮询或后台对账
+     * 任务安全重试），结算过程中的任何异常都不向客户端抛出，不影响状态透传
      */
     private void settleVideoTaskIfTerminal(VideoTask task, String response) {
         if (task.isSettled()) {
@@ -316,45 +338,54 @@ public class OpenAiRelayService {
         if (!failed && !completed) {
             return;
         }
-        // 原子置位，防止并发/重复轮询重复退款或重复结算
-        if (videoTaskRepository.markSettled(task.getId()) == 0) {
+        try {
+            if (failed) {
+                videoTaskSettlementService.settleFailed(task.getId());
+            } else {
+                Integer actualSeconds = extractActualVideoDurationSeconds(json);
+                videoTaskSettlementService.settleCompleted(task.getId(), actualSeconds);
+            }
+        } catch (Exception e) {
+            log.error("视频任务终态结算异常，任务保持未结算，将由下次轮询或后台对账任务重试: taskId={}, upstreamId={}",
+                    task.getId(), task.getUpstreamId(), e);
+        }
+    }
+
+    /** 后台对账任务每次最多处理的任务数，避免单次调度扫描过多行 */
+    private static final int RECONCILE_BATCH_SIZE = 50;
+    /** 创建时间早于该时长的未结算任务才纳入对账扫描，避免与仍在正常轮询中的新任务抢跑 */
+    private static final long RECONCILE_MIN_AGE_MINUTES = 2;
+
+    /**
+     * 后台对账：定期扫描长时间未结算的视频任务，主动向上游查询状态并结算，
+     * 兜底客户端从不轮询、轮询提前中止或断线的场景（否则这些任务将永远不会被退款/结算）。
+     * 与轮询接口共用同一套幂等结算逻辑（{@link VideoTaskSettlementService} 内的原子置位 + 同事务
+     * 落库），不会与轮询路径发生竞态或重复结算
+     */
+    @Scheduled(fixedDelay = 5 * 60 * 1000L, initialDelay = 5 * 60 * 1000L)
+    public void reconcileUnsettledVideoTasks() {
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(RECONCILE_MIN_AGE_MINUTES);
+        List<VideoTask> pending = videoTaskRepository.findBySettledFalseAndCreatedAtBefore(
+                cutoff, PageRequest.of(0, RECONCILE_BATCH_SIZE));
+        if (pending.isEmpty()) {
             return;
         }
-        try {
-            RelaySupport.MediaCharge charge = new RelaySupport.MediaCharge(
-                    task.getPrepaidCost() != null ? task.getPrepaidCost() : BigDecimal.ZERO, task.isDeducted());
-            if (failed) {
-                boolean refunded = support.refundMediaCharge(task.getUserId(), charge);
-                if (!refunded) {
-                    log.error("MANUAL_COMPENSATION_REQUIRED 视频任务失败退款失败，需人工补偿: taskId={}, upstreamId={}, userId={}, amount={}",
-                            task.getId(), task.getUpstreamId(), task.getUserId(), charge.cost());
-                }
-                return;
+        log.info("视频任务对账：待处理 {} 个未结算任务", pending.size());
+        for (VideoTask task : pending) {
+            try {
+                Channel channel = channelService.getById(task.getChannelId());
+                String response = support.forwardGetRequest(channel, "/v1/videos/" + task.getUpstreamId());
+                settleVideoTaskIfTerminal(task, response);
+            } catch (Exception e) {
+                log.warn("视频任务对账失败，将于下次调度重试: taskId={}, upstreamId={}", task.getId(), task.getUpstreamId(), e);
             }
-            // completed：仅当上游暴露实际时长字段时才据此结算，否则保持预扣金额（并记录说明）
-            Integer actualSeconds = extractActualVideoDurationSeconds(json);
-            if (actualSeconds == null) {
-                log.warn("上游视频响应未暴露可用于结算的实际时长字段，按预扣金额 {} 保持计费: taskId={}, upstreamId={}",
-                        charge.cost(), task.getId(), task.getUpstreamId());
-                return;
-            }
-            com.aiconnecting.entity.ModelConfig config = support.findModelConfigCached(task.getModel());
-            if (config == null) {
-                log.error("视频任务结算失败：模型配置不存在，按预扣金额保持计费: model={}, taskId={}", task.getModel(), task.getId());
-                return;
-            }
-            BigDecimal actualCost = usageLogService.calculateVideoCreditCost(config, task.getSize(), actualSeconds);
-            support.settleMediaCharge(task.getUserId(), charge, actualCost);
-        } catch (Exception e) {
-            log.error("视频任务终态结算异常，按预扣金额保持计费: taskId={}, upstreamId={}", task.getId(), task.getUpstreamId(), e);
         }
     }
 
     /**
-     * 尝试从上游视频任务响应中提取实际生成时长（秒）。目前主流上游（如 OpenAI Sora 系列）
-     * 的任务对象仅回显请求时的 seconds/size 等参数，不单独暴露“实际生成时长”这一指标；
-     * 这里按尽力而为的方式尝试若干常见字段名，均未命中时返回 null，
-     * 由调用方保持预扣金额计费（见 {@link #settleVideoTaskIfTerminal} 中的说明日志）
+     * 尝试从上游视频任务响应中提取实际生成时长（秒）。除若干常见的自定义扩展字段名外，
+     * 也识别 OpenAI 视频任务对象标准的根级 "seconds" 字段（该字段以字符串形式表示生成时长），
+     * 均未命中时返回 null，由调用方保持预扣金额计费
      */
     private Integer extractActualVideoDurationSeconds(JsonNode json) {
         for (String field : new String[]{"actual_seconds", "actual_duration", "actual_duration_seconds", "real_seconds"}) {
@@ -368,6 +399,31 @@ public class OpenAiRelayService {
             JsonNode d = video.get("duration");
             if (d != null && d.isNumber() && d.asDouble() > 0) {
                 return (int) Math.ceil(d.asDouble());
+            }
+        }
+        Integer seconds = parsePositiveSecondsField(json.get("seconds"));
+        if (seconds != null) {
+            return seconds;
+        }
+        return null;
+    }
+
+    /** 解析 seconds 字段：OpenAI 标准字段为字符串数字，同时兼容 JSON 数字类型 */
+    private Integer parsePositiveSecondsField(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isNumber() && node.asDouble() > 0) {
+            return (int) Math.ceil(node.asDouble());
+        }
+        if (node.isTextual()) {
+            try {
+                double value = Double.parseDouble(node.asText().trim());
+                if (value > 0) {
+                    return (int) Math.ceil(value);
+                }
+            } catch (NumberFormatException ignored) {
+                // 非数字字符串，忽略
             }
         }
         return null;

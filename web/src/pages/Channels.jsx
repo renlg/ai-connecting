@@ -252,7 +252,7 @@ export default function Channels() {
     setModalOpen(false)
     form.resetFields()
     setEditing(null)
-    load()
+    load({ name: searchName || undefined, modelIds: searchModelIds })
   }
 
   const handleSearchName = (value) => {
@@ -268,13 +268,13 @@ export default function Channels() {
   const handleDelete = async (id) => {
     await deleteChannel(id)
     message.success('删除成功')
-    load()
+    load({ name: searchName || undefined, modelIds: searchModelIds })
   }
 
   const handleStatusChange = async (id, status) => {
     await updateChannelStatus(id, status ? 1 : 0)
     message.success('状态已更新')
-    load()
+    load({ name: searchName || undefined, modelIds: searchModelIds })
   }
 
   const columns = [

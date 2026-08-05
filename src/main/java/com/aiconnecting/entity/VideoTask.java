@@ -40,7 +40,7 @@ public class VideoTask {
     /** 预扣积分金额 */
     private BigDecimal prepaidCost;
 
-    /** 预扣时是否实际扣减了积分（admin 放行未扣减时为 false） */
+    /** 预扣时是否实际扣减了积分（admin 余额不足时放行但不扣减） */
     private boolean deducted;
 
     /** 请求时的分辨率/档位参数，供结算时重新计算实际费用 */
@@ -49,6 +49,13 @@ public class VideoTask {
 
     /** 请求时声明的时长（秒），预扣计费所用 */
     private Integer durationSeconds;
+
+    /** 预扣时所用的档位单价（积分/秒），供结算时按提交时价格计算实际费用，避免管理员事后改价影响已提交任务 */
+    @Column(precision = 10, scale = 4)
+    private BigDecimal unitPrice;
+
+    /** 创建任务时写入的预扣使用日志 id，供结算时回写该日志的最终计费金额 */
+    private Long usageLogId;
 
     /** 任务是否已结算（退款或按实际用量结算），防止轮询接口重复退款/结算 */
     @Column(nullable = false)

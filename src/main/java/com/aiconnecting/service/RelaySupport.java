@@ -70,8 +70,11 @@ public class RelaySupport {
     /** 媒体请求预扣结果：cost=计算出的积分消耗，deducted=是否实际扣减（admin 余额不足时放行但不扣减） */
     record MediaCharge(BigDecimal cost, boolean deducted) {}
 
-    /** 视频预扣结果附带计费所用的分辨率档位与声明时长，供任务终态结算时重新计算实际费用 */
-    record VideoChargeInfo(MediaCharge charge, String size, int durationSeconds) {}
+    /**
+     * 视频预扣结果附带计费所用的分辨率档位、声明时长与档位单价，供任务终态结算时
+     * 按提交时的单价（而非结算时可能已变化的当前价格）重新计算实际费用
+     */
+    record VideoChargeInfo(MediaCharge charge, String size, int durationSeconds, BigDecimal unitPrice) {}
 
     private record MediaParams(String size, int n, int durationSeconds) {}
 
@@ -588,8 +591,9 @@ public class RelaySupport {
     VideoChargeInfo prepareVideoCharge(RelayContext ctx, String requestBody) {
         MediaParams params = parseMediaParams(requestBody);
         BigDecimal creditCost = usageLogService.calculateVideoCreditCost(ctx.modelConfig(), params.size(), params.durationSeconds());
+        BigDecimal unitPrice = usageLogService.resolveVideoUnitPrice(ctx.modelConfig(), params.size());
         MediaCharge charge = chargeMediaCredits(ctx, creditCost);
-        return new VideoChargeInfo(charge, params.size(), params.durationSeconds());
+        return new VideoChargeInfo(charge, params.size(), params.durationSeconds(), unitPrice);
     }
 
     private MediaParams parseMediaParams(String requestBody) {
@@ -641,6 +645,19 @@ public class RelaySupport {
             log.warn("解析媒体请求 size 参数失败: {}", e.getMessage());
         }
         return null;
+    }
+
+    /** 解析请求体中的 n 参数（请求图片张数），供图片任务结算时将实际返回张数封顶在请求张数内，缺省/非法时按 1 处理 */
+    int extractRequestedCount(String requestBody) {
+        try {
+            JsonNode body = objectMapper.readTree(requestBody);
+            if (body.hasNonNull("n") && body.get("n").isIntegralNumber()) {
+                return Math.max(body.get("n").asInt(1), 1);
+            }
+        } catch (Exception e) {
+            log.warn("解析媒体请求 n 参数失败: {}", e.getMessage());
+        }
+        return 1;
     }
 
     /** 每个出现的时长字段都必须独立通过正整数校验；JSON null 视为未传 */
@@ -716,12 +733,15 @@ public class RelaySupport {
 
     /**
      * 图片按实际返回张数结算：图片端点上游可能部分成功（如请求 4 张仅返回 1 张），
-     * 按实际返回张数 × 同一分辨率档位单价重新计价并多退（不会少补，actualCount 不会超过请求数）
+     * 按实际返回张数 × 同一分辨率档位单价重新计价并多退；实际张数同时封顶在请求张数内，
+     * 防止上游异常多返回时被当作额外补扣（预扣金额本就只覆盖请求张数）
      */
     BigDecimal settleImageCharge(RelayContext ctx, MediaCharge charge, String requestBody, int actualCount) {
         String size = extractMediaSize(requestBody);
+        int requestedN = extractRequestedCount(requestBody);
+        int billedCount = Math.min(Math.max(actualCount, 0), requestedN);
         BigDecimal unitPrice = usageLogService.resolveImageUnitPrice(ctx.modelConfig(), size);
-        BigDecimal actualCost = unitPrice.multiply(BigDecimal.valueOf(Math.max(actualCount, 0)));
+        BigDecimal actualCost = unitPrice.multiply(BigDecimal.valueOf(billedCount));
         return settleMediaCharge(ctx, charge, actualCost);
     }
 
@@ -754,8 +774,10 @@ public class RelaySupport {
 
     /**
      * 记录已预扣积分的媒体使用日志（不再重复扣减积分）
+     *
+     * @return 落库后的使用日志 id，供视频任务保存该 id 以便结算阶段回写最终计费金额
      */
-    void recordPrepaidMediaUsage(Token token, Channel channel, String model, MediaCharge charge,
+    Long recordPrepaidMediaUsage(Token token, Channel channel, String model, MediaCharge charge,
                                  long duration, HttpServletRequest httpRequest, String path) {
         UsageLog usageLog = UsageLog.builder()
                 .tokenId(token.getId())
@@ -769,7 +791,7 @@ public class RelaySupport {
                 .duration(duration)
                 .requestPath(path)
                 .build();
-        usageLogService.recordPrepaidUsage(usageLog);
+        return usageLogService.recordPrepaidUsage(usageLog).getId();
     }
 
     // ==================== 使用记录 ====================

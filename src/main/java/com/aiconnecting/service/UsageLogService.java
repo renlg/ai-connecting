@@ -123,10 +123,12 @@ public class UsageLogService {
 
     /**
      * 记录已预扣积分的媒体使用日志（积分在调用上游前已原子扣减，此处仅落日志，不再重复扣减）
+     *
+     * @return 落库后的使用日志（含生成的 id），供视频任务保存该 id，以便结算阶段回写最终计费金额
      */
     @Transactional
-    public void recordPrepaidUsage(UsageLog usageLog) {
-        usageLogRepository.save(usageLog);
+    public UsageLog recordPrepaidUsage(UsageLog usageLog) {
+        return usageLogRepository.save(usageLog);
     }
 
     /**
@@ -248,17 +250,14 @@ public class UsageLogService {
     }
 
     /**
-     * 视频模型积分消耗 = 对应分辨率档位单价 × 时长（秒）。
-     * 分辨率无法识别或时长非法时直接拒绝，不允许按低档位漏计费。
+     * 解析视频档位单价（积分/秒），供预扣时随任务保存原始单价，及结算时按提交时价格重新计价，
+     * 避免管理员事后改价影响已提交任务的结算
      */
-    public BigDecimal calculateVideoCreditCost(com.aiconnecting.entity.ModelConfig config, String size, int durationSeconds) {
+    public BigDecimal resolveVideoUnitPrice(com.aiconnecting.entity.ModelConfig config, String size) {
         String tier = resolveVideoTier(size);
         if (tier == null) {
             throw new BusinessException(400, "视频请求缺少或包含不支持的分辨率参数 (size/resolution): " + size
                     + "，支持 480p/720p/1080p/4k 或宽x高格式");
-        }
-        if (durationSeconds <= 0) {
-            throw new BusinessException(400, "视频请求缺少有效的时长参数 (duration/seconds)，需为正整数秒数");
         }
         BigDecimal price = switch (tier) {
             case "720P" -> config.getVideoPrice720p();
@@ -266,8 +265,18 @@ public class UsageLogService {
             case "4K" -> config.getVideoPrice4k();
             default -> config.getVideoPrice480p();
         };
-        if (price == null) price = BigDecimal.ZERO;
-        return price.multiply(BigDecimal.valueOf(durationSeconds));
+        return price != null ? price : BigDecimal.ZERO;
+    }
+
+    /**
+     * 视频模型积分消耗 = 对应分辨率档位单价 × 时长（秒）。
+     * 分辨率无法识别或时长非法时直接拒绝，不允许按低档位漏计费。
+     */
+    public BigDecimal calculateVideoCreditCost(com.aiconnecting.entity.ModelConfig config, String size, int durationSeconds) {
+        if (durationSeconds <= 0) {
+            throw new BusinessException(400, "视频请求缺少有效的时长参数 (duration/seconds)，需为正整数秒数");
+        }
+        return resolveVideoUnitPrice(config, size).multiply(BigDecimal.valueOf(durationSeconds));
     }
 
     /**

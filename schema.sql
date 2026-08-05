@@ -192,6 +192,8 @@ CREATE TABLE IF NOT EXISTS "video_tasks" (
     deducted BOOLEAN NOT NULL DEFAULT 0,
     size VARCHAR(50),
     duration_seconds INTEGER,
+    unit_price DECIMAL(10,4),
+    usage_log_id BIGINT,
     settled BOOLEAN NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL
 );
