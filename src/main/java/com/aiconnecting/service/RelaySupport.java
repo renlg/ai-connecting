@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -289,6 +290,36 @@ public class RelaySupport {
 
     boolean isGeminiTypeChannel(Channel channel) {
         return "gemini".equalsIgnoreCase(channel.getType());
+    }
+
+    /** Agnes 图片模型不支持 OpenAI 的 response_format 参数。 */
+    boolean isAgnesTypeChannel(Channel channel) {
+        if ("agnes".equalsIgnoreCase(channel.getType())) {
+            return true;
+        }
+        try {
+            String host = URI.create(channel.getBaseUrl()).getHost();
+            return host != null && ("agnes-ai.cn".equalsIgnoreCase(host)
+                    || host.toLowerCase().endsWith(".agnes-ai.cn"));
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    String prepareImageRequestBody(Channel channel, String requestBody) {
+        if (!isAgnesTypeChannel(channel)) {
+            return requestBody;
+        }
+        try {
+            JsonNode body = objectMapper.readTree(requestBody);
+            if (!(body instanceof ObjectNode objectBody) || !objectBody.has("response_format")) {
+                return requestBody;
+            }
+            objectBody.remove("response_format");
+            return objectMapper.writeValueAsString(objectBody);
+        } catch (IOException e) {
+            throw new BusinessException(400, "图片请求 JSON 格式无效", e);
+        }
     }
 
     // ==================== 连接与认证 ====================

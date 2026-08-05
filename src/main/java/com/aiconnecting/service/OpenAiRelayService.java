@@ -122,7 +122,12 @@ public class OpenAiRelayService {
         long startTime = System.currentTimeMillis();
         ChannelResult<String> result;
         try {
-            result = forwardWithRetry(ctx, channel -> support.forwardRequest(channel, path, requestBody));
+            result = forwardWithRetry(ctx, channel -> {
+                String upstreamBody = "image".equals(mediaType)
+                        ? support.prepareImageRequestBody(channel, requestBody)
+                        : requestBody;
+                return support.forwardRequest(channel, path, upstreamBody);
+            });
         } catch (RuntimeException e) {
             support.refundMediaCharge(ctx, charge);
             throw e;
