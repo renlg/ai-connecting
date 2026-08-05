@@ -168,12 +168,32 @@ public class OssMediaStorageService {
         }
     }
 
+    /**
+     * 精确计算 base64 解码后的字节数（忽略末尾空白，并按结尾 '=' padding 数量修正），
+     * 而非粗略的 ceil(编码长度*3/4)，避免临界大小（如恰好 25MiB）的合法数据被过度估算而误判超限。
+     */
+    private long estimateBase64DecodedBytes(String base64) {
+        int end = base64.length();
+        while (end > 0 && Character.isWhitespace(base64.charAt(end - 1))) {
+            end--;
+        }
+        int padding = 0;
+        int i = end - 1;
+        while (i >= 0 && padding < 2 && base64.charAt(i) == '=') {
+            padding++;
+            i--;
+        }
+        return (end / 4L) * 3L - padding;
+    }
+
     private boolean rewriteImageItem(ObjectNode item) throws IOException {
         JsonNode b64Node = item.get("b64_json");
         if (b64Node != null && b64Node.isTextual() && !b64Node.asText().isBlank()) {
             String base64 = b64Node.asText();
-            // 解码前按编码长度估算解码后大小，避免对超大 base64 字符串直接整体解码造成堆内存耗尽
-            long estimatedBytes = (long) Math.ceil(base64.length() * 3.0 / 4.0);
+            // 解码前按编码长度精确计算解码后大小（而非粗略 ceil(len*3/4)，否则临界大小的合法数据
+            // 会因未扣除末尾 '=' padding 被高估 1-2 字节而被误判超限），避免对超大 base64 字符串
+            // 直接整体解码造成堆内存耗尽
+            long estimatedBytes = estimateBase64DecodedBytes(base64);
             if (estimatedBytes > IMAGE_MAX_BYTES) {
                 throw new IOException("图片 base64 数据超出大小上限（编码长度估算 ~" + estimatedBytes + " > " + IMAGE_MAX_BYTES + "）");
             }
@@ -355,18 +375,28 @@ public class OssMediaStorageService {
         return true;
     }
 
+    /**
+     * 优先取嵌套任务对象（data/video）自身的 status/state，只有当响应中不存在这类嵌套任务对象、
+     * 或该对象自身未携带 status/state 时才回退到顶层同名字段——防止顶层泛化状态（如轮询壳层的
+     * "processing"）遮蔽内层真正的任务终态（如 data.status="completed"），反之亦然。
+     */
     private String findVideoStatus(JsonNode json) {
-        String status = textOrNull(json.path("status"));
+        String status = nestedTaskStatus(json.path("data"));
         if (status != null) return status;
-        status = textOrNull(json.path("data").path("status"));
+        status = nestedTaskStatus(json.path("video"));
         if (status != null) return status;
-        status = textOrNull(json.path("video").path("status"));
+        status = textOrNull(json.path("status"));
         if (status != null) return status;
-        status = textOrNull(json.path("state"));
+        return textOrNull(json.path("state"));
+    }
+
+    private String nestedTaskStatus(JsonNode taskObject) {
+        if (taskObject == null || !taskObject.isObject()) {
+            return null;
+        }
+        String status = textOrNull(taskObject.path("status"));
         if (status != null) return status;
-        status = textOrNull(json.path("data").path("state"));
-        if (status != null) return status;
-        return textOrNull(json.path("video").path("state"));
+        return textOrNull(taskObject.path("state"));
     }
 
     private String textOrNull(JsonNode node) {
@@ -390,9 +420,10 @@ public class OssMediaStorageService {
      * contentType 缺失时按需窥探响应体前若干字节（mark/reset，不消耗流式上传的数据）用于嗅探，
      * 嗅探仍未识别时回退到 defaultContentType。
      */
-    private String downloadAndUpload(String url, long maxBytes, String subFolder,
-                                      Function<byte[], String> contentTypeSniffer, String defaultContentType,
-                                      Function<String, String> extensionResolver) throws IOException {
+    /** 包可见性（非 private）便于测试通过 Mockito spy 打桩，跳过真实网络下载验证地址位置识别等逻辑 */
+    String downloadAndUpload(String url, long maxBytes, String subFolder,
+                              Function<byte[], String> contentTypeSniffer, String defaultContentType,
+                              Function<String, String> extensionResolver) throws IOException {
         URI uri = URI.create(url);
         String host = uri.getHost();
         try {
@@ -492,8 +523,11 @@ public class OssMediaStorageService {
         if (contentType != null && !contentType.isBlank()) {
             metadata.setContentType(contentType);
         }
+        // ACL 作为 PutObject 请求的一部分随对象原子写入（而非上传成功后再发一次独立的 setObjectAcl 调用），
+        // 若 ACL 无法设置，putObject 本身失败并抛出异常，调用方据此不会缓存/返回任何 URL，
+        // 不会出现"对象已存在但 ACL 未生效、403 直链被写入 oss_url"的中间态
+        metadata.setObjectAcl(CannedAccessControlList.PublicRead);
         ossClient.putObject(new PutObjectRequest(bucket, key, new ByteArrayInputStream(bytes), metadata));
-        setPublicReadAcl(key);
         return "https://" + bucket + "." + endpointHost + "/" + key;
     }
 
@@ -506,23 +540,10 @@ public class OssMediaStorageService {
         if (contentType != null && !contentType.isBlank()) {
             metadata.setContentType(contentType);
         }
+        // 同上：ACL 随 PutObject 原子写入，设置失败则整个上传失败，不会产生不可访问的已缓存 URL
+        metadata.setObjectAcl(CannedAccessControlList.PublicRead);
         ossClient.putObject(new PutObjectRequest(bucket, key, in, metadata));
-        setPublicReadAcl(key);
         return "https://" + bucket + "." + endpointHost + "/" + key;
-    }
-
-    /**
-     * 显式将新上传对象的 ACL 设为 public-read：本服务直接返回匿名 HTTPS 直链给客户端，
-     * 若 Bucket 本身是私有读写，未设置对象级 public-read 会导致客户端访问返回 403。
-     * 设置失败仅记录日志，不影响本次上传已生成的直链返回（沿用 Bucket 默认 ACL）。
-     */
-    private void setPublicReadAcl(String key) {
-        try {
-            ossClient.setObjectAcl(bucket, key, CannedAccessControlList.PublicRead);
-        } catch (Exception e) {
-            log.warn("设置 OSS 对象 ACL 为 public-read 失败，若 Bucket 非公共读，返回的直链可能无法访问: key={}, err={}",
-                    key, e.getMessage());
-        }
     }
 
     private String randomToken() {

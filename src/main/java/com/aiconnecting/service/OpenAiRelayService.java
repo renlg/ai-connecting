@@ -135,13 +135,27 @@ public class OpenAiRelayService {
         }
 
         String response = result.value();
-        Long videoTaskId = null;
         if (isVideo) {
+            long duration = System.currentTimeMillis() - startTime;
+            Long videoTaskId;
             try {
-                VideoResponseResult videoResult = handleVideoResponse(response, result.channel().getId(),
-                        ctx.token().getId(), ctx.token().getUserId(), model, videoChargeInfo);
+                VideoResponseResult videoResult = handleVideoResponse(response, result.channel(), ctx.token(),
+                        model, videoChargeInfo, charge, duration, httpRequest, path);
                 response = videoResult.response();
                 videoTaskId = videoResult.taskId();
+                // 同步终态创建响应已在 handleVideoResponse 内部按 正常日志→结算→OSS 的顺序处理完毕，
+                // 此处仅需补记仍在处理中（未同步到终态）任务尚未写入的正常使用日志
+                if (videoTaskId != null && !videoResult.usageLogRecorded()) {
+                    // 使用日志落库与 usage_log_id 回链在同一个事务内完成（见 RelaySupport），
+                    // 任一环节失败都不写入孤立记录；失败不影响响应——任务与预扣积分已落地，仅本次日志缺失，
+                    // 结算阶段会因 usageLogId 为空跳过金额回写（安全，不影响余额正确性）
+                    try {
+                        support.recordPrepaidMediaUsageAndLink(ctx.token(), result.channel(), model, charge, duration, httpRequest, path, videoTaskId);
+                    } catch (Exception e) {
+                        log.error("视频使用日志写入/关联失败（积分已扣减，保持扣减，不影响响应）: model={}, cost={}",
+                                model, charge.cost(), e);
+                    }
+                }
             } catch (RuntimeException e) {
                 // 响应无效或任务映射保存失败时客户端拿到的 id 将无法轮询，
                 // 退回预扣并报错，不返回不可轮询的任务结果；退款状态如实反馈给客户端
@@ -152,7 +166,9 @@ public class OpenAiRelayService {
                 }
                 throw e;
             }
-        } else if ("image".equals(mediaType)) {
+            return response;
+        }
+        if ("image".equals(mediaType)) {
             int actualCount = countReturnedImages(response);
             BigDecimal finalCost = support.settleImageCharge(ctx, charge, requestBody, actualCount);
             charge = new RelaySupport.MediaCharge(finalCost, charge.deducted());
@@ -160,19 +176,7 @@ public class OpenAiRelayService {
             response = ossMediaStorageService.rewriteImageResponse(response);
         }
         long duration = System.currentTimeMillis() - startTime;
-        if (isVideo && videoTaskId != null) {
-            // 使用日志落库与 usage_log_id 回链在同一个事务内完成（见 RelaySupport），
-            // 任一环节失败都不写入孤立记录；失败不影响响应——任务与预扣积分已落地，仅本次日志缺失，
-            // 结算阶段会因 usageLogId 为空跳过金额回写（安全，不影响余额正确性）
-            try {
-                support.recordPrepaidMediaUsageAndLink(ctx.token(), result.channel(), model, charge, duration, httpRequest, path, videoTaskId);
-            } catch (Exception e) {
-                log.error("视频使用日志写入/关联失败（积分已扣减，保持扣减，不影响响应）: model={}, cost={}",
-                        model, charge.cost(), e);
-            }
-        } else {
-            recordPrepaidUsageSafely(ctx.token(), result.channel(), model, charge, duration, httpRequest, path);
-        }
+        recordPrepaidUsageSafely(ctx.token(), result.channel(), model, charge, duration, httpRequest, path);
         return response;
     }
 
@@ -258,7 +262,8 @@ public class OpenAiRelayService {
     }
 
     /** 视频任务映射保存结果：透传给客户端的响应体，及新建任务的本地 id（供关联预扣使用日志） */
-    private record VideoResponseResult(String response, Long taskId) {}
+    /** @param usageLogRecorded true 表示同步终态路径已在本方法内完成正常使用日志的写入，调用方无需再补记 */
+    private record VideoResponseResult(String response, Long taskId, boolean usageLogRecorded) {}
 
     /**
      * 持久化上游视频任务 id 与渠道的映射，供轮询接口回查；优先使用 Agnes 创建响应中的
@@ -266,8 +271,10 @@ public class OpenAiRelayService {
      * 响应非法 JSON、缺少可用 id 或映射保存失败均抛错（由调用方退回预扣积分并如实反馈退款状态），
      * 绝不向已付费的客户端返回无法轮询的任务结果
      */
-    private VideoResponseResult handleVideoResponse(String response, Long channelId, Long tokenId, Long userId,
-                                                    String model, RelaySupport.VideoChargeInfo videoChargeInfo) {
+    private VideoResponseResult handleVideoResponse(String response, Channel channel, Token token,
+                                                    String model, RelaySupport.VideoChargeInfo videoChargeInfo,
+                                                    RelaySupport.MediaCharge charge, long duration,
+                                                    HttpServletRequest httpRequest, String path) {
         JsonNode json;
         try {
             json = support.objectMapper.readTree(response);
@@ -292,9 +299,9 @@ public class OpenAiRelayService {
         try {
             saved = videoTaskRepository.save(VideoTask.builder()
                     .upstreamId(upstreamVideoId)
-                    .channelId(channelId)
-                    .tokenId(tokenId)
-                    .userId(userId)
+                    .channelId(channel.getId())
+                    .tokenId(token.getId())
+                    .userId(token.getUserId())
                     .model(model)
                     .prepaidCost(videoChargeInfo.charge().cost())
                     .deducted(videoChargeInfo.charge().deducted())
@@ -311,17 +318,38 @@ public class OpenAiRelayService {
         com.fasterxml.jackson.databind.node.ObjectNode responseObject =
                 (com.fasterxml.jackson.databind.node.ObjectNode) json;
         responseObject.put("id", upstreamVideoId);
-        responseObject.put("channel_id", channelId);
+        responseObject.put("channel_id", channel.getId());
+
+        // 极少数上游会同步返回已完成/失败终态并直接携带播放地址：此时必须按 正常使用日志 → 结算 → OSS 转存
+        // 的顺序处理——先写入携带 IP/耗时的正常使用日志并回链，避免结算内部的 ensureLinked() 抢先创建
+        // 缺少这些字段的降级日志，导致随后正常写入因 usage_log_id 已被占用而判重复回滚，只留下降级日志
+        boolean usageLogRecorded = false;
+        String status = ossMediaStorageService.extractVideoStatus(json);
+        boolean synchronousTerminal = status != null && isTerminalStatus(status);
+        if (synchronousTerminal) {
+            try {
+                support.recordPrepaidMediaUsageAndLink(token, channel, model, charge, duration, httpRequest, path, taskId);
+                usageLogRecorded = true;
+            } catch (Exception e) {
+                log.error("视频任务同步终态使用日志写入失败（积分已扣减，保持扣减，不影响响应）: model={}, cost={}",
+                        model, charge.cost(), e);
+            }
+        }
         try {
-            // 极少数上游会同步返回已完成/失败终态并直接携带播放地址，必须先结算（否则预扣积分永远
-            // 不会被对账，因为该任务此后再也不会被轮询到），结算完成后才转存 OSS 重写地址
-            settleVideoTaskIfTerminal(saved, json);
+            // 结算必须先于 OSS 转存完成（否则预扣积分永远不会被对账，因为该任务此后再也不会被轮询到）；
+            // 结算失败时不得转存 OSS / 缓存任何地址，直接返回上游原始响应
+            boolean settlementOk = settleVideoTaskIfTerminal(saved, json);
+            if (!settlementOk) {
+                log.error("视频任务同步终态结算失败，跳过 OSS 转存，返回上游原始响应: taskId={}, upstreamId={}",
+                        taskId, upstreamVideoId);
+                return new VideoResponseResult(response, taskId, usageLogRecorded);
+            }
             String normalized = support.objectMapper.writeValueAsString(json);
             normalized = ossMediaStorageService.rewriteVideoResponseIfCompleted(normalized, null,
                     ossUrl -> videoTaskRepository.updateOssUrl(taskId, ossUrl));
-            return new VideoResponseResult(normalized, taskId);
+            return new VideoResponseResult(normalized, taskId, usageLogRecorded);
         } catch (Exception e) {
-            return new VideoResponseResult(response, taskId);
+            return new VideoResponseResult(response, taskId, usageLogRecorded);
         }
     }
 
@@ -349,9 +377,15 @@ public class OpenAiRelayService {
             Channel channel = channelService.getById(task.getChannelId());
             String response = support.forwardGetRequest(channel,
                     support.videoStatusPath(channel, task.getUpstreamId(), task.getModel()));
-            // 结算必须先于 OSS 重写完成：结算与 OSS 转存共用同一套嵌套状态解析（见 settleVideoTaskIfTerminal），
-            // 若顺序颠倒，OSS 转存成功但结算异常时，客户端仍会拿到重写后的地址，而预扣积分错失了随本次响应结算的机会
-            settleVideoTaskIfTerminal(task, response);
+            // 结算必须先于 OSS 重写完成（该保证由返回值强制执行，而非仅靠调用顺序）：结算失败/异常时
+            // settleVideoTaskIfTerminal 返回 false，本次直接返回上游原始响应，绝不转存 OSS / 缓存任何地址，
+            // 否则会出现"OSS 转存成功但结算异常，预扣积分错失随本次响应结算的机会"的情况
+            boolean settlementOk = settleVideoTaskIfTerminal(task, response);
+            if (!settlementOk) {
+                log.error("视频任务终态结算失败，跳过本次 OSS 转存，返回上游原始响应: taskId={}, upstreamId={}",
+                        task.getId(), task.getUpstreamId());
+                return response;
+            }
             return ossMediaStorageService.rewriteVideoResponseIfCompleted(response, task.getOssUrl(),
                     ossUrl -> videoTaskRepository.updateOssUrl(task.getId(), ossUrl));
         } finally {
@@ -362,45 +396,48 @@ public class OpenAiRelayService {
     private static final Set<String> VIDEO_FAILED_STATUSES = Set.of("failed", "cancelled", "canceled");
     private static final Set<String> VIDEO_COMPLETED_STATUSES = Set.of("completed", "succeeded");
 
+    private boolean isTerminalStatus(String status) {
+        String normalized = status.toLowerCase(java.util.Locale.ROOT);
+        return VIDEO_FAILED_STATUSES.contains(normalized) || VIDEO_COMPLETED_STATUSES.contains(normalized);
+    }
+
     /**
      * 视频任务终态计费结算：failed 退回预扣积分；completed 按实际时长（若上游暴露）多退少补，
      * 否则保持预扣金额。实际的置位与退款/补扣、使用日志回写在 {@link VideoTaskSettlementService}
      * 中位于同一个数据库事务，任一环节失败都会整体回滚（任务保持未结算，供下次轮询或后台对账
-     * 任务安全重试），结算过程中的任何异常都不向客户端抛出，不影响状态透传
+     * 任务安全重试）。
+     *
+     * @return true 表示无需结算（未到终态/已结算/解析失败）或结算成功；false 表示检测到终态但结算抛出异常——
+     *         调用方据此必须放弃本次 OSS 转存，不能让客户端拿到一个从未真正结算过的产物地址
      */
-    private void settleVideoTaskIfTerminal(VideoTask task, String response) {
+    private boolean settleVideoTaskIfTerminal(VideoTask task, String response) {
         if (task.isSettled()) {
-            return;
+            return true;
         }
         JsonNode json;
         try {
             json = support.objectMapper.readTree(response);
         } catch (Exception e) {
-            return;
+            return true;
         }
-        settleVideoTaskIfTerminal(task, json);
+        return settleVideoTaskIfTerminal(task, json);
     }
 
     /**
      * 与字符串重载相同的结算逻辑，直接接受已解析的 JsonNode，避免调用方（如创建接口同步返回终态时）
      * 重复解析同一个响应。状态解析复用 {@link OssMediaStorageService#extractVideoStatus}，
-     * 与 OSS 重写识别的嵌套状态位置（顶层 status/state、data.status、video.status 等）完全一致，
-     * 防止两处识别范围不一致导致「已转存 OSS 但从未结算」的计费遗漏
+     * 与 OSS 重写识别的嵌套状态位置（顶层 status/state、data.status、video.status 等，内层任务对象
+     * 优先于外层字段）完全一致，防止两处识别范围不一致导致「已转存 OSS 但从未结算」的计费遗漏
      */
-    private void settleVideoTaskIfTerminal(VideoTask task, JsonNode json) {
+    private boolean settleVideoTaskIfTerminal(VideoTask task, JsonNode json) {
         if (task.isSettled() || json == null || !json.isObject()) {
-            return;
+            return true;
         }
         String status = ossMediaStorageService.extractVideoStatus(json);
-        if (status == null) {
-            return;
+        if (status == null || !isTerminalStatus(status)) {
+            return true;
         }
-        status = status.toLowerCase(java.util.Locale.ROOT);
-        boolean failed = VIDEO_FAILED_STATUSES.contains(status);
-        boolean completed = VIDEO_COMPLETED_STATUSES.contains(status);
-        if (!failed && !completed) {
-            return;
-        }
+        boolean failed = VIDEO_FAILED_STATUSES.contains(status.toLowerCase(java.util.Locale.ROOT));
         try {
             if (failed) {
                 videoTaskSettlementService.settleFailed(task.getId());
@@ -408,9 +445,11 @@ public class OpenAiRelayService {
                 Integer actualSeconds = extractActualVideoDurationSeconds(json);
                 videoTaskSettlementService.settleCompleted(task.getId(), actualSeconds);
             }
+            return true;
         } catch (Exception e) {
             log.error("视频任务终态结算异常，任务保持未结算，将由下次轮询或后台对账任务重试: taskId={}, upstreamId={}",
                     task.getId(), task.getUpstreamId(), e);
+            return false;
         }
     }
 
