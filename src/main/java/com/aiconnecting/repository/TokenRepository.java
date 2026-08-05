@@ -12,6 +12,12 @@ public interface TokenRepository extends JpaRepository<Token, Long> {
     Optional<Token> findByTokenKey(String tokenKey);
     List<Token> findByUserId(Long userId);
 
+    @Query("SELECT t FROM Token t ORDER BY COALESCE(t.updatedAt, t.createdAt) DESC")
+    List<Token> findAllOrderByUpdatedAtDesc();
+
+    @Query("SELECT t FROM Token t WHERE t.userId = :userId ORDER BY COALESCE(t.updatedAt, t.createdAt) DESC")
+    List<Token> findByUserIdOrderByUpdatedAtDesc(@Param("userId") Long userId);
+
     @Query("SELECT t.id FROM Token t WHERE t.userId = :userId")
     List<Long> findIdsByUserId(@Param("userId") Long userId);
 

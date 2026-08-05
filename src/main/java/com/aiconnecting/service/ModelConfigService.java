@@ -24,11 +24,11 @@ public class ModelConfigService {
     private final ChannelRepository channelRepository;
 
     public List<ModelConfig> listAll() {
-        return modelConfigRepository.findAllByOrderByStatusDescNameAsc();
+        return modelConfigRepository.findAllOrderByUpdatedAtDesc();
     }
 
     public List<ModelConfig> listNonAdmin() {
-        return modelConfigRepository.findByAdminOnlyFalseOrderByStatusDescNameAsc();
+        return modelConfigRepository.findByAdminOnlyFalseOrderByUpdatedAtDesc();
     }
 
     public List<ModelConfig> listEnabled(boolean isAdmin) {

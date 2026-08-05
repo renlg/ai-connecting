@@ -139,7 +139,7 @@ public class ChannelService {
     }
 
     public List<Channel> listAll() {
-        return channelRepository.findAll();
+        return channelRepository.findAllOrderByUpdatedAtDesc();
     }
 
     public Channel getById(Long id) {

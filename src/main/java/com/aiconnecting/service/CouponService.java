@@ -100,7 +100,7 @@ public class CouponService {
     }
 
     public List<Coupon> listCoupons() {
-        return couponRepository.findAll();
+        return couponRepository.findAllOrderByUpdatedAtDesc();
     }
 
     @Transactional(readOnly = true)

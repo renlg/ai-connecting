@@ -14,6 +14,9 @@ public interface ChannelRepository extends JpaRepository<Channel, Long> {
     @Query("SELECT c FROM Channel c WHERE c.status = 1 AND (',' || c.modelIds || ',') LIKE :modelIdPattern ORDER BY c.priority DESC")
     List<Channel> findActiveChannelsByModel(@Param("modelIdPattern") String modelIdPattern);
 
+    @Query("SELECT c FROM Channel c ORDER BY COALESCE(c.updatedAt, c.createdAt) DESC")
+    List<Channel> findAllOrderByUpdatedAtDesc();
+
     @Modifying
     @Query("UPDATE Channel c SET c.usedQuota = c.usedQuota + :delta WHERE c.id = :channelId")
     void addUsedQuota(@Param("channelId") Long channelId, @Param("delta") long delta);

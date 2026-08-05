@@ -29,7 +29,7 @@ public class TokenService {
     }
 
     public List<Token> listByUser(Long userId) {
-        return tokenRepository.findByUserId(userId);
+        return tokenRepository.findByUserIdOrderByUpdatedAtDesc(userId);
     }
 
     public List<Long> getUserTokenIds(Long userId) {
@@ -46,7 +46,7 @@ public class TokenService {
     }
 
     public List<Token> listAll() {
-        return tokenRepository.findAll();
+        return tokenRepository.findAllOrderByUpdatedAtDesc();
     }
 
     public Token getById(Long id) {
