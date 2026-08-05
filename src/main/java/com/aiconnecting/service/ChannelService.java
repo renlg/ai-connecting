@@ -618,7 +618,7 @@ public class ChannelService {
             if (resolvedAddresses.isEmpty() || resolvedAddresses.stream().anyMatch(this::isInternalAddress)) {
                 throw new IllegalArgumentException("host resolves to an internal address");
             }
-            boolean attachChannelCredentials = sameOriginAsChannel && "https".equalsIgnoreCase(scheme);
+            boolean attachChannelCredentials = sameOriginAsChannel;
             return new VideoDownloadTarget(host, attachChannelCredentials, resolvedAddresses);
         } catch (Exception e) {
             throw new BusinessException(400, "上游返回了非法的视频下载地址");

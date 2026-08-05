@@ -92,6 +92,7 @@ class ChannelServiceVideoTest {
         assertEquals("true", invokeIsAgnesTypeChannel("https://example.com", "agnes"));
         assertEquals("true", invokeIsAgnesTypeChannel("https://api.agnes-ai.cn", "openai"));
         assertEquals("true", invokeIsAgnesTypeChannel("https://apihub.agnes-ai.com", "openai"));
+        assertEquals("false", invokeIsAgnesTypeChannel("https://evilagnes-ai.com", "openai"));
         assertEquals("false", invokeIsAgnesTypeChannel("https://example.com", "openai"));
     }
 
@@ -162,5 +163,20 @@ class ChannelServiceVideoTest {
                 service.terminalVideoFailureMessage(failed));
         assertNull(service.terminalVideoFailureMessage(
                 objectMapper.readTree("{\"status\":\"in_progress\"}")));
+    }
+
+    @Test
+    void scrubsSignedUrlQueryParametersFromErrorSummary() throws Exception {
+        Method method = ChannelService.class.getDeclaredMethod("abbreviateTestError", String.class, int.class);
+        method.setAccessible(true);
+        String body = "https://output.example/video.mp4?X-Amz-Signature=secret-signature"
+                + "&X-Amz-Credential=secret-credential&X-Amz-Algorithm=secret-algorithm"
+                + "&X-Amz-Date=secret-date&X-Amz-Security-Token=secret-security-token"
+                + "&token=secret-token&sig=secret-sig&signature=secret-signature-2&expires=secret-expiry";
+
+        String scrubbed = (String) method.invoke(service, body, 2000);
+
+        assertFalse(scrubbed.contains("secret-"));
+        assertEquals(9, scrubbed.split("\\[REDACTED]", -1).length - 1);
     }
 }

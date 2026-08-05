@@ -10,6 +10,9 @@ const VIDEO_POLL_INTERVAL_MS = 5000
 const VIDEO_POLL_LIMIT = 150
 
 const firstString = (...values) => values.find(value => typeof value === 'string' && value.trim())
+const firstHttpUrl = (...values) => values.find(value =>
+  typeof value === 'string' && /^https?:\/\//i.test(value.trim())
+)
 
 const extractImageSource = (data) => {
   const item = Array.isArray(data?.data) ? data.data[0] : data?.data || data
@@ -19,16 +22,13 @@ const extractImageSource = (data) => {
   return base64 ? (base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`) : null
 }
 
-const extractVideoSource = (data) => firstString(
+const extractVideoSource = (data) => firstHttpUrl(
   typeof data === 'string' ? data : null,
   data?.url,
   data?.data?.url,
   data?.metadata?.url,
   data?.data?.metadata?.url,
   data?.video?.metadata?.url,
-  data?.remixed_from_video_id,
-  data?.data?.remixed_from_video_id,
-  data?.video?.remixed_from_video_id,
   data?.video_url,
   data?.output_url,
   data?.video?.url,
