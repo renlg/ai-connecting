@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aliyun.oss.OSS;
 import com.aliyun.oss.OSSClientBuilder;
+import com.aliyun.oss.model.CannedAccessControlList;
 import com.aliyun.oss.model.ObjectMetadata;
 import com.aliyun.oss.model.PutObjectRequest;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -17,8 +18,11 @@ import okhttp3.Response;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.URI;
 import java.security.SecureRandom;
@@ -26,12 +30,18 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * 将上游返回的媒体产物（图片/音频/视频）落盘到阿里云 OSS，并把响应中的上游 URL / base64
  * 替换为 OSS 公网直链，使客户端不再依赖上游（可能存在有效期或被限流的）地址。
  * OSS 未启用或凭据缺失时直接跳过重写，响应按上游原样透传，不影响主流程可用性；
  * 单个媒体项下载/上传失败同样只记录日志并保留该项原始字段，不影响响应中其它已计费产物的返回。
+ *
+ * 注意：本服务上传对象后会显式将 ACL 设置为 public-read 并直接返回匿名 HTTPS 直链，
+ * 因此使用的 OSS Bucket 必须允许公共读（Bucket 策略/ACL 允许 public-read），
+ * 否则客户端访问返回的地址会得到 403。若 Bucket 为私有读写，需改造为签名 URL 方案。
  */
 @Slf4j
 @Service
@@ -42,6 +52,9 @@ public class OssMediaStorageService {
     private static final long IMAGE_MAX_BYTES = 25L * 1024 * 1024;
     private static final long AUDIO_MAX_BYTES = 50L * 1024 * 1024;
     private static final long VIDEO_MAX_BYTES = 200L * 1024 * 1024;
+
+    /** 探测内容类型所需的前置字节数，仅用于 mark/reset 窥探，不影响后续流式上传 */
+    private static final int SNIFF_BYTES = 16;
 
     @Value("${app.oss.enabled:true}")
     private boolean enabled;
@@ -73,6 +86,9 @@ public class OssMediaStorageService {
                 .connectTimeout(Duration.ofSeconds(10))
                 .readTimeout(Duration.ofSeconds(60))
                 .writeTimeout(Duration.ofSeconds(30))
+                // 整体下载耗时上限：仅有连接/读超时无法阻止“慢速涓流”服务端长期占用请求线程
+                // （尤其是最大 200MB 的视频），callTimeout 覆盖包括连接、请求、响应在内的完整调用耗时
+                .callTimeout(Duration.ofSeconds(180))
                 .followRedirects(true)
                 .build();
         if (!enabled) {
@@ -155,7 +171,22 @@ public class OssMediaStorageService {
     private boolean rewriteImageItem(ObjectNode item) throws IOException {
         JsonNode b64Node = item.get("b64_json");
         if (b64Node != null && b64Node.isTextual() && !b64Node.asText().isBlank()) {
-            byte[] bytes = Base64.getDecoder().decode(b64Node.asText());
+            String base64 = b64Node.asText();
+            // 解码前按编码长度估算解码后大小，避免对超大 base64 字符串直接整体解码造成堆内存耗尽
+            long estimatedBytes = (long) Math.ceil(base64.length() * 3.0 / 4.0);
+            if (estimatedBytes > IMAGE_MAX_BYTES) {
+                throw new IOException("图片 base64 数据超出大小上限（编码长度估算 ~" + estimatedBytes + " > " + IMAGE_MAX_BYTES + "）");
+            }
+            byte[] bytes;
+            try {
+                bytes = Base64.getDecoder().decode(base64);
+            } catch (IllegalArgumentException e) {
+                throw new IOException("图片 base64 数据格式无效", e);
+            }
+            // 估算基于编码长度，解码后仍需校验真实字节数，防止 padding/估算误差导致超限对象被放行
+            if (bytes.length > IMAGE_MAX_BYTES) {
+                throw new IOException("图片 base64 解码后超出大小上限: " + bytes.length + " > " + IMAGE_MAX_BYTES);
+            }
             String contentType = sniffImageContentType(bytes);
             String ossUrl = uploadBytes(bytes, "images", extensionForImage(contentType), contentType);
             item.remove("b64_json");
@@ -164,9 +195,8 @@ public class OssMediaStorageService {
         }
         JsonNode urlNode = item.get("url");
         if (urlNode != null && urlNode.isTextual() && isHttpUrl(urlNode.asText())) {
-            Downloaded downloaded = download(urlNode.asText(), IMAGE_MAX_BYTES);
-            String contentType = downloaded.contentType() != null ? downloaded.contentType() : sniffImageContentType(downloaded.bytes());
-            String ossUrl = uploadBytes(downloaded.bytes(), "images", extensionForImage(contentType), contentType);
+            String ossUrl = downloadAndUpload(urlNode.asText(), IMAGE_MAX_BYTES, "images",
+                    this::sniffImageContentType, "image/png", this::extensionForImage);
             item.put("url", ossUrl);
             return true;
         }
@@ -174,11 +204,15 @@ public class OssMediaStorageService {
     }
 
     /**
-     * 视频任务响应重写：仅当任务处于终态 completed/succeeded 且存在可下载的播放地址时，
-     * 下载后转存 OSS 并回写地址；用于轮询响应 (GET /v1/videos/{id}) 及少数上游同步即返回
-     * 完成态视频的创建响应。失败时记录日志并保留上游原始地址，不影响状态透传与已完成的计费结算。
+     * 视频任务响应重写：仅当任务处于终态 completed/succeeded 且存在可下载的播放地址时才重写。
+     * 用于轮询响应 (GET /v1/videos/{id}) 及少数上游同步即返回完成态视频的创建响应。
+     * 失败时记录日志并保留上游原始地址，不影响状态透传与已完成的计费结算。
+     *
+     * @param existingOssUrl 若任务此前已上传过 OSS（见 VideoTask.ossVideoUrl），传入缓存的直链，
+     *                        本次直接复用回写、跳过重复下载上传；首次上传传 null
+     * @param onNewOssUrl     首次上传成功后的回调，供调用方持久化新的 OSS 直链，避免下次轮询重复下载
      */
-    public String rewriteVideoResponseIfCompleted(String response) {
+    public String rewriteVideoResponseIfCompleted(String response, String existingOssUrl, Consumer<String> onNewOssUrl) {
         if (!available) {
             return response;
         }
@@ -195,9 +229,20 @@ public class OssMediaStorageService {
         if (status == null || !VIDEO_COMPLETED_STATUSES.contains(status.toLowerCase(Locale.ROOT))) {
             return response;
         }
+        ObjectNode obj = (ObjectNode) root;
         try {
-            if (!rewriteFirstVideoUrl((ObjectNode) root)) {
+            if (existingOssUrl != null && !existingOssUrl.isBlank()) {
+                if (!replaceFirstVideoUrl(obj, existingOssUrl)) {
+                    return response;
+                }
+                return objectMapper.writeValueAsString(root);
+            }
+            String uploadedUrl = uploadFirstVideoUrl(obj);
+            if (uploadedUrl == null) {
                 return response;
+            }
+            if (onNewOssUrl != null) {
+                onNewOssUrl.accept(uploadedUrl);
             }
             return objectMapper.writeValueAsString(root);
         } catch (Exception e) {
@@ -206,29 +251,80 @@ public class OssMediaStorageService {
         }
     }
 
-    /** 依次尝试 OpenAI 兼容视频任务对象中出现过的地址位置，命中第一个即回写，其余位置保持不变 */
-    private boolean rewriteFirstVideoUrl(ObjectNode root) throws IOException {
-        if (rewriteUrlField(root, "url")) {
+    /**
+     * 从上游视频任务响应中解析终态状态，兼容顶层 status/state 及嵌套在 data/video 下的同名字段。
+     * 供本类的 OSS 重写与 {@link OpenAiRelayService} 的计费结算共用同一套解析逻辑，
+     * 避免两处识别范围不一致导致「已转存 OSS 但从未结算」的计费遗漏。
+     */
+    public String extractVideoStatus(JsonNode json) {
+        return findVideoStatus(json);
+    }
+
+    /** 依次尝试 OpenAI 兼容视频任务对象中出现过的地址位置，命中第一个即下载上传并回写，返回新 OSS 直链；均未命中返回 null */
+    private String uploadFirstVideoUrl(ObjectNode root) throws IOException {
+        String uploaded = uploadUrlFieldIfPresent(root, "url");
+        if (uploaded != null) {
+            return uploaded;
+        }
+        ObjectNode data = asObject(root.get("data"));
+        if (data != null) {
+            uploaded = uploadUrlFieldIfPresent(data, "url");
+            if (uploaded != null) {
+                return uploaded;
+            }
+        }
+        ObjectNode metadata = asObject(root.get("metadata"));
+        if (metadata != null) {
+            uploaded = uploadUrlFieldIfPresent(metadata, "url");
+            if (uploaded != null) {
+                return uploaded;
+            }
+        }
+        if (data != null) {
+            ObjectNode dataMetadata = asObject(data.get("metadata"));
+            if (dataMetadata != null) {
+                uploaded = uploadUrlFieldIfPresent(dataMetadata, "url");
+                if (uploaded != null) {
+                    return uploaded;
+                }
+            }
+        }
+        ObjectNode video = asObject(root.get("video"));
+        if (video != null) {
+            ObjectNode videoMetadata = asObject(video.get("metadata"));
+            if (videoMetadata != null) {
+                uploaded = uploadUrlFieldIfPresent(videoMetadata, "url");
+                if (uploaded != null) {
+                    return uploaded;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 与 {@link #uploadFirstVideoUrl} 相同的位置探测顺序，但不下载，直接用缓存的 OSS 直链覆盖 */
+    private boolean replaceFirstVideoUrl(ObjectNode root, String replacementUrl) {
+        if (setUrlFieldIfPresent(root, "url", replacementUrl)) {
             return true;
         }
         ObjectNode data = asObject(root.get("data"));
-        if (data != null && rewriteUrlField(data, "url")) {
+        if (data != null && setUrlFieldIfPresent(data, "url", replacementUrl)) {
             return true;
         }
         ObjectNode metadata = asObject(root.get("metadata"));
-        if (metadata != null && rewriteUrlField(metadata, "url")) {
+        if (metadata != null && setUrlFieldIfPresent(metadata, "url", replacementUrl)) {
             return true;
         }
         if (data != null) {
             ObjectNode dataMetadata = asObject(data.get("metadata"));
-            if (dataMetadata != null && rewriteUrlField(dataMetadata, "url")) {
+            if (dataMetadata != null && setUrlFieldIfPresent(dataMetadata, "url", replacementUrl)) {
                 return true;
             }
         }
         ObjectNode video = asObject(root.get("video"));
         if (video != null) {
             ObjectNode videoMetadata = asObject(video.get("metadata"));
-            if (videoMetadata != null && rewriteUrlField(videoMetadata, "url")) {
+            if (videoMetadata != null && setUrlFieldIfPresent(videoMetadata, "url", replacementUrl)) {
                 return true;
             }
         }
@@ -239,15 +335,23 @@ public class OssMediaStorageService {
         return node != null && node.isObject() ? (ObjectNode) node : null;
     }
 
-    private boolean rewriteUrlField(ObjectNode holder, String field) throws IOException {
+    private String uploadUrlFieldIfPresent(ObjectNode holder, String field) throws IOException {
+        JsonNode node = holder.get(field);
+        if (node == null || !node.isTextual() || !isHttpUrl(node.asText())) {
+            return null;
+        }
+        String ossUrl = downloadAndUpload(node.asText(), VIDEO_MAX_BYTES, "videos",
+                null, "video/mp4", this::extensionForVideo);
+        holder.put(field, ossUrl);
+        return ossUrl;
+    }
+
+    private boolean setUrlFieldIfPresent(ObjectNode holder, String field, String replacementUrl) {
         JsonNode node = holder.get(field);
         if (node == null || !node.isTextual() || !isHttpUrl(node.asText())) {
             return false;
         }
-        Downloaded downloaded = download(node.asText(), VIDEO_MAX_BYTES);
-        String contentType = downloaded.contentType() != null ? downloaded.contentType() : "video/mp4";
-        String ossUrl = uploadBytes(downloaded.bytes(), "videos", extensionForVideo(contentType), contentType);
-        holder.put(field, ossUrl);
+        holder.put(field, replacementUrl);
         return true;
     }
 
@@ -279,11 +383,16 @@ public class OssMediaStorageService {
         }
     }
 
-    private record Downloaded(byte[] bytes, String contentType) {
-    }
-
-    /** 下载前校验协议与目标地址不解析到内网/环回地址，防止服务端被用作内网探测跳板；限制响应体大小与超时 */
-    private Downloaded download(String url, long maxBytes) throws IOException {
+    /**
+     * 下载前校验协议与目标地址不解析到内网/环回地址，防止服务端被用作内网探测跳板；
+     * 下载内容不落地为完整 byte[]，而是将响应体包装为受 maxBytes 限制的 InputStream 直接流式传给
+     * OSS SDK 的 putObject(InputStream, ...)，避免为最大 200MB 的视频在应用内存中额外持有一份完整拷贝。
+     * contentType 缺失时按需窥探响应体前若干字节（mark/reset，不消耗流式上传的数据）用于嗅探，
+     * 嗅探仍未识别时回退到 defaultContentType。
+     */
+    private String downloadAndUpload(String url, long maxBytes, String subFolder,
+                                      Function<byte[], String> contentTypeSniffer, String defaultContentType,
+                                      Function<String, String> extensionResolver) throws IOException {
         URI uri = URI.create(url);
         String host = uri.getHost();
         try {
@@ -304,25 +413,59 @@ public class OssMediaStorageService {
             if (declaredLength > maxBytes) {
                 throw new IOException("媒体文件超出大小上限: " + declaredLength + " > " + maxBytes);
             }
-            byte[] bytes = readAtMost(resp.body().byteStream(), maxBytes);
             String contentType = resp.header("Content-Type");
-            return new Downloaded(bytes, contentType);
+            InputStream raw = resp.body().byteStream();
+            BufferedInputStream buffered = new BufferedInputStream(raw, Math.max(SNIFF_BYTES, 8192));
+            if ((contentType == null || contentType.isBlank()) && contentTypeSniffer != null) {
+                buffered.mark(SNIFF_BYTES);
+                byte[] head = buffered.readNBytes(SNIFF_BYTES);
+                buffered.reset();
+                contentType = contentTypeSniffer.apply(head);
+            }
+            if (contentType == null || contentType.isBlank()) {
+                contentType = defaultContentType;
+            }
+            CappedInputStream capped = new CappedInputStream(buffered, maxBytes);
+            String extension = extensionResolver.apply(contentType);
+            return uploadStream(capped, declaredLength >= 0 ? declaredLength : -1, subFolder, extension, contentType);
         }
     }
 
-    private byte[] readAtMost(java.io.InputStream in, long maxBytes) throws IOException {
-        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
-        byte[] chunk = new byte[8192];
-        long total = 0;
-        int read;
-        while ((read = in.read(chunk)) != -1) {
-            total += read;
-            if (total > maxBytes) {
+    /** 包装输入流并在读取总量超过 maxBytes 时立即抛出异常，用于流式上传场景下的大小上限强制 */
+    private static final class CappedInputStream extends FilterInputStream {
+        private final long maxBytes;
+        private long count;
+
+        CappedInputStream(InputStream in, long maxBytes) {
+            super(in);
+            this.maxBytes = maxBytes;
+        }
+
+        @Override
+        public int read() throws IOException {
+            int b = super.read();
+            if (b != -1) {
+                count++;
+                checkLimit();
+            }
+            return b;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            int n = super.read(b, off, len);
+            if (n > 0) {
+                count += n;
+                checkLimit();
+            }
+            return n;
+        }
+
+        private void checkLimit() throws IOException {
+            if (count > maxBytes) {
                 throw new IOException("媒体文件超出大小上限: > " + maxBytes);
             }
-            buffer.write(chunk, 0, read);
         }
-        return buffer.toByteArray();
     }
 
     private boolean isInternalAddress(InetAddress addr) {
@@ -350,7 +493,36 @@ public class OssMediaStorageService {
             metadata.setContentType(contentType);
         }
         ossClient.putObject(new PutObjectRequest(bucket, key, new ByteArrayInputStream(bytes), metadata));
+        setPublicReadAcl(key);
         return "https://" + bucket + "." + endpointHost + "/" + key;
+    }
+
+    private String uploadStream(InputStream in, long contentLength, String subFolder, String extension, String contentType) {
+        String key = prefix + "/" + subFolder + "/" + System.currentTimeMillis() + "_" + randomToken() + "." + extension;
+        ObjectMetadata metadata = new ObjectMetadata();
+        if (contentLength >= 0) {
+            metadata.setContentLength(contentLength);
+        }
+        if (contentType != null && !contentType.isBlank()) {
+            metadata.setContentType(contentType);
+        }
+        ossClient.putObject(new PutObjectRequest(bucket, key, in, metadata));
+        setPublicReadAcl(key);
+        return "https://" + bucket + "." + endpointHost + "/" + key;
+    }
+
+    /**
+     * 显式将新上传对象的 ACL 设为 public-read：本服务直接返回匿名 HTTPS 直链给客户端，
+     * 若 Bucket 本身是私有读写，未设置对象级 public-read 会导致客户端访问返回 403。
+     * 设置失败仅记录日志，不影响本次上传已生成的直链返回（沿用 Bucket 默认 ACL）。
+     */
+    private void setPublicReadAcl(String key) {
+        try {
+            ossClient.setObjectAcl(bucket, key, CannedAccessControlList.PublicRead);
+        } catch (Exception e) {
+            log.warn("设置 OSS 对象 ACL 为 public-read 失败，若 Bucket 非公共读，返回的直链可能无法访问: key={}, err={}",
+                    key, e.getMessage());
+        }
     }
 
     private String randomToken() {

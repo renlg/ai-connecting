@@ -65,6 +65,10 @@ public class VideoTask {
     @Builder.Default
     private boolean settled = false;
 
+    /** 已转存到 OSS 的视频直链，一旦写入后续轮询直接复用，不再重复下载/上传同一个已完成视频 */
+    @Column(length = 500)
+    private String ossUrl;
+
     /**
      * 下次允许被后台对账任务扫描的时间；每次对账尝试后推迟到 now + 重试间隔，
      * 使长期卡住的任务不会每轮都占据对账批次的固定名额，避免其后创建的任务永远排不上号（见 OpenAiRelayService 对账逻辑）

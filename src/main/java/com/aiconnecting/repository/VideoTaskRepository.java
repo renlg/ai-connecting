@@ -84,4 +84,12 @@ public interface VideoTaskRepository extends JpaRepository<VideoTask, Long> {
     @Transactional
     @Query("update VideoTask t set t.usageLogId = :usageLogId where t.id = :id and t.usageLogId is null")
     int linkUsageLog(@Param("id") Long id, @Param("usageLogId") Long usageLogId);
+
+    /**
+     * 记录任务视频已转存的 OSS 直链，供后续轮询直接复用、跳过重复下载/上传同一个已完成视频。
+     */
+    @Modifying
+    @Transactional
+    @Query("update VideoTask t set t.ossUrl = :ossUrl where t.id = :id and t.ossUrl is null")
+    int updateOssUrl(@Param("id") Long id, @Param("ossUrl") String ossUrl);
 }

@@ -288,8 +288,9 @@ public class OpenAiRelayService {
             throw new BusinessException(502, "上游视频响应缺少有效的任务 id");
         }
         Long taskId;
+        VideoTask saved;
         try {
-            VideoTask saved = videoTaskRepository.save(VideoTask.builder()
+            saved = videoTaskRepository.save(VideoTask.builder()
                     .upstreamId(upstreamVideoId)
                     .channelId(channelId)
                     .tokenId(tokenId)
@@ -312,9 +313,12 @@ public class OpenAiRelayService {
         responseObject.put("id", upstreamVideoId);
         responseObject.put("channel_id", channelId);
         try {
+            // 极少数上游会同步返回已完成/失败终态并直接携带播放地址，必须先结算（否则预扣积分永远
+            // 不会被对账，因为该任务此后再也不会被轮询到），结算完成后才转存 OSS 重写地址
+            settleVideoTaskIfTerminal(saved, json);
             String normalized = support.objectMapper.writeValueAsString(json);
-            // 极少数上游会同步返回已完成状态并直接携带播放地址，同样需要转存 OSS
-            normalized = ossMediaStorageService.rewriteVideoResponseIfCompleted(normalized);
+            normalized = ossMediaStorageService.rewriteVideoResponseIfCompleted(normalized, null,
+                    ossUrl -> videoTaskRepository.updateOssUrl(taskId, ossUrl));
             return new VideoResponseResult(normalized, taskId);
         } catch (Exception e) {
             return new VideoResponseResult(response, taskId);
@@ -345,9 +349,11 @@ public class OpenAiRelayService {
             Channel channel = channelService.getById(task.getChannelId());
             String response = support.forwardGetRequest(channel,
                     support.videoStatusPath(channel, task.getUpstreamId(), task.getModel()));
+            // 结算必须先于 OSS 重写完成：结算与 OSS 转存共用同一套嵌套状态解析（见 settleVideoTaskIfTerminal），
+            // 若顺序颠倒，OSS 转存成功但结算异常时，客户端仍会拿到重写后的地址，而预扣积分错失了随本次响应结算的机会
             settleVideoTaskIfTerminal(task, response);
-            // 结算使用原始上游响应（时长等字段与地址无关），转存 OSS 仅在返回给客户端前重写地址
-            return ossMediaStorageService.rewriteVideoResponseIfCompleted(response);
+            return ossMediaStorageService.rewriteVideoResponseIfCompleted(response, task.getOssUrl(),
+                    ossUrl -> videoTaskRepository.updateOssUrl(task.getId(), ossUrl));
         } finally {
             videoTaskRepository.releaseClaim(task.getId(), leaseUntil);
         }
@@ -366,17 +372,30 @@ public class OpenAiRelayService {
         if (task.isSettled()) {
             return;
         }
-        String status;
         JsonNode json;
         try {
             json = support.objectMapper.readTree(response);
-            status = json.isObject() && json.hasNonNull("status") ? json.get("status").asText() : null;
         } catch (Exception e) {
             return;
         }
+        settleVideoTaskIfTerminal(task, json);
+    }
+
+    /**
+     * 与字符串重载相同的结算逻辑，直接接受已解析的 JsonNode，避免调用方（如创建接口同步返回终态时）
+     * 重复解析同一个响应。状态解析复用 {@link OssMediaStorageService#extractVideoStatus}，
+     * 与 OSS 重写识别的嵌套状态位置（顶层 status/state、data.status、video.status 等）完全一致，
+     * 防止两处识别范围不一致导致「已转存 OSS 但从未结算」的计费遗漏
+     */
+    private void settleVideoTaskIfTerminal(VideoTask task, JsonNode json) {
+        if (task.isSettled() || json == null || !json.isObject()) {
+            return;
+        }
+        String status = ossMediaStorageService.extractVideoStatus(json);
         if (status == null) {
             return;
         }
+        status = status.toLowerCase(java.util.Locale.ROOT);
         boolean failed = VIDEO_FAILED_STATUSES.contains(status);
         boolean completed = VIDEO_COMPLETED_STATUSES.contains(status);
         if (!failed && !completed) {

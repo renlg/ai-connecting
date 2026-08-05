@@ -54,6 +54,7 @@ public class VideoTaskMigrationRunner {
         columns.put("unit_price", "DECIMAL(10,4)");
         columns.put("usage_log_id", "BIGINT");
         columns.put("settled", "BOOLEAN NOT NULL DEFAULT 0");
+        columns.put("oss_url", "VARCHAR(500)");
         columns.put("next_reconcile_at", "TIMESTAMP");
         columns.put("processing_lease_until", "TIMESTAMP");
 

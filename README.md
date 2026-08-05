@@ -142,6 +142,10 @@ cd web && npm install && npm run dev
 | `OSS_ENDPOINT` | OSS Endpoint host，不含协议前缀（默认 oss-cn-hangzhou.aliyuncs.com） | 否 |
 | `OSS_PREFIX` | OSS 对象 key 前缀（默认 ai-connect） | 否 |
 
+> **注意**：转存服务会将上传对象的 ACL 显式设为 `public-read` 并直接返回匿名 HTTPS 直链（不使用签名 URL）。
+> 因此 `OSS_BUCKET` 必须允许公共读（Bucket 策略/权限不能阻止对象级 `public-read` ACL 生效），
+> 否则客户端访问返回的媒体地址会得到 403。
+
 ## 生产部署
 
 项目使用蓝绿部署策略，详见 `deploy/` 目录。

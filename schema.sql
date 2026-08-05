@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS "video_tasks" (
     unit_price DECIMAL(10,4),
     usage_log_id BIGINT,
     settled BOOLEAN NOT NULL DEFAULT 0,
+    oss_url VARCHAR(500),
     created_at TIMESTAMP NOT NULL
 );
 
