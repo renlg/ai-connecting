@@ -47,7 +47,7 @@ public class RelaySupport {
     private final UsageLogService usageLogService;
     private final ModelConfigService modelConfigService;
     private final UserService userService;
-    private final com.aiconnecting.repository.VideoTaskRepository videoTaskRepository;
+    private final VideoTaskUsageLogService videoTaskUsageLogService;
 
     @Autowired(required = false)
     RateLimitService rateLimitService;
@@ -803,15 +803,22 @@ public class RelaySupport {
      *
      * @return 落库后的使用日志 id，失败时抛出异常由调用方捕获
      */
-    @org.springframework.transaction.annotation.Transactional
     Long recordPrepaidMediaUsageAndLink(Token token, Channel channel, String model, MediaCharge charge,
                                         long duration, HttpServletRequest httpRequest, String path,
                                         Long videoTaskId) {
-        Long usageLogId = recordPrepaidMediaUsage(token, channel, model, charge, duration, httpRequest, path);
-        if (videoTaskId != null) {
-            videoTaskRepository.linkUsageLog(videoTaskId, usageLogId);
-        }
-        return usageLogId;
+        UsageLog usageLog = UsageLog.builder()
+                .tokenId(token.getId())
+                .channelId(channel.getId())
+                .model(model)
+                .promptTokens(0)
+                .completionTokens(0)
+                .totalTokens(0)
+                .creditCost(charge.cost())
+                .ip(getClientIp(httpRequest))
+                .duration(duration)
+                .requestPath(path)
+                .build();
+        return videoTaskUsageLogService.recordAndLink(videoTaskId, usageLog);
     }
 
     // ==================== 使用记录 ====================

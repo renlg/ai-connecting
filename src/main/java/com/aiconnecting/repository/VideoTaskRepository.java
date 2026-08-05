@@ -41,11 +41,40 @@ public interface VideoTaskRepository extends JpaRepository<VideoTask, Long> {
                                              Pageable pageable);
 
     /**
-     * 对账尝试后推迟该任务的下次可扫描时间，供其后创建但尚未被检查过的任务优先进入下一轮批次
+     * 原子抢占未结算任务：只有一个调用者能将已到期的处理租约推迟。
+     * 后台对账与客户端轮询共用此方法，避免并发请求同一上游任务。
      */
     @Modifying
     @Transactional
-    @Query("update VideoTask t set t.nextReconcileAt = :next where t.id = :id")
+    @Query("update VideoTask t set t.processingLeaseUntil = :leaseUntil where t.id = :id "
+            + "and t.settled = false and (t.processingLeaseUntil is null or t.processingLeaseUntil <= :now)")
+    int claimForProcessing(@Param("id") Long id, @Param("now") LocalDateTime now,
+                           @Param("leaseUntil") LocalDateTime leaseUntil);
+
+    /**
+     * 客户端轮询的原子抢占。已结算任务仍需允许客户端查询上游结果，
+     * 但同样通过处理租约避免并发重复查询。
+     */
+    @Modifying
+    @Transactional
+    @Query("update VideoTask t set t.processingLeaseUntil = :leaseUntil where t.id = :id "
+            + "and (t.processingLeaseUntil is null or t.processingLeaseUntil <= :now)")
+    int claimForPolling(@Param("id") Long id, @Param("now") LocalDateTime now,
+                        @Param("leaseUntil") LocalDateTime leaseUntil);
+
+    /**
+     * 仅当任务仍持有本次租约时释放，避免超时的旧请求释放新持有者的租约。
+     */
+    @Modifying
+    @Transactional
+    @Query("update VideoTask t set t.processingLeaseUntil = null where t.id = :id "
+            + "and t.processingLeaseUntil = :leaseUntil")
+    int releaseClaim(@Param("id") Long id, @Param("leaseUntil") LocalDateTime leaseUntil);
+
+    /** 对账尝试后推迟下次扫描时间，保持批次间的公平调度。 */
+    @Modifying
+    @Transactional
+    @Query("update VideoTask t set t.nextReconcileAt = :next where t.id = :id and t.settled = false")
     int touchNextReconcileAt(@Param("id") Long id, @Param("next") LocalDateTime next);
 
     /**
@@ -53,6 +82,6 @@ public interface VideoTaskRepository extends JpaRepository<VideoTask, Long> {
      */
     @Modifying
     @Transactional
-    @Query("update VideoTask t set t.usageLogId = :usageLogId where t.id = :id")
+    @Query("update VideoTask t set t.usageLogId = :usageLogId where t.id = :id and t.usageLogId is null")
     int linkUsageLog(@Param("id") Long id, @Param("usageLogId") Long usageLogId);
 }

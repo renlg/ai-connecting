@@ -30,6 +30,7 @@ public class VideoTaskSettlementService {
     private final UsageLogRepository usageLogRepository;
     private final ModelConfigService modelConfigService;
     private final UsageLogService usageLogService;
+    private final VideoTaskUsageLogService videoTaskUsageLogService;
 
     public enum Outcome { SETTLED, SKIPPED }
 
@@ -43,6 +44,7 @@ public class VideoTaskSettlementService {
         }
         VideoTask task = videoTaskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalStateException("视频任务不存在: " + taskId));
+        task.setUsageLogId(videoTaskUsageLogService.ensureLinked(taskId));
         if (task.isDeducted()) {
             BigDecimal prepaid = task.getPrepaidCost() != null ? task.getPrepaidCost() : BigDecimal.ZERO;
             if (prepaid.compareTo(BigDecimal.ZERO) > 0) {
@@ -66,6 +68,7 @@ public class VideoTaskSettlementService {
         }
         VideoTask task = videoTaskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalStateException("视频任务不存在: " + taskId));
+        task.setUsageLogId(videoTaskUsageLogService.ensureLinked(taskId));
         if (actualSeconds == null) {
             return Outcome.SETTLED;
         }

@@ -46,6 +46,7 @@ public class OpenAiRelayService {
     private final ChannelService channelService;
     private final UsageLogService usageLogService;
     private final VideoTaskSettlementService videoTaskSettlementService;
+    private final VideoTaskUsageLogService videoTaskUsageLogService;
 
     /**
      * 中转请求 (非流式) - 最多重试 3 次，每次选择不同渠道
@@ -131,7 +132,8 @@ public class OpenAiRelayService {
         Long videoTaskId = null;
         if (isVideo) {
             try {
-                VideoResponseResult videoResult = handleVideoResponse(response, result.channel().getId(), ctx.token().getUserId(), model, videoChargeInfo);
+                VideoResponseResult videoResult = handleVideoResponse(response, result.channel().getId(),
+                        ctx.token().getId(), ctx.token().getUserId(), model, videoChargeInfo);
                 response = videoResult.response();
                 videoTaskId = videoResult.taskId();
             } catch (RuntimeException e) {
@@ -256,8 +258,8 @@ public class OpenAiRelayService {
      * 响应非法 JSON、缺少可用 id 或映射保存失败均抛错（由调用方退回预扣积分并如实反馈退款状态），
      * 绝不向已付费的客户端返回无法轮询的任务结果
      */
-    private VideoResponseResult handleVideoResponse(String response, Long channelId, Long userId, String model,
-                                       RelaySupport.VideoChargeInfo videoChargeInfo) {
+    private VideoResponseResult handleVideoResponse(String response, Long channelId, Long tokenId, Long userId,
+                                                    String model, RelaySupport.VideoChargeInfo videoChargeInfo) {
         JsonNode json;
         try {
             json = support.objectMapper.readTree(response);
@@ -275,6 +277,7 @@ public class OpenAiRelayService {
             VideoTask saved = videoTaskRepository.save(VideoTask.builder()
                     .upstreamId(json.get("id").asText())
                     .channelId(channelId)
+                    .tokenId(tokenId)
                     .userId(userId)
                     .model(model)
                     .prepaidCost(videoChargeInfo.charge().cost())
@@ -311,10 +314,20 @@ public class OpenAiRelayService {
         VideoTask task = videoTaskRepository
                 .findFirstByUpstreamIdAndUserIdOrderByCreatedAtDesc(videoId, token.getUserId())
                 .orElseThrow(() -> new BusinessException(404, "视频任务不存在: " + videoId));
-        Channel channel = channelService.getById(task.getChannelId());
-        String response = support.forwardGetRequest(channel, "/v1/videos/" + videoId);
-        settleVideoTaskIfTerminal(task, response);
-        return response;
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime leaseUntil = now.plusMinutes(VIDEO_TASK_LEASE_MINUTES);
+        if (videoTaskRepository.claimForPolling(task.getId(), now, leaseUntil) != 1) {
+            throw new BusinessException(409, "视频任务正在处理中，请稍后重试");
+        }
+        try {
+            videoTaskUsageLogService.ensureLinked(task.getId());
+            Channel channel = channelService.getById(task.getChannelId());
+            String response = support.forwardGetRequest(channel, "/v1/videos/" + videoId);
+            settleVideoTaskIfTerminal(task, response);
+            return response;
+        } finally {
+            videoTaskRepository.releaseClaim(task.getId(), leaseUntil);
+        }
     }
 
     private static final Set<String> VIDEO_FAILED_STATUSES = Set.of("failed", "cancelled", "canceled");
@@ -369,6 +382,8 @@ public class OpenAiRelayService {
      * 尚未检查过的任务在下一轮优先进入批次，避免长期不可达的任务永久占满固定的 50 个名额
      */
     private static final long RECONCILE_RETRY_DELAY_MINUTES = 5;
+    /** 上游状态查询的租约时长，覆盖常规请求超时并防止进程崩溃后永久占用。 */
+    private static final long VIDEO_TASK_LEASE_MINUTES = 10;
 
     /**
      * 后台对账：定期扫描长时间未结算的视频任务，主动向上游查询状态并结算，
@@ -387,7 +402,13 @@ public class OpenAiRelayService {
         }
         log.info("视频任务对账：待处理 {} 个未结算任务", pending.size());
         for (VideoTask task : pending) {
+            LocalDateTime claimTime = LocalDateTime.now();
+            LocalDateTime leaseUntil = claimTime.plusMinutes(VIDEO_TASK_LEASE_MINUTES);
+            if (videoTaskRepository.claimForProcessing(task.getId(), claimTime, leaseUntil) != 1) {
+                continue;
+            }
             try {
+                videoTaskUsageLogService.ensureLinked(task.getId());
                 Channel channel = channelService.getById(task.getChannelId());
                 String response = support.forwardGetRequest(channel, "/v1/videos/" + task.getUpstreamId());
                 settleVideoTaskIfTerminal(task, response);
@@ -396,7 +417,12 @@ public class OpenAiRelayService {
             } finally {
                 // 无论本轮是否结算成功都推迟 nextReconcileAt：已结算的任务后续查询会被 settled=false
                 // 条件过滤掉，不受影响；仍未结算的任务借此让位给其它任务，避免同一批任务被反复选中
-                videoTaskRepository.touchNextReconcileAt(task.getId(), LocalDateTime.now().plusMinutes(RECONCILE_RETRY_DELAY_MINUTES));
+                try {
+                    videoTaskRepository.touchNextReconcileAt(task.getId(),
+                            LocalDateTime.now().plusMinutes(RECONCILE_RETRY_DELAY_MINUTES));
+                } finally {
+                    videoTaskRepository.releaseClaim(task.getId(), leaseUntil);
+                }
             }
         }
     }

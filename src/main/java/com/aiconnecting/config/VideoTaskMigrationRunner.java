@@ -46,6 +46,7 @@ public class VideoTaskMigrationRunner {
         }
 
         Map<String, String> columns = new LinkedHashMap<>();
+        columns.put("token_id", "BIGINT");
         columns.put("prepaid_cost", "DECIMAL(10,2)");
         columns.put("deducted", "BOOLEAN NOT NULL DEFAULT 0");
         columns.put("size", "VARCHAR(50)");
@@ -54,6 +55,7 @@ public class VideoTaskMigrationRunner {
         columns.put("usage_log_id", "BIGINT");
         columns.put("settled", "BOOLEAN NOT NULL DEFAULT 0");
         columns.put("next_reconcile_at", "TIMESTAMP");
+        columns.put("processing_lease_until", "TIMESTAMP");
 
         int added = 0;
         for (Map.Entry<String, String> entry : columns.entrySet()) {

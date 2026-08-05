@@ -29,6 +29,9 @@ public class VideoTask {
     @Column(nullable = false)
     private Long channelId;
 
+    /** 创建任务所用 Token id，供缺失使用日志恢复时保留 Token 维度的账单归属 */
+    private Long tokenId;
+
     /** 发起任务的用户 id */
     @Column(nullable = false)
     private Long userId;
@@ -67,6 +70,9 @@ public class VideoTask {
      * 使长期卡住的任务不会每轮都占据对账批次的固定名额，避免其后创建的任务永远排不上号（见 OpenAiRelayService 对账逻辑）
      */
     private LocalDateTime nextReconcileAt;
+
+    /** 轮询/对账查询上游时的原子处理租约，到期后可被其它实例重新抢占 */
+    private LocalDateTime processingLeaseUntil;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
