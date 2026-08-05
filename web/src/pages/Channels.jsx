@@ -56,7 +56,7 @@ const extractVideoTaskId = (data) => firstString(
   data?.video?.id
 )
 const videoStatus = (data) => String(data?.status || data?.state || data?.data?.status || data?.data?.state || data?.video?.status || '').toLowerCase()
-const isVideoFailed = (status) => ['failed', 'cancelled', 'canceled', 'error'].includes(status)
+const isVideoFailed = (status) => ['failed', 'failure', 'cancelled', 'canceled', 'error'].includes(status)
 
 export default function Channels() {
   const [channels, setChannels] = useState([])
@@ -296,7 +296,7 @@ export default function Channels() {
           for (let attempt = 0; !mediaUrl && attempt < VIDEO_POLL_LIMIT; attempt += 1) {
             await new Promise(resolve => setTimeout(resolve, VIDEO_POLL_INTERVAL_MS))
             if (testRunRef.current !== runId) return
-            const pollResponse = await pollChannelTestVideo({ ...values, apiKey, videoId: taskId })
+            const pollResponse = await pollChannelTestVideo({ ...values, apiKey, model: testModel, videoId: taskId })
             const pollResult = pollResponse?.data
             if (!pollResult?.success) throw new Error(pollResult?.error || `视频状态查询失败 (HTTP ${pollResult?.statusCode || 'error'})`)
             currentData = pollResult.data
@@ -314,7 +314,7 @@ export default function Channels() {
           if (!mediaUrl && testRunRef.current === runId) {
             // 兜底：对不返回 URL 的其它渠道，仍尝试旧的 /content 下载方式
             try {
-              const videoBlob = await downloadChannelTestVideo({ ...values, apiKey, videoId: taskId })
+              const videoBlob = await downloadChannelTestVideo({ ...values, apiKey, model: testModel, videoId: taskId })
               if (testRunRef.current !== runId) return
               mediaUrl = URL.createObjectURL(videoBlob)
               videoObjectUrlRef.current = mediaUrl

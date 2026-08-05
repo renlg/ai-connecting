@@ -28,6 +28,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -65,6 +66,7 @@ public class RelaySupport {
     private final ConcurrentHashMap<String, CachedModelConfig> modelConfigCache = new ConcurrentHashMap<>();
 
     static final int MAX_RETRIES = 3;
+    private static final Set<String> AGNES_HOST_SUFFIXES = Set.of("agnes-ai.cn", "agnes-ai.com");
     private static final long MODEL_CACHE_TTL_MS = 2 * 60 * 1000L;
     private static final long ALLOWED_MODELS_CACHE_TTL_MS = 2 * 60 * 1000L;
 
@@ -300,11 +302,20 @@ public class RelaySupport {
         }
         try {
             String host = URI.create(channel.getBaseUrl()).getHost();
-            return host != null && ("agnes-ai.cn".equalsIgnoreCase(host)
-                    || host.toLowerCase().endsWith(".agnes-ai.cn"));
+            return isAgnesHost(host);
         } catch (IllegalArgumentException e) {
             return false;
         }
+    }
+
+    static boolean isAgnesHost(String host) {
+        if (host == null) {
+            return false;
+        }
+        String normalizedHost = host.toLowerCase(Locale.ROOT);
+        return AGNES_HOST_SUFFIXES.stream()
+                .anyMatch(suffix -> normalizedHost.equals(suffix)
+                        || normalizedHost.endsWith("." + suffix));
     }
 
     /** Agnes 视频任务只能使用创建响应中的 video_id 通过 /agnesapi 查询。 */

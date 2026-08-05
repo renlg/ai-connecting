@@ -70,5 +70,9 @@ class OpenAiRelayServiceTest {
                 .type("openai")
                 .baseUrl("https://images.agnes-ai.cn/v1")
                 .build()));
+        assertTrue(support.isAgnesTypeChannel(Channel.builder()
+                .type("openai")
+                .baseUrl("https://apihub.agnes-ai.com")
+                .build()));
     }
 }

@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.lang.reflect.Method;
+import java.net.InetAddress;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -14,7 +17,12 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ChannelServiceVideoTest {
 
-    private final ChannelService service = new ChannelService(null);
+    private final ChannelService service = new ChannelService(null) {
+        @Override
+        List<InetAddress> resolveVideoHost(String host) throws IOException {
+            return List.of(InetAddress.getByAddress(host, new byte[]{8, 8, 8, 8}));
+        }
+    };
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
@@ -54,6 +62,25 @@ class ChannelServiceVideoTest {
         assertTrue(target.attachChannelCredentials());
     }
 
+    @Test
+    void rejectsChannelHostOnHttpsToHttpDowngrade() {
+        assertThrows(BusinessException.class, () -> service.validateVideoDownloadTarget(
+                "https://videos.example.com", "http://videos.example.com/v1/videos/id/content"));
+    }
+
+    @Test
+    void rejectsChannelHostOnDifferentEffectivePort() {
+        assertThrows(BusinessException.class, () -> service.validateVideoDownloadTarget(
+                "https://videos.example.com:8443", "https://videos.example.com/v1/videos/id/content"));
+    }
+
+    @Test
+    void treatsExplicitDefaultPortAsSameOrigin() {
+        ChannelService.VideoDownloadTarget target = service.validateVideoDownloadTarget(
+                "https://videos.example.com", "https://videos.example.com:443/v1/videos/id/content");
+        assertTrue(target.attachChannelCredentials());
+    }
+
     private String invokeIsAgnesTypeChannel(String baseUrl, String channelType) throws Exception {
         Method method = ChannelService.class.getDeclaredMethod("isAgnesTypeChannel", String.class, String.class);
         method.setAccessible(true);
@@ -64,6 +91,7 @@ class ChannelServiceVideoTest {
     void identifiesAgnesChannelByTypeOrHost() throws Exception {
         assertEquals("true", invokeIsAgnesTypeChannel("https://example.com", "agnes"));
         assertEquals("true", invokeIsAgnesTypeChannel("https://api.agnes-ai.cn", "openai"));
+        assertEquals("true", invokeIsAgnesTypeChannel("https://apihub.agnes-ai.com", "openai"));
         assertEquals("false", invokeIsAgnesTypeChannel("https://example.com", "openai"));
     }
 
@@ -101,7 +129,11 @@ class ChannelServiceVideoTest {
         assertEquals("https://example.com/metadata.mp4", invokeFindVideoUrl(metadata));
 
         JsonNode remixed = objectMapper.readTree("{\"remixed_from_video_id\":\"legacy-video-id\"}");
-        assertEquals("legacy-video-id", invokeFindVideoUrl(remixed));
+        assertNull(invokeFindVideoUrl(remixed));
+
+        JsonNode invalidDirectUrl = objectMapper.readTree(
+                "{\"url\":\"opaque-video-id\",\"metadata\":{\"url\":\"https://example.com/metadata.mp4\"}}");
+        assertEquals("https://example.com/metadata.mp4", invokeFindVideoUrl(invalidDirectUrl));
     }
 
     @Test
