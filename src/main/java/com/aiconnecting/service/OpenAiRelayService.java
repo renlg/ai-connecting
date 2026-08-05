@@ -47,6 +47,7 @@ public class OpenAiRelayService {
     private final UsageLogService usageLogService;
     private final VideoTaskSettlementService videoTaskSettlementService;
     private final VideoTaskUsageLogService videoTaskUsageLogService;
+    private final OssMediaStorageService ossMediaStorageService;
 
     /**
      * 中转请求 (非流式) - 最多重试 3 次，每次选择不同渠道
@@ -155,6 +156,8 @@ public class OpenAiRelayService {
             int actualCount = countReturnedImages(response);
             BigDecimal finalCost = support.settleImageCharge(ctx, charge, requestBody, actualCount);
             charge = new RelaySupport.MediaCharge(finalCost, charge.deducted());
+            // 计费按上游原始 data 数组长度结算（已在上一行完成），转存 OSS 仅替换地址字段，不影响计费
+            response = ossMediaStorageService.rewriteImageResponse(response);
         }
         long duration = System.currentTimeMillis() - startTime;
         if (isVideo && videoTaskId != null) {
@@ -309,7 +312,10 @@ public class OpenAiRelayService {
         responseObject.put("id", upstreamVideoId);
         responseObject.put("channel_id", channelId);
         try {
-            return new VideoResponseResult(support.objectMapper.writeValueAsString(json), taskId);
+            String normalized = support.objectMapper.writeValueAsString(json);
+            // 极少数上游会同步返回已完成状态并直接携带播放地址，同样需要转存 OSS
+            normalized = ossMediaStorageService.rewriteVideoResponseIfCompleted(normalized);
+            return new VideoResponseResult(normalized, taskId);
         } catch (Exception e) {
             return new VideoResponseResult(response, taskId);
         }
@@ -340,7 +346,8 @@ public class OpenAiRelayService {
             String response = support.forwardGetRequest(channel,
                     support.videoStatusPath(channel, task.getUpstreamId(), task.getModel()));
             settleVideoTaskIfTerminal(task, response);
-            return response;
+            // 结算使用原始上游响应（时长等字段与地址无关），转存 OSS 仅在返回给客户端前重写地址
+            return ossMediaStorageService.rewriteVideoResponseIfCompleted(response);
         } finally {
             videoTaskRepository.releaseClaim(task.getId(), leaseUntil);
         }

@@ -135,6 +135,12 @@ cd web && npm install && npm run dev
 | `CORS_ALLOWED_ORIGINS` | 允许的跨域源（逗号分隔，默认允许所有） | 否 |
 | `TRUSTED_PROXIES` | 信任的代理 IP（逗号分隔，默认 127.0.0.1,::1） | 否 |
 | `ZIPKIN_ENDPOINT` | Zipkin 服务地址 | 否 |
+| `OSS_ENABLED` | 是否将媒体产物（图片/视频）转存至阿里云 OSS（默认 true，关闭则按上游原样透传） | 否 |
+| `OSS_ACCESS_KEY_ID` | 阿里云 OSS AccessKey ID | OSS 功能需要 |
+| `OSS_ACCESS_KEY_SECRET` | 阿里云 OSS AccessKey Secret | OSS 功能需要 |
+| `OSS_BUCKET` | OSS Bucket 名称（默认 renlg） | 否 |
+| `OSS_ENDPOINT` | OSS Endpoint host，不含协议前缀（默认 oss-cn-hangzhou.aliyuncs.com） | 否 |
+| `OSS_PREFIX` | OSS 对象 key 前缀（默认 ai-connect） | 否 |
 
 ## 生产部署
 

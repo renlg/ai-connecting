@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpenAiRelayServiceTest {
 
-    private final OpenAiRelayService service = new OpenAiRelayService(null, null, null, null, null, null);
+    private final OpenAiRelayService service = new OpenAiRelayService(null, null, null, null, null, null, null);
     private final RelaySupport support = new RelaySupport(null, null, null, null, null, null, null, null);
     private final ObjectMapper objectMapper = new ObjectMapper();
 
