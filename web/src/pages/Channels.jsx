@@ -21,6 +21,9 @@ const extractImageSource = (data) => {
 
 const extractVideoSource = (data) => firstString(
   typeof data === 'string' ? data : null,
+  data?.metadata?.url,
+  data?.data?.metadata?.url,
+  data?.video?.metadata?.url,
   data?.url,
   data?.video_url,
   data?.output_url,
@@ -50,7 +53,6 @@ const extractVideoTaskId = (data) => firstString(
 )
 const videoStatus = (data) => String(data?.status || data?.state || data?.data?.status || data?.data?.state || data?.video?.status || '').toLowerCase()
 const isVideoFailed = (status) => ['failed', 'cancelled', 'canceled', 'error'].includes(status)
-const isVideoComplete = (status) => ['completed', 'succeeded', 'success', 'done'].includes(status)
 
 export default function Channels() {
   const [channels, setChannels] = useState([])
@@ -299,16 +301,25 @@ export default function Channels() {
               throw new Error(firstString(currentData?.error?.message, currentData?.data?.error?.message, currentData?.error, currentData?.message) || `视频生成失败 (${status})`)
             }
             mediaUrl = extractVideoSource(currentData)
+            console.debug(`[video test] poll attempt=${attempt + 1} taskId=${taskId} status=${status} urlFound=${!!mediaUrl}`)
+            // 上游 completed 后仍可能需要一段时间才能上传出最终文件（metadata.url 延迟出现），
+            // 因此即使状态已 completed 但尚无 URL 也继续轮询，而不是立即报错或调用不存在的 /content 接口。
             setTestResult(prev => ({ ...prev, duration: Date.now() - startTime, videoStatus: status || 'processing', polling: !mediaUrl, mediaUrl }))
-            if (isVideoComplete(status) && !mediaUrl) {
+          }
+
+          if (!mediaUrl && testRunRef.current === runId) {
+            // 兜底：对不支持 metadata.url 的其它渠道，仍尝试旧的 /content 下载方式
+            try {
               const videoBlob = await downloadChannelTestVideo({ ...values, apiKey, videoId: taskId })
               if (testRunRef.current !== runId) return
               mediaUrl = URL.createObjectURL(videoBlob)
               videoObjectUrlRef.current = mediaUrl
-              setTestResult(prev => ({ ...prev, duration: Date.now() - startTime, videoStatus: status, polling: false, mediaUrl }))
+              setTestResult(prev => ({ ...prev, duration: Date.now() - startTime, videoStatus: 'completed', polling: false, mediaUrl }))
+            } catch (fallbackErr) {
+              console.debug('[video test] fallback content download failed', fallbackErr)
             }
           }
-          if (!mediaUrl) throw new Error('视频生成等待超时，请稍后重试')
+          if (!mediaUrl) throw new Error('上游视频文件尚未就绪，请稍后重试')
         }
         if (testRunRef.current === runId) {
           setTestLoading(false)

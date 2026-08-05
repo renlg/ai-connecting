@@ -341,6 +341,20 @@ public class ChannelService {
                     result.put("dataUrl", "data:" + contentType + ";base64," + Base64.getEncoder().encodeToString(bytes));
                 } else {
                     String responseBody = response.body() != null ? response.body().string() : "";
+                    if ("video".equals(modelType)) {
+                        if (response.isSuccessful()) {
+                            Object parsed = parseTestJsonOrText(responseBody);
+                            String taskId = parsed instanceof JsonNode node
+                                    ? textOrNull(node.path("id")) : null;
+                            String taskStatus = parsed instanceof JsonNode node
+                                    ? textOrNull(node.path("status")) : null;
+                            log.info("video create task response model={} taskId={} status={} httpStatus={}",
+                                    model, taskId, taskStatus, response.code());
+                        } else {
+                            log.info("video create task failed model={} httpStatus={} body={}",
+                                    model, response.code(), abbreviateTestError(responseBody, 500));
+                        }
+                    }
                     if (response.isSuccessful()) {
                         result.put("data", parseTestJsonOrText(responseBody));
                     } else {
@@ -372,34 +386,90 @@ public class ChannelService {
                 result.put("statusCode", response.code());
                 result.put("duration", System.currentTimeMillis() - startTime);
                 if (response.isSuccessful()) {
-                    result.put("data", parseTestJsonOrText(responseBody));
+                    Object parsed = parseTestJsonOrText(responseBody);
+                    result.put("data", parsed);
+                    String status = parsed instanceof JsonNode node ? textOrNull(node.path("status")) : null;
+                    String videoUrl = parsed instanceof JsonNode node ? findVideoUrl(node) : null;
+                    log.info("video status poll videoId={} status={} metadata.url={}",
+                            videoId, status, videoUrl != null ? "found" : "null");
                 } else {
                     result.put("error", abbreviateTestError(responseBody));
+                    log.info("video status poll videoId={} httpStatus={} error", videoId, response.code());
                 }
                 return result;
             }
         } catch (IOException e) {
-            log.error("渠道视频测试轮询失败: {}", e.getMessage());
+            log.error("渠道视频测试轮询失败 videoId={}: {}", videoId, e.getMessage());
             throw new BusinessException("连接上游失败: " + e.getMessage());
         }
     }
 
-    /** 获取已完成视频的二进制内容；与状态轮询一样只在服务端使用渠道凭据。 */
+    private static final int VIDEO_CONTENT_MAX_ATTEMPTS = 5;
+    private static final long VIDEO_CONTENT_RETRY_DELAY_MS = 3000;
+
+    /**
+     * 获取已完成视频的二进制内容。Agnes 上游没有 /v1/videos/{id}/content 端点，播放地址只会出现在
+     * 任务状态响应的 metadata.url 中，且可能在 status=completed 之后仍需等待上游异步上传文件，
+     * 因此这里改为轮询状态接口拿到 metadata.url 后再下载该地址。
+     */
     public TestMediaContent testVideoContent(Map<String, String> request) {
         String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key");
         String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key");
+        String channelType = request.get("type");
         String videoId = requireVideoId(request);
         validateBaseUrlForSsrf(baseUrl);
+
+        String videoUrl = null;
+        for (int attempt = 1; attempt <= VIDEO_CONTENT_MAX_ATTEMPTS; attempt++) {
+            Request statusRequest = buildTestRequest(baseUrl, apiKey, channelType,
+                    "/v1/videos/" + videoId, null, true);
+            try (Response response = streamHttpClient.newCall(statusRequest).execute()) {
+                String body = response.body() != null ? response.body().string() : "";
+                if (response.isSuccessful()) {
+                    JsonNode json = objectMapper.readTree(body);
+                    videoUrl = findVideoUrl(json);
+                } else {
+                    log.info("video content retry #{} videoId={} query GET /v1/videos/{} failed httpStatus={} body={}",
+                            attempt, videoId, videoId, response.code(), abbreviateTestError(body, 500));
+                }
+            } catch (IOException e) {
+                log.warn("video content retry #{} videoId={} query error: {}", attempt, videoId, e.getMessage());
+            }
+
+            log.info("video content retry #{} videoId={} status=queried metadata.url={}",
+                    attempt, videoId, videoUrl != null ? "found" : "null");
+
+            if (videoUrl != null && !videoUrl.isBlank()) {
+                break;
+            }
+            if (attempt < VIDEO_CONTENT_MAX_ATTEMPTS) {
+                try {
+                    Thread.sleep(VIDEO_CONTENT_RETRY_DELAY_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+
+        if (videoUrl == null || videoUrl.isBlank()) {
+            log.warn("video content videoId={} exhausted {} attempts without metadata.url",
+                    videoId, VIDEO_CONTENT_MAX_ATTEMPTS);
+            throw new BusinessException(504, "上游视频文件尚未就绪，请稍后重试");
+        }
+
         try {
-            Request upstreamRequest = buildTestRequest(baseUrl, apiKey, request.get("type"),
-                    "/v1/videos/" + videoId + "/content", null, true);
-            try (Response response = streamHttpClient.newCall(upstreamRequest).execute()) {
+            Request.Builder downloadBuilder = new Request.Builder().url(videoUrl).get();
+            addAuthHeader(downloadBuilder, apiKey, channelType);
+            try (Response response = streamHttpClient.newCall(downloadBuilder.build()).execute()) {
+                log.info("video content download videoId={} url={} httpStatus={}", videoId, videoUrl, response.code());
                 if (!response.isSuccessful()) {
                     String body = response.body() != null ? response.body().string() : "";
                     throw new BusinessException(response.code(),
                             "上游视频内容下载失败: " + abbreviateTestError(body));
                 }
                 byte[] bytes = response.body() != null ? response.body().bytes() : new byte[0];
+                log.info("video content download videoId={} bytes={}", videoId, bytes.length);
                 if (bytes.length == 0) {
                     throw new BusinessException(502, "上游返回了空的视频内容");
                 }
@@ -407,7 +477,7 @@ public class ChannelService {
                 return new TestMediaContent(bytes, contentType);
             }
         } catch (IOException e) {
-            log.error("渠道视频测试内容下载失败: {}", e.getMessage());
+            log.error("渠道视频测试内容下载失败 videoId={}: {}", videoId, e.getMessage());
             throw new BusinessException("连接上游失败: " + e.getMessage());
         }
     }
@@ -425,14 +495,36 @@ public class ChannelService {
     private Request buildTestRequest(String baseUrl, String apiKey, String channelType,
                                      String path, String jsonBody, boolean get) {
         Request.Builder builder = new Request.Builder().url(baseUrl.replaceAll("/+$", "") + path);
+        addAuthHeader(builder, apiKey, channelType);
+        if (get) return builder.get().build();
+        return builder.addHeader("Content-Type", "application/json")
+                .post(RequestBody.create(jsonBody, MediaType.parse("application/json"))).build();
+    }
+
+    private void addAuthHeader(Request.Builder builder, String apiKey, String channelType) {
         if ("claude".equalsIgnoreCase(channelType) || "anthropic".equalsIgnoreCase(channelType)) {
             builder.addHeader("x-api-key", apiKey).addHeader("anthropic-version", "2023-06-01");
         } else {
             builder.addHeader("Authorization", "Bearer " + apiKey);
         }
-        if (get) return builder.get().build();
-        return builder.addHeader("Content-Type", "application/json")
-                .post(RequestBody.create(jsonBody, MediaType.parse("application/json"))).build();
+    }
+
+    /**
+     * 从视频任务状态响应中提取上游产出的最终地址，字段可能出现在顶层 metadata.url 或
+     * data.metadata.url / video.metadata.url 等嵌套位置，需要防御性解析。
+     */
+    private String findVideoUrl(JsonNode json) {
+        if (json == null) return null;
+        String url = textOrNull(json.path("metadata").path("url"));
+        if (url != null) return url;
+        url = textOrNull(json.path("data").path("metadata").path("url"));
+        if (url != null) return url;
+        url = textOrNull(json.path("video").path("metadata").path("url"));
+        return url;
+    }
+
+    private String textOrNull(JsonNode node) {
+        return (node != null && node.isTextual() && !node.asText().isBlank()) ? node.asText() : null;
     }
 
     private String requireTestValue(Map<String, String> request, String key, String error) {
@@ -442,7 +534,12 @@ public class ChannelService {
     }
 
     private String abbreviateTestError(String body) {
-        return body.length() > 1000 ? body.substring(0, 1000) : body;
+        return abbreviateTestError(body, 1000);
+    }
+
+    private String abbreviateTestError(String body, int maxLength) {
+        if (body == null) return "";
+        return body.length() > maxLength ? body.substring(0, maxLength) : body;
     }
 
     private Object parseTestJsonOrText(String body) {
