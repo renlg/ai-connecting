@@ -188,6 +188,11 @@ CREATE TABLE IF NOT EXISTS "video_tasks" (
     channel_id BIGINT NOT NULL,
     user_id BIGINT NOT NULL,
     model VARCHAR(100),
+    prepaid_cost DECIMAL(10,2),
+    deducted BOOLEAN NOT NULL DEFAULT 0,
+    size VARCHAR(50),
+    duration_seconds INTEGER,
+    settled BOOLEAN NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL
 );
 

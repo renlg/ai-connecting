@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -29,8 +30,12 @@ public class ChannelController {
     private final ChannelHealthTracker channelHealthTracker;
 
     @GetMapping
-    public ApiResponse<List<ChannelResponse>> list() {
-        return ApiResponse.success(channelService.listAll().stream()
+    public ApiResponse<List<ChannelResponse>> list(@RequestParam(required = false) String name,
+                                                     @RequestParam(required = false) String modelIds) {
+        List<String> modelIdList = (modelIds == null || modelIds.isBlank())
+                ? null
+                : Arrays.stream(modelIds.split(",")).map(String::trim).filter(s -> !s.isEmpty()).collect(Collectors.toList());
+        return ApiResponse.success(channelService.listAll(name, modelIdList).stream()
                 .map(ChannelResponse::fromChannel)
                 .collect(Collectors.toList()));
     }

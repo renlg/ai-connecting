@@ -36,7 +36,7 @@ export const changePassword = (data) => api.put('/api/user/password', data);
 export const getInviteCode = () => api.get('/api/user/invite-code');
 
 // Channels (Admin)
-export const getChannels = () => api.get('/api/admin/channels');
+export const getChannels = (params) => api.get('/api/admin/channels', { params });
 export const createChannel = (data) => api.post('/api/admin/channels', data);
 export const updateChannel = (id, data) => api.put(`/api/admin/channels/${id}`, data);
 export const deleteChannel = (id) => api.delete(`/api/admin/channels/${id}`);

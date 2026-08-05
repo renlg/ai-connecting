@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Tooltip, Checkbox } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined, CopyOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined, CopyOutlined, SearchOutlined } from '@ant-design/icons'
 import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, getChannelHealth, unblockChannel, getChannelApiKey } from '../api'
 
 const CB_STATE_COLOR = { CLOSED: 'green', HALF_OPEN: 'gold', OPEN: 'red' }
@@ -27,11 +27,18 @@ export default function Channels() {
   const [showBlockedOnly, setShowBlockedOnly] = useState(false)
   const [revealedKeys, setRevealedKeys] = useState({})
   const [copyingId, setCopyingId] = useState(null)
+  const [searchName, setSearchName] = useState('')
+  const [searchModelIds, setSearchModelIds] = useState([])
 
 
-  const load = () => {
+  const load = (filters) => {
     setLoading(true)
-    getChannels().then(res => {
+    const params = {}
+    const name = filters?.name
+    const modelIds = filters?.modelIds
+    if (name) params.name = name
+    if (modelIds && modelIds.length > 0) params.modelIds = modelIds.join(',')
+    getChannels(params).then(res => {
       if (res.code === 200) setChannels(res.data || [])
     }).finally(() => setLoading(false))
   }
@@ -248,6 +255,16 @@ export default function Channels() {
     load()
   }
 
+  const handleSearchName = (value) => {
+    setSearchName(value)
+    load({ name: value || undefined, modelIds: searchModelIds })
+  }
+
+  const handleSearchModelIds = (values) => {
+    setSearchModelIds(values)
+    load({ name: searchName || undefined, modelIds: values })
+  }
+
   const handleDelete = async (id) => {
     await deleteChannel(id)
     message.success('删除成功')
@@ -363,6 +380,28 @@ export default function Channels() {
         <h2>渠道管理</h2>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true) }}>新增渠道</Button>
       </div>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Input.Search
+          placeholder="按名称模糊搜索"
+          allowClear
+          onSearch={handleSearchName}
+          style={{ width: 240 }}
+          prefix={<SearchOutlined />}
+        />
+        <Select
+          mode="multiple"
+          placeholder="按模型搜索（可多选）"
+          allowClear
+          value={searchModelIds}
+          onChange={handleSearchModelIds}
+          options={allLocalModels.map(m => ({
+            value: String(m.id),
+            label: m.displayName ? `${m.name}（${m.displayName}）` : m.name
+          }))}
+          style={{ minWidth: 300 }}
+          filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+        />
+      </Space>
       <Table columns={columns} dataSource={channels} rowKey="id" loading={loading} scroll={{ x: 1100 }} />
       <Modal
         title={editing ? '编辑渠道' : '新增渠道'}

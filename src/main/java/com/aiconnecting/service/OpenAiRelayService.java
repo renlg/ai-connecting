@@ -109,7 +109,9 @@ public class OpenAiRelayService {
     public String relayMediaRequest(String tokenKey, String path, String requestBody,
                                     String model, HttpServletRequest httpRequest, String mediaType) {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model, mediaType);
-        RelaySupport.MediaCharge charge = support.prepareMediaCharge(ctx, requestBody);
+        boolean isVideo = "video".equals(mediaType);
+        RelaySupport.VideoChargeInfo videoChargeInfo = isVideo ? support.prepareVideoCharge(ctx, requestBody) : null;
+        RelaySupport.MediaCharge charge = isVideo ? videoChargeInfo.charge() : support.prepareMediaCharge(ctx, requestBody);
 
         long startTime = System.currentTimeMillis();
         ChannelResult<String> result;
@@ -121,9 +123,9 @@ public class OpenAiRelayService {
         }
 
         String response = result.value();
-        if ("video".equals(mediaType)) {
+        if (isVideo) {
             try {
-                response = handleVideoResponse(response, result.channel().getId(), ctx.token().getUserId(), model);
+                response = handleVideoResponse(response, result.channel().getId(), ctx.token().getUserId(), model, videoChargeInfo);
             } catch (RuntimeException e) {
                 // 响应无效或任务映射保存失败时客户端拿到的 id 将无法轮询，
                 // 退回预扣并报错，不返回不可轮询的任务结果；退款状态如实反馈给客户端
@@ -134,10 +136,28 @@ public class OpenAiRelayService {
                 }
                 throw e;
             }
+        } else if ("image".equals(mediaType)) {
+            int actualCount = countReturnedImages(response);
+            BigDecimal finalCost = support.settleImageCharge(ctx, charge, requestBody, actualCount);
+            charge = new RelaySupport.MediaCharge(finalCost, charge.deducted());
         }
         long duration = System.currentTimeMillis() - startTime;
         recordPrepaidUsageSafely(ctx.token(), result.channel(), model, charge, duration, httpRequest, path);
         return response;
+    }
+
+    /**
+     * 统计图片响应中实际返回的图片数量（data 数组长度）；响应缺少 data 数组或解析失败按 0 张计（全额退回）
+     */
+    private int countReturnedImages(String response) {
+        try {
+            JsonNode json = support.objectMapper.readTree(response);
+            JsonNode data = json.get("data");
+            return data != null && data.isArray() ? data.size() : 0;
+        } catch (Exception e) {
+            log.warn("图片响应解析失败，按 0 张返回结算（全额退回预扣积分）: {}", e.getMessage());
+            return 0;
+        }
     }
 
     /** 上游成功转发的结果及所用渠道 */
@@ -210,7 +230,8 @@ public class OpenAiRelayService {
      * 响应非法 JSON、缺少可用 id 或映射保存失败均抛错（由调用方退回预扣积分并如实反馈退款状态），
      * 绝不向已付费的客户端返回无法轮询的任务结果
      */
-    private String handleVideoResponse(String response, Long channelId, Long userId, String model) {
+    private String handleVideoResponse(String response, Long channelId, Long userId, String model,
+                                       RelaySupport.VideoChargeInfo videoChargeInfo) {
         JsonNode json;
         try {
             json = support.objectMapper.readTree(response);
@@ -229,6 +250,11 @@ public class OpenAiRelayService {
                     .channelId(channelId)
                     .userId(userId)
                     .model(model)
+                    .prepaidCost(videoChargeInfo.charge().cost())
+                    .deducted(videoChargeInfo.charge().deducted())
+                    .size(videoChargeInfo.size())
+                    .durationSeconds(videoChargeInfo.durationSeconds())
+                    .settled(false)
                     .build());
         } catch (Exception e) {
             log.error("视频任务映射保存失败: upstreamId={}", json.get("id").asText(), e);
@@ -244,7 +270,9 @@ public class OpenAiRelayService {
 
     /**
      * 视频任务状态查询：按上游任务 id 找到当初处理该任务的渠道，
-     * 用渠道自身凭据向上游转发查询并透传结果；仅任务发起用户可查询
+     * 用渠道自身凭据向上游转发查询并透传结果；仅任务发起用户可查询。
+     * 任务到达终态（failed/completed）时结算预扣积分，结算通过 settled 标志位保证
+     * 在重复轮询下的幂等性，绝不重复退款/结算
      */
     public String relayVideoStatusRequest(String tokenKey, String videoId) {
         Token token = support.validateToken(tokenKey);
@@ -255,7 +283,94 @@ public class OpenAiRelayService {
                 .findFirstByUpstreamIdAndUserIdOrderByCreatedAtDesc(videoId, token.getUserId())
                 .orElseThrow(() -> new BusinessException(404, "视频任务不存在: " + videoId));
         Channel channel = channelService.getById(task.getChannelId());
-        return support.forwardGetRequest(channel, "/v1/videos/" + videoId);
+        String response = support.forwardGetRequest(channel, "/v1/videos/" + videoId);
+        settleVideoTaskIfTerminal(task, response);
+        return response;
+    }
+
+    private static final Set<String> VIDEO_FAILED_STATUSES = Set.of("failed", "cancelled", "canceled");
+    private static final Set<String> VIDEO_COMPLETED_STATUSES = Set.of("completed", "succeeded");
+
+    /**
+     * 视频任务终态计费结算：failed 退回预扣积分；completed 按实际时长（若上游暴露）多退少补，
+     * 否则保持预扣金额。settled 标志位通过数据库原子更新保证并发/重复轮询下只结算一次，
+     * 结算过程中的任何异常都不向客户端抛出，不影响状态透传
+     */
+    private void settleVideoTaskIfTerminal(VideoTask task, String response) {
+        if (task.isSettled()) {
+            return;
+        }
+        String status;
+        JsonNode json;
+        try {
+            json = support.objectMapper.readTree(response);
+            status = json.isObject() && json.hasNonNull("status") ? json.get("status").asText() : null;
+        } catch (Exception e) {
+            return;
+        }
+        if (status == null) {
+            return;
+        }
+        boolean failed = VIDEO_FAILED_STATUSES.contains(status);
+        boolean completed = VIDEO_COMPLETED_STATUSES.contains(status);
+        if (!failed && !completed) {
+            return;
+        }
+        // 原子置位，防止并发/重复轮询重复退款或重复结算
+        if (videoTaskRepository.markSettled(task.getId()) == 0) {
+            return;
+        }
+        try {
+            RelaySupport.MediaCharge charge = new RelaySupport.MediaCharge(
+                    task.getPrepaidCost() != null ? task.getPrepaidCost() : BigDecimal.ZERO, task.isDeducted());
+            if (failed) {
+                boolean refunded = support.refundMediaCharge(task.getUserId(), charge);
+                if (!refunded) {
+                    log.error("MANUAL_COMPENSATION_REQUIRED 视频任务失败退款失败，需人工补偿: taskId={}, upstreamId={}, userId={}, amount={}",
+                            task.getId(), task.getUpstreamId(), task.getUserId(), charge.cost());
+                }
+                return;
+            }
+            // completed：仅当上游暴露实际时长字段时才据此结算，否则保持预扣金额（并记录说明）
+            Integer actualSeconds = extractActualVideoDurationSeconds(json);
+            if (actualSeconds == null) {
+                log.warn("上游视频响应未暴露可用于结算的实际时长字段，按预扣金额 {} 保持计费: taskId={}, upstreamId={}",
+                        charge.cost(), task.getId(), task.getUpstreamId());
+                return;
+            }
+            com.aiconnecting.entity.ModelConfig config = support.findModelConfigCached(task.getModel());
+            if (config == null) {
+                log.error("视频任务结算失败：模型配置不存在，按预扣金额保持计费: model={}, taskId={}", task.getModel(), task.getId());
+                return;
+            }
+            BigDecimal actualCost = usageLogService.calculateVideoCreditCost(config, task.getSize(), actualSeconds);
+            support.settleMediaCharge(task.getUserId(), charge, actualCost);
+        } catch (Exception e) {
+            log.error("视频任务终态结算异常，按预扣金额保持计费: taskId={}, upstreamId={}", task.getId(), task.getUpstreamId(), e);
+        }
+    }
+
+    /**
+     * 尝试从上游视频任务响应中提取实际生成时长（秒）。目前主流上游（如 OpenAI Sora 系列）
+     * 的任务对象仅回显请求时的 seconds/size 等参数，不单独暴露“实际生成时长”这一指标；
+     * 这里按尽力而为的方式尝试若干常见字段名，均未命中时返回 null，
+     * 由调用方保持预扣金额计费（见 {@link #settleVideoTaskIfTerminal} 中的说明日志）
+     */
+    private Integer extractActualVideoDurationSeconds(JsonNode json) {
+        for (String field : new String[]{"actual_seconds", "actual_duration", "actual_duration_seconds", "real_seconds"}) {
+            JsonNode node = json.get(field);
+            if (node != null && node.isNumber() && node.asDouble() > 0) {
+                return (int) Math.ceil(node.asDouble());
+            }
+        }
+        JsonNode video = json.get("video");
+        if (video != null && video.isObject()) {
+            JsonNode d = video.get("duration");
+            if (d != null && d.isNumber() && d.asDouble() > 0) {
+                return (int) Math.ceil(d.asDouble());
+            }
+        }
+        return null;
     }
 
     // ==================== 音频中转 ====================

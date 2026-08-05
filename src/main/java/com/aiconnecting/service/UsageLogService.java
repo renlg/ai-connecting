@@ -228,6 +228,13 @@ public class UsageLogService {
      * size 缺省时按 {@link #DEFAULT_IMAGE_SIZE} 计；无法识别的 size 直接拒绝，不允许按低档位漏计费。
      */
     public BigDecimal calculateImageCreditCost(com.aiconnecting.entity.ModelConfig config, String size, int n) {
+        return resolveImageUnitPrice(config, size).multiply(BigDecimal.valueOf(Math.max(n, 1)));
+    }
+
+    /**
+     * 解析图片单张单价（按分辨率档位），供按实际返回张数结算时重新计价
+     */
+    public BigDecimal resolveImageUnitPrice(com.aiconnecting.entity.ModelConfig config, String size) {
         String tier = resolveImageTier(size == null || size.isBlank() ? DEFAULT_IMAGE_SIZE : size);
         if (tier == null) {
             throw new BusinessException(400, "不支持的图片分辨率: " + size + "，请使用如 1024x1024 的宽x高格式");
@@ -237,8 +244,7 @@ public class UsageLogService {
             case "4K" -> config.getImagePrice4k();
             default -> config.getImagePrice1k();
         };
-        if (price == null) price = BigDecimal.ZERO;
-        return price.multiply(BigDecimal.valueOf(Math.max(n, 1)));
+        return price != null ? price : BigDecimal.ZERO;
     }
 
     /**

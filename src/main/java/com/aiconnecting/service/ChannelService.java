@@ -20,10 +20,13 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -140,6 +143,29 @@ public class ChannelService {
 
     public List<Channel> listAll() {
         return channelRepository.findAllOrderByUpdatedAtDesc();
+    }
+
+    /**
+     * 按名称模糊搜索 + 按模型多选过滤（渠道支持所选模型中的任意一个即匹配）
+     */
+    public List<Channel> listAll(String name, List<String> modelIds) {
+        List<Channel> channels = (name != null && !name.isBlank())
+                ? channelRepository.searchByName(name.trim())
+                : channelRepository.findAllOrderByUpdatedAtDesc();
+        if (modelIds != null && !modelIds.isEmpty()) {
+            channels = channels.stream()
+                    .filter(c -> supportsAnyModel(c.getModelIds(), modelIds))
+                    .collect(Collectors.toList());
+        }
+        return channels;
+    }
+
+    private boolean supportsAnyModel(String channelModelIds, List<String> modelIds) {
+        if (channelModelIds == null || channelModelIds.isBlank()) return false;
+        Set<String> supported = Arrays.stream(channelModelIds.split(","))
+                .map(String::trim)
+                .collect(Collectors.toSet());
+        return modelIds.stream().anyMatch(supported::contains);
     }
 
     public Channel getById(Long id) {
