@@ -54,6 +54,18 @@ public class UsageLogService {
         }
     }
 
+    /** 仪表盘每日统计缓存，避免用户来回切换天数时重复全表 JOIN，缓存 30 秒 */
+    private final ConcurrentHashMap<DailyStatsCacheKey, CachedDailyStats> dailyStatsCache = new ConcurrentHashMap<>();
+    private static final long DAILY_STATS_CACHE_TTL_MS = 30 * 1000L;
+
+    private record DailyStatsCacheKey(boolean isAdmin, List<Long> tokenIds, int days) {}
+
+    private record CachedDailyStats(DashboardDailyStats stats, long cachedAt) {
+        boolean isExpired() {
+            return System.currentTimeMillis() - cachedAt > DAILY_STATS_CACHE_TTL_MS;
+        }
+    }
+
     public Long getTotalTokensSince(LocalDateTime since) {
         Long result = usageLogRepository.sumTotalTokensSince(since);
         return result != null ? result : 0L;
@@ -415,6 +427,12 @@ public class UsageLogService {
             }
         }
 
+        DailyStatsCacheKey cacheKey = new DailyStatsCacheKey(isAdmin, tokenIds, days);
+        CachedDailyStats cached = dailyStatsCache.get(cacheKey);
+        if (cached != null && !cached.isExpired()) {
+            return cached.stats();
+        }
+
         // 每日积分消耗 —— admin 从 usage_stats 汇总表读取，用户从 usage_logs 读取
         List<Object[]> creditRows;
         if (isAdmin) {
@@ -470,10 +488,12 @@ public class UsageLogService {
                 })
                 .toList();
 
-        return DashboardDailyStats.builder()
+        DashboardDailyStats stats = DashboardDailyStats.builder()
                 .dailyCredits(dailyCredits)
                 .dailyTokensByModel(dailyTokensByModel)
                 .build();
+        dailyStatsCache.put(cacheKey, new CachedDailyStats(stats, System.currentTimeMillis()));
+        return stats;
     }
 
     private static Map<String, BigDecimal> defaultCreditsByType() {

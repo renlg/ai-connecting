@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS "model_configs" (
     updated_at TIMESTAMP
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_configs_name ON model_configs (name);
+
 -- 使用记录表
 CREATE TABLE IF NOT EXISTS "usage_logs" (
     id INTEGER PRIMARY KEY,
@@ -113,6 +115,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_logs_token_id ON usage_logs (token_id);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_channel_id ON usage_logs (channel_id);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs (created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_token_created ON usage_logs (token_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_model_created ON usage_logs (model, created_at);
 
 -- 使用统计汇总表（15分钟预聚合）
 CREATE TABLE IF NOT EXISTS "usage_stats" (
