@@ -55,23 +55,32 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
             "ORDER BY created_at DESC", nativeQuery = true)
     List<Object[]> findLogDetailsByTokenIdAndDate(Long tokenId, String date);
 
-    // Dashboard 聚合查询：一次查询获取所有指标
-    @Query("SELECT COALESCE(COUNT(u), 0), COALESCE(SUM(u.totalTokens), 0), " +
-           "COALESCE(SUM(u.promptTokens), 0), COALESCE(SUM(u.completionTokens), 0), COALESCE(SUM(u.creditCost), 0.0), " +
-           "COALESCE(SUM(u.promptTokensCacheHit), 0) " +
-           "FROM UsageLog u WHERE u.tokenId IN :tokenIds")
+    // Dashboard 聚合查询：一次查询获取所有指标（Token 相关列仅统计 text 类型模型，请求数/积分不受影响）
+    @Query(value = "SELECT COALESCE(COUNT(*), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN total_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN completion_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(credit_cost), 0.0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens_cache_hit ELSE 0 END), 0) " +
+            "FROM usage_logs WHERE token_id IN :tokenIds", nativeQuery = true)
     List<Object[]> sumAllMetricsByTokenIds(@Param("tokenIds") List<Long> tokenIds);
 
-    @Query("SELECT COALESCE(COUNT(u), 0), COALESCE(SUM(u.totalTokens), 0), " +
-           "COALESCE(SUM(u.promptTokens), 0), COALESCE(SUM(u.completionTokens), 0), COALESCE(SUM(u.creditCost), 0.0), " +
-           "COALESCE(SUM(u.promptTokensCacheHit), 0) " +
-           "FROM UsageLog u WHERE u.tokenId IN :tokenIds AND u.createdAt >= :since")
+    @Query(value = "SELECT COALESCE(COUNT(*), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN total_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN completion_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(credit_cost), 0.0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens_cache_hit ELSE 0 END), 0) " +
+            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since", nativeQuery = true)
     List<Object[]> sumAllMetricsByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
     @Query("SELECT COALESCE(SUM(u.cachedTokensCacheCreation), 0), COALESCE(SUM(u.cachedTokensCacheRead), 0) FROM UsageLog u WHERE u.tokenId IN :tokenIds")
     List<Object[]> sumCacheTokensByTokenIds(@Param("tokenIds") List<Long> tokenIds);
 
-    @Query("SELECT COALESCE(SUM(u.cachedTokensCacheCreation), 0), COALESCE(SUM(u.cachedTokensCacheRead), 0) FROM UsageLog u WHERE u.tokenId IN :tokenIds AND u.createdAt >= :since")
+    // 仅统计 text 类型模型的缓存创建/读取 Token（用于仪表盘）
+    @Query(value = "SELECT COALESCE(SUM(cached_tokens_cache_creation), 0), COALESCE(SUM(cached_tokens_cache_read), 0) " +
+            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since " +
+            "AND model IN (SELECT name FROM model_configs WHERE type = 'text')", nativeQuery = true)
     List<Object[]> sumCacheTokensByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
     @Query("SELECT COALESCE(SUM(u.cachedTokensCacheCreation), 0), COALESCE(SUM(u.cachedTokensCacheRead), 0) FROM UsageLog u")
@@ -92,32 +101,36 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
             "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since GROUP BY date ORDER BY date ASC", nativeQuery = true)
     List<Object[]> findDailyCreditCostByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
-    // 全局每日按模型统计 token 数
+    // 全局每日按模型统计 token 数（仅 text 类型模型，用于仪表盘按模型柱状图）
     @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, " +
             "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) " +
-            "FROM usage_logs WHERE created_at >= :since GROUP BY date, model ORDER BY date ASC, model ASC", nativeQuery = true)
+            "FROM usage_logs WHERE created_at >= :since AND model IN (SELECT name FROM model_configs WHERE type = 'text') " +
+            "GROUP BY date, model ORDER BY date ASC, model ASC", nativeQuery = true)
     List<Object[]> findDailyTokenByModelSince(@Param("since") LocalDateTime since);
 
-    // 按 Token ID 列表统计每日按模型 token 数
+    // 按 Token ID 列表统计每日按模型 token 数（仅 text 类型模型，用于仪表盘按模型柱状图）
     @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, " +
             "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) " +
-            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since GROUP BY date, model ORDER BY date ASC, model ASC", nativeQuery = true)
+            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since " +
+            "AND model IN (SELECT name FROM model_configs WHERE type = 'text') " +
+            "GROUP BY date, model ORDER BY date ASC, model ASC", nativeQuery = true)
     List<Object[]> findDailyTokenByModelByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
     // ========== 汇总表聚合查询 ==========
 
     /**
      * 聚合指定时间窗口内的所有指标（供 StatsAggregationService 使用）
+     * Token 相关列仅统计 text 类型模型，请求数/积分消耗不受模型类型影响
      */
     @Query(value = "SELECT " +
             "COALESCE(COUNT(*), 0), " +
-            "COALESCE(SUM(total_tokens), 0), " +
-            "COALESCE(SUM(prompt_tokens), 0), " +
-            "COALESCE(SUM(completion_tokens), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN total_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN completion_tokens ELSE 0 END), 0), " +
             "COALESCE(SUM(credit_cost), 0.0), " +
-            "COALESCE(SUM(prompt_tokens_cache_hit), 0), " +
-            "COALESCE(SUM(cached_tokens_cache_creation), 0), " +
-            "COALESCE(SUM(cached_tokens_cache_read), 0) " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens_cache_hit ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN cached_tokens_cache_creation ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN cached_tokens_cache_read ELSE 0 END), 0) " +
             "FROM usage_logs WHERE created_at >= :startTime AND created_at < :endTime", nativeQuery = true)
     List<Object[]> aggregateWindow(@Param("startTime") LocalDateTime startTime, @Param("endTime") LocalDateTime endTime);
 
@@ -133,13 +146,13 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
      */
     @Query(value = "SELECT " +
             "COALESCE(COUNT(*), 0), " +
-            "COALESCE(SUM(total_tokens), 0), " +
-            "COALESCE(SUM(prompt_tokens), 0), " +
-            "COALESCE(SUM(completion_tokens), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN total_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN completion_tokens ELSE 0 END), 0), " +
             "COALESCE(SUM(credit_cost), 0.0), " +
-            "COALESCE(SUM(prompt_tokens_cache_hit), 0), " +
-            "COALESCE(SUM(cached_tokens_cache_creation), 0), " +
-            "COALESCE(SUM(cached_tokens_cache_read), 0) " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens_cache_hit ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN cached_tokens_cache_creation ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN cached_tokens_cache_read ELSE 0 END), 0) " +
             "FROM usage_logs WHERE created_at >= :since", nativeQuery = true)
     List<Object[]> aggregateSince(@Param("since") LocalDateTime since);
 }
