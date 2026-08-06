@@ -46,7 +46,7 @@ export default function Login() {
   }
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#f0f2f5' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: '#f0f2f5' }}>
       <Card style={{ width: 420, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
           <Title level={3} style={{ marginBottom: 4 }}>AI Connecting</Title>
@@ -101,6 +101,22 @@ export default function Login() {
           ]}
         />
       </Card>
+      <div style={{
+        textAlign: 'center',
+        padding: '12px 0',
+        fontSize: 13,
+        color: '#999',
+        marginTop: 8,
+      }}>
+        <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer" style={{ color: '#999', textDecoration: 'none' }}>
+          浙ICP备2024089954号
+        </a>
+        {' '}&nbsp;{' '}
+        <a href="http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=33011002020003" target="_blank" rel="noopener noreferrer" style={{ color: '#999', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <img src="/beian.png" style={{ width: 16, height: 16 }} alt="" />
+          浙公网安备33011002020003号
+        </a>
+      </div>
     </div>
   )
 }

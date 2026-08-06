@@ -184,6 +184,23 @@ export default function AppLayout() {
         <Content style={{ margin: '24px 16px', padding: 24, background: themeToken.colorBgContainer, borderRadius: themeToken.borderRadiusLG, minHeight: 280 }}>
           <Outlet />
         </Content>
+        <div style={{
+          textAlign: 'center',
+          padding: '12px 24px',
+          fontSize: 13,
+          color: '#999',
+          borderTop: '1px solid #f0f0f0',
+          background: '#fafafa',
+        }}>
+          <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer" style={{ color: '#999', textDecoration: 'none' }}>
+            浙ICP备2024089954号
+          </a>
+          {' '}&nbsp;{' '}
+          <a href="http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=33011002020003" target="_blank" rel="noopener noreferrer" style={{ color: '#999', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <img src="/beian.png" style={{ width: 16, height: 16 }} alt="" />
+            浙公网安备33011002020003号
+          </a>
+        </div>
       </Layout>
       <Modal
         title="积分兑换"
