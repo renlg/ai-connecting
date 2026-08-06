@@ -60,6 +60,7 @@ export default function Dashboard() {
   const [dailyStatsLoading, setDailyStatsLoading] = useState(true)
   const [days, setDays] = useState(7)
   const dailyStatsCacheRef = useRef({})
+  const dailyStatsRequestIdRef = useRef(0)
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const isAdmin = user.role === 'admin'
 
@@ -70,18 +71,25 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
+    const requestId = ++dailyStatsRequestIdRef.current
     const cached = dailyStatsCacheRef.current[days]
     if (cached && Date.now() - cached.cachedAt < DAILY_STATS_CACHE_TTL_MS) {
       setDailyStats(cached.data)
+      setDailyStatsLoading(false)
       return
     }
     setDailyStatsLoading(true)
     getDailyStats(days).then(res => {
+      if (requestId !== dailyStatsRequestIdRef.current) return // 已被后续切换取代，丢弃过期响应
       if (res.code === 200) {
         setDailyStats(res.data)
         dailyStatsCacheRef.current[days] = { data: res.data, cachedAt: Date.now() }
       }
-    }).catch(() => message.error('加载每日统计数据失败')).finally(() => setDailyStatsLoading(false))
+    }).catch(() => {
+      if (requestId === dailyStatsRequestIdRef.current) message.error('加载每日统计数据失败')
+    }).finally(() => {
+      if (requestId === dailyStatsRequestIdRef.current) setDailyStatsLoading(false)
+    })
   }, [days])
 
   const { chartData: tokenChartData, models } = useMemo(() => buildTokenChartData(dailyStats), [dailyStats])

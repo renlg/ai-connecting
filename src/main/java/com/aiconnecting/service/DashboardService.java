@@ -39,8 +39,10 @@ public class DashboardService {
     /** 仪表盘统计缓存，避免每次请求都跑 5 条 SQL，缓存 45 秒 */
     private final ConcurrentHashMap<DashboardCacheKey, CachedDashboardStats> dashboardCache = new ConcurrentHashMap<>();
     private static final long DASHBOARD_CACHE_TTL_MS = 45 * 1000L;
+    /** 缓存条目上限，超出后整体清空，避免无界增长 */
+    private static final int DASHBOARD_CACHE_MAX_ENTRIES = 1000;
 
-    private record DashboardCacheKey(boolean isAdmin, List<Long> tokenIds) {}
+    private record DashboardCacheKey(boolean isAdmin, Long userId, List<Long> tokenIds) {}
 
     private record CachedDashboardStats(DashboardStats stats, long cachedAt) {
         boolean isExpired() {
@@ -53,9 +55,15 @@ public class DashboardService {
      */
     public DashboardStats buildDashboardStats(User currentUser) {
         boolean isAdmin = "admin".equalsIgnoreCase(currentUser.getRole());
-        DashboardCacheKey cacheKey = isAdmin
-                ? new DashboardCacheKey(true, null)
-                : new DashboardCacheKey(false, tokenService.getUserTokenIds(currentUser.getId()));
+        DashboardCacheKey cacheKey;
+        if (isAdmin) {
+            cacheKey = new DashboardCacheKey(true, null, null);
+        } else {
+            // 缓存内容包含 myCredits 等用户私有数据，key 必须绑定 userId，避免跨用户串数据
+            List<Long> tokenIds = tokenService.getUserTokenIds(currentUser.getId()).stream()
+                    .distinct().sorted().toList();
+            cacheKey = new DashboardCacheKey(false, currentUser.getId(), tokenIds);
+        }
 
         CachedDashboardStats cached = dashboardCache.get(cacheKey);
         if (cached != null && !cached.isExpired()) {
@@ -63,6 +71,9 @@ public class DashboardService {
         }
 
         DashboardStats stats = isAdmin ? buildAdminStats() : buildUserStats(currentUser);
+        if (dashboardCache.size() >= DASHBOARD_CACHE_MAX_ENTRIES) {
+            dashboardCache.clear();
+        }
         dashboardCache.put(cacheKey, new CachedDashboardStats(stats, System.currentTimeMillis()));
         return stats;
     }

@@ -339,14 +339,6 @@ public class UsageLogService {
     }
 
     /**
-     * 按 Token ID 列表聚合查询全部指标
-     */
-    public Object[] sumAllMetricsByTokenIds(List<Long> tokenIds) {
-        List<Object[]> result = usageLogRepository.sumAllMetricsByTokenIds(tokenIds);
-        return result.isEmpty() ? new Object[]{0L, 0L, 0L, 0L, 0.0, 0L} : result.get(0);
-    }
-
-    /**
      * 按 Token ID 列表聚合查询今日指标
      */
     public Object[] sumAllMetricsByTokenIdsSince(List<Long> tokenIds, LocalDateTime since) {
@@ -369,30 +361,10 @@ public class UsageLogService {
     }
 
     /**
-     * 按 Token ID 列表查询缓存创建/读取 token 统计（全部时间）
-     */
-    public long[] getCacheStats(List<Long> tokenIds) {
-        List<Object[]> result = usageLogRepository.sumCacheTokensByTokenIds(tokenIds);
-        if (result.isEmpty()) return new long[]{0, 0};
-        Object[] row = result.get(0);
-        return new long[]{((Number) row[0]).longValue(), ((Number) row[1]).longValue()};
-    }
-
-    /**
      * 按 Token ID 列表查询缓存创建/读取 token 统计（指定时间起）
      */
     public long[] getCacheStatsSince(List<Long> tokenIds, LocalDateTime since) {
         List<Object[]> result = usageLogRepository.sumCacheTokensByTokenIdsSince(tokenIds, since);
-        if (result.isEmpty()) return new long[]{0, 0};
-        Object[] row = result.get(0);
-        return new long[]{((Number) row[0]).longValue(), ((Number) row[1]).longValue()};
-    }
-
-    /**
-     * 全局缓存创建/读取 token 统计（全部时间）
-     */
-    public long[] getGlobalCacheStats() {
-        List<Object[]> result = usageLogRepository.sumCacheTokensGlobal();
         if (result.isEmpty()) return new long[]{0, 0};
         Object[] row = result.get(0);
         return new long[]{((Number) row[0]).longValue(), ((Number) row[1]).longValue()};

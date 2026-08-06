@@ -42,6 +42,12 @@ public class StatsAggregationService {
     private static final long MAX_RETENTION_DAYS = 180;
 
     /**
+     * 序列化窗口的 exists-check -> insert 临界区，防止定时任务与启动时的历史补齐
+     * 异步任务在同一时间窗口上产生重复写入（数据库层未加唯一约束）。
+     */
+    private final Object aggregationLock = new Object();
+
+    /**
      * 定时任务：每 15 分钟执行一次，聚合上一完整的 15 分钟窗口。
      *
      * cron = "0 0/15 * * * ?" 表示在 :00, :15, :30, :45 整分钟执行。
@@ -55,7 +61,7 @@ public class StatsAggregationService {
         LocalDateTime windowEnd = alignWindowEnd(now);
         LocalDateTime windowStart = windowEnd.minusMinutes(WINDOW_MINUTES);
 
-        // 避免重复聚合（防止任务因延迟/重启被重复执行）
+        // 避免重复聚合（防止任务因延迟/重启被重复执行）；权威检查在 aggregateWindow 的锁内重做
         if (usageStatsRepository.existsByTimeRange(windowStart, windowEnd)) {
             log.debug("窗口 {} ~ {} 已聚合，跳过", windowStart, windowEnd);
             return;
@@ -115,7 +121,15 @@ public class StatsAggregationService {
                 .totalCacheReadTokens(totalCacheReadTokens)
                 .build();
 
-        usageStatsRepository.save(stats);
+        synchronized (aggregationLock) {
+            // 锁内重检：调度任务与启动时的历史补齐可能并发跑到同一窗口。
+            // saveAndFlush 立即把写入刷到连接上，尽量缩小“提交前”对其他线程不可见的窗口。
+            if (usageStatsRepository.existsByTimeRange(windowStart, windowEnd)) {
+                log.debug("窗口 {} ~ {} 已被并发聚合，跳过写入", windowStart, windowEnd);
+                return;
+            }
+            usageStatsRepository.saveAndFlush(stats);
+        }
         log.info("聚合窗口 {} ~ {} 完成：requests={}, tokens={}", windowStart, windowEnd, totalRequests, totalTokens);
     }
 
