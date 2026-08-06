@@ -313,7 +313,7 @@ export default function Tokens() {
         <Table
           columns={[
             { title: '时间', dataIndex: 'time', key: 'time' },
-            { title: '模型', dataIndex: 'model', key: 'model' },
+            { title: '模型', dataIndex: 'displayName', key: 'displayName', render: (v, r) => v || r.model },
             { title: '输入 Token', dataIndex: 'inputTokens', key: 'inputTokens' },
             { title: '输出 Token', dataIndex: 'outputTokens', key: 'outputTokens' },
             { title: '消耗积分', dataIndex: 'credits', key: 'credits', render: v => Math.round(Number(v)) + ' 积分' },

@@ -99,6 +99,19 @@ public class ModelConfigService {
         return modelConfigRepository.save(config);
     }
 
+    /**
+     * 校验 displayName 唯一性（display_name 是平台侧模型唯一标识）。
+     * 更新场景下排除自身 id；displayName 为空时不做校验。
+     */
+    public void validateDisplayNameUnique(String displayName, Long excludeId) {
+        if (displayName == null || displayName.isBlank()) {
+            return;
+        }
+        if (modelConfigRepository.existsByDisplayNameExcludingId(displayName, excludeId)) {
+            throw new BusinessException("显示名称 \"" + displayName + "\" 已存在，请使用唯一的显示名称");
+        }
+    }
+
     public void delete(Long id) {
         if (!modelConfigRepository.existsById(id)) {
             throw new BusinessException("模型不存在");

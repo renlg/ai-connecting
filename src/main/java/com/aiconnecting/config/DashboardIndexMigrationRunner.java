@@ -11,7 +11,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 仪表盘查询性能索引迁移：为存量数据库补齐 model_configs.name 唯一索引，
+ * 仪表盘查询性能索引迁移：为存量数据库补齐 model_configs.display_name 唯一索引
+ * （display_name 是平台侧模型唯一标识，name 是发往上游供应商的模型 ID，允许重复），
  * 以及 usage_logs (model, created_at) 复合索引
  */
 @Slf4j
@@ -24,13 +25,15 @@ public class DashboardIndexMigrationRunner implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         List<Map<String, Object>> duplicates = jdbcTemplate.queryForList(
-                "SELECT name, COUNT(*) as c FROM model_configs GROUP BY name HAVING COUNT(*) > 1");
+                "SELECT display_name, COUNT(*) as c FROM model_configs " +
+                        "WHERE display_name IS NOT NULL AND display_name != '' " +
+                        "GROUP BY display_name HAVING COUNT(*) > 1");
         if (duplicates.isEmpty()) {
             jdbcTemplate.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_model_configs_name ON model_configs (name)");
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_model_configs_display_name ON model_configs (display_name)");
         } else {
-            log.warn("Skipping unique index on model_configs.name: found {} duplicate name(s): {}. " +
-                            "Resolve duplicates (e.g. deactivate/rename older rows) before the unique index can be created.",
+            log.warn("Skipping unique index on model_configs.display_name: found {} duplicate display_name(s): {}. " +
+                            "Resolve duplicates before the unique index can be created.",
                     duplicates.size(), duplicates);
         }
 

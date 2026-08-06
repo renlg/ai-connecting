@@ -134,11 +134,15 @@ public class TokenController {
             throw new BusinessException(403, "无权查看该 Token 的消耗记录");
         }
         List<Object[]> rows = usageLogService.getLogDetails(id, date);
+        Map<String, ModelConfigService.ModelInfo> modelInfoMap = modelConfigService.getModelInfoMap();
         List<Map<String, Object>> result = new ArrayList<>();
         for (Object[] row : rows) {
             Map<String, Object> item = new LinkedHashMap<>();
+            String model = (String) row[1];
+            ModelConfigService.ModelInfo info = modelInfoMap.get(model);
             item.put("id", row[0]);
-            item.put("model", row[1]);
+            item.put("model", model);
+            item.put("displayName", info != null && info.displayName() != null && !info.displayName().isBlank() ? info.displayName() : model);
             item.put("inputTokens", row[2] != null ? ((Number) row[2]).longValue() : 0L);
             item.put("outputTokens", row[3] != null ? ((Number) row[3]).longValue() : 0L);
             item.put("credits", row[4]);

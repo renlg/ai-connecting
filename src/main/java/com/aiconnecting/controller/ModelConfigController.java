@@ -109,6 +109,7 @@ public class ModelConfigController {
         if (request.getName() == null || request.getName().isBlank()) {
             throw new BusinessException("模型名称不能为空");
         }
+        modelConfigService.validateDisplayNameUnique(request.getDisplayName(), null);
         validatePrices(request);
         String type = validateType(request.getType());
         ModelConfig config = ModelConfig.builder()
@@ -147,6 +148,7 @@ public class ModelConfigController {
             config.setName(request.getName());
         }
         if (request.getDisplayName() != null) {
+            modelConfigService.validateDisplayNameUnique(request.getDisplayName(), id);
             config.setDisplayName(request.getDisplayName());
         }
         if (request.getDescription() != null) {

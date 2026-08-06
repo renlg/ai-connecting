@@ -34,12 +34,17 @@ export default function Models() {
 
   const handleSave = async () => {
     const values = await form.validateFields()
-    if (editing) {
-      await updateModel(editing.id, values)
-      message.success('更新成功')
-    } else {
-      await createModel(values)
-      message.success('创建成功')
+    try {
+      if (editing) {
+        await updateModel(editing.id, values)
+        message.success('更新成功')
+      } else {
+        await createModel(values)
+        message.success('创建成功')
+      }
+    } catch (err) {
+      message.error(err?.message || '保存失败')
+      return
     }
     setModalOpen(false)
     form.resetFields()
@@ -160,11 +165,24 @@ export default function Models() {
       {/* 单个新增/编辑 */}
       <Modal title={editing ? '编辑模型' : '新增模型'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={500}>
         <Form form={form} layout="vertical">
-          <Form.Item name="name" label="模型名称" rules={[{ required: true, message: '请输入模型名称' }]}>
-            <Input placeholder="例如: gpt-4o" disabled={!!editing} />
+          <Form.Item name="name" label="模型名称（模型ID，发送给上游供应商，可重复）" rules={[{ required: true, message: '请输入模型名称' }]}>
+            <Input placeholder="例如: gpt-4o" />
           </Form.Item>
-          <Form.Item name="displayName" label="显示名称">
-            <Input placeholder="例如: GPT-4o（用于 Token 管理展示）" />
+          <Form.Item
+            name="displayName"
+            label="显示名称（平台唯一标识，用于 Token 管理展示）"
+            rules={[
+              { required: true, message: '请输入显示名称' },
+              {
+                validator: (_, value) => {
+                  if (!value) return Promise.resolve()
+                  const conflict = models.some(m => m.displayName === value && m.id !== editing?.id)
+                  return conflict ? Promise.reject(new Error('显示名称已存在，请使用唯一的显示名称')) : Promise.resolve()
+                }
+              }
+            ]}
+          >
+            <Input placeholder="例如: GPT-4o" />
           </Form.Item>
           <Form.Item name="type" label="模型类型" initialValue="text">
             <Select options={[
