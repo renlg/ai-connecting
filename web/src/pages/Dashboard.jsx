@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Card, Row, Col, Statistic, Spin, message, Modal, Table, Tag, Segmented, Empty } from 'antd'
+import { Card, Row, Col, Statistic, Spin, message, Modal, Table, Tag, Segmented, Empty, Tooltip as AntTooltip } from 'antd'
 import { KeyOutlined, SendOutlined, NumberOutlined, DollarOutlined } from '@ant-design/icons'
 import { ApiOutlined, CloudServerOutlined, UserOutlined, WalletOutlined, StopOutlined } from '@ant-design/icons'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
@@ -8,6 +8,27 @@ import { getDashboard, getBlockedChannels, getDailyStats } from '../api'
 // 缓存未命中 / 命中固定用两种颜色区分状态，模型身份由图例文案与横轴分组承载
 const MISS_COLOR = '#1677ff'
 const HIT_COLOR = '#722ed1'
+
+const MODEL_TYPE_LABELS = { text: '文本', image: '图片', video: '视频', audio: '音频' }
+
+function formatCreditsByType(creditsByType) {
+  if (!creditsByType) return null
+  return Object.entries(MODEL_TYPE_LABELS).map(([key, label]) => (
+    <div key={key}>{label}: {Math.round(Number(creditsByType[key] || 0))} 积分</div>
+  ))
+}
+
+function CreditBarTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null
+  const row = payload[0].payload
+  return (
+    <div style={{ background: '#fff', border: '1px solid #e1e0d9', borderRadius: 4, padding: '8px 12px' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+      <div>消耗积分: {Math.round(Number(row.credits || 0))} 积分</div>
+      <div style={{ marginTop: 4, color: '#595959' }}>{formatCreditsByType(row.creditsByType)}</div>
+    </div>
+  )
+}
 
 function buildTokenChartData(data) {
   if (!data || !data.dailyTokensByModel || data.dailyTokensByModel.length === 0) {
@@ -84,6 +105,7 @@ export default function Dashboard() {
       title: '今日消耗积分',
       value: stats?.creditsConsumedToday != null ? Math.round(Number(stats.creditsConsumedToday)) : 0,
       icon: <DollarOutlined />, color: '#f5222d', suffix: '积分', prominent: true,
+      creditsByType: stats?.creditsByTypeToday,
     },
     {
       title: '今日输入 Token',
@@ -180,8 +202,8 @@ export default function Dashboard() {
         📊 今日数据
       </h3>
       <Row gutter={[16, 16]}>
-        {todayCards.map((item, i) => (
-          <Col xs={24} sm={12} md={8} key={i}>
+        {todayCards.map((item, i) => {
+          const card = (
             <Card
               hoverable
               style={{
@@ -203,8 +225,15 @@ export default function Dashboard() {
                 }}
               />
             </Card>
-          </Col>
-        ))}
+          )
+          return (
+            <Col xs={24} sm={12} md={8} key={i}>
+              {item.creditsByType ? (
+                <AntTooltip title={formatCreditsByType(item.creditsByType)}>{card}</AntTooltip>
+              ) : card}
+            </Col>
+          )
+        })}
       </Row>
 
       {/* ── Section 2: 累计数据 ── */}
@@ -279,7 +308,7 @@ export default function Dashboard() {
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e1e0d9" />
               <XAxis dataKey="date" tick={{ fontSize: 12 }} />
               <YAxis unit="积分" tick={{ fontSize: 12 }} />
-              <Tooltip />
+              <Tooltip content={<CreditBarTooltip />} />
               <Bar dataKey="credits" name="消耗积分" fill={MISS_COLOR} barSize={24} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>

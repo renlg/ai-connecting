@@ -12,7 +12,9 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -21,6 +23,9 @@ public class DashboardService {
 
     /** 累计数据仅保留最近 90 天 */
     static final int CUMULATIVE_DAYS = 90;
+
+    /** 仪表盘按模型类型拆分积分消耗时展示的固定类型集合 */
+    private static final List<String> MODEL_TYPES = List.of("text", "image", "video", "audio");
 
     private final ChannelService channelService;
     private final ChannelHealthTracker channelHealthTracker;
@@ -55,10 +60,10 @@ public class DashboardService {
         LocalDateTime lastCompleteWindow = StatsAggregationService.alignWindowEnd(LocalDateTime.now());
 
         Object[] statsCumulative = getCombinedStats(cutoff, lastCompleteWindow);
-        Object[] statsToday = getCombinedStats(
-                LocalDate.now().atStartOfDay(),
-                lastCompleteWindow
-        );
+        LocalDateTime todayStart = LocalDate.now().atStartOfDay();
+        Object[] statsToday = getCombinedStats(todayStart, lastCompleteWindow);
+
+        Map<String, BigDecimal> creditsByTypeToday = creditsByType(usageLogRepository.findCreditByTypeSince(todayStart));
 
         return DashboardStats.builder()
                 .totalChannels((long) channels.size())
@@ -76,6 +81,7 @@ public class DashboardService {
                 .outputTokensToday(longVal(statsToday[3]))
                 .totalCreditsConsumed(bigDecVal(statsCumulative[4]))
                 .creditsConsumedToday(bigDecVal(statsToday[4]))
+                .creditsByTypeToday(creditsByTypeToday)
                 .totalCachedPromptTokens(longVal(statsCumulative[5]))
                 .cachedPromptTokensToday(longVal(statsToday[5]))
                 .totalCacheCreationTokens(longVal(statsCumulative[6]))
@@ -142,6 +148,7 @@ public class DashboardService {
         long requestsToday = 0, tokensUsedToday = 0, inputTokensToday = 0, outputTokensToday = 0;
         long cachedPromptTokensToday = 0;
         BigDecimal creditsConsumedToday = BigDecimal.ZERO;
+        Map<String, BigDecimal> creditsByTypeToday = creditsByType(List.of());
         if (!tokenIds.isEmpty()) {
             Object[] m = usageLogService.sumAllMetricsByTokenIdsSince(tokenIds, todayStart);
             requestsToday          = longVal(m[0]);
@@ -150,6 +157,7 @@ public class DashboardService {
             outputTokensToday      = longVal(m[3]);
             creditsConsumedToday   = bigDecVal(m[4]);
             cachedPromptTokensToday = longVal(m[5]);
+            creditsByTypeToday = creditsByType(usageLogRepository.findCreditByTypeByTokenIdsSince(tokenIds, todayStart));
         }
 
         // 缓存统计（同样 90 天限制）
@@ -173,6 +181,7 @@ public class DashboardService {
                 .outputTokensToday(outputTokensToday)
                 .totalCreditsConsumed(totalCreditsConsumed)
                 .creditsConsumedToday(creditsConsumedToday)
+                .creditsByTypeToday(creditsByTypeToday)
                 .totalCachedPromptTokens(totalCachedPromptTokens)
                 .cachedPromptTokensToday(cachedPromptTokensToday)
                 .totalCacheCreationTokens(cacheStats[0])
@@ -184,6 +193,18 @@ public class DashboardService {
     }
 
     // ========== 工具方法 ==========
+
+    /**
+     * 将按模型类型分组的查询结果转为固定四类型（text/image/video/audio）的积分映射，未出现的类型补 0
+     */
+    private static Map<String, BigDecimal> creditsByType(List<Object[]> rows) {
+        Map<String, BigDecimal> map = new LinkedHashMap<>();
+        for (String type : MODEL_TYPES) map.put(type, BigDecimal.ZERO);
+        for (Object[] row : rows) {
+            map.put((String) row[0], BigDecimal.valueOf(((Number) row[1]).doubleValue()));
+        }
+        return map;
+    }
 
     private static Object[] emptyRow() {
         return new Object[]{0L, 0L, 0L, 0L, 0.0, 0L, 0L, 0L};

@@ -20,7 +20,10 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
@@ -34,6 +37,9 @@ public class UsageLogService {
     private final ModelConfigService modelConfigService;
     private final UserRepository userRepository;
     private final TokenService tokenService;
+
+    /** 仪表盘按模型类型拆分积分消耗时展示的固定类型集合 */
+    private static final List<String> MODEL_TYPES = List.of("text", "image", "video", "audio");
 
     /** 积分计算除数：每百万 token */
     private static final BigDecimal CREDIT_RATE_DIVISOR = new BigDecimal("1000000");
@@ -425,11 +431,27 @@ public class UsageLogService {
             tokenRows = usageLogRepository.findDailyTokenByModelByTokenIdsSince(tokenIds, since);
         }
 
+        // 每日按模型类型（text/image/video/audio）拆分积分消耗 —— 用于每日消耗积分柱状图 tooltip
+        List<Object[]> creditByTypeRows = isAdmin
+                ? usageLogRepository.findDailyCreditByTypeSince(since)
+                : usageLogRepository.findDailyCreditByTypeByTokenIdsSince(tokenIds, since);
+        Map<String, Map<String, BigDecimal>> creditsByTypeByDate = new HashMap<>();
+        for (Object[] row : creditByTypeRows) {
+            String date = (String) row[0];
+            String type = (String) row[1];
+            BigDecimal credits = BigDecimal.valueOf(((Number) row[2]).doubleValue());
+            creditsByTypeByDate.computeIfAbsent(date, d -> defaultCreditsByType()).put(type, credits);
+        }
+
         List<DashboardDailyStats.DailyCreditStat> dailyCredits = creditRows.stream()
-                .map(row -> DashboardDailyStats.DailyCreditStat.builder()
-                        .date((String) row[0])
-                        .credits(BigDecimal.valueOf(((Number) row[1]).doubleValue()))
-                        .build())
+                .map(row -> {
+                    String date = (String) row[0];
+                    return DashboardDailyStats.DailyCreditStat.builder()
+                            .date(date)
+                            .credits(BigDecimal.valueOf(((Number) row[1]).doubleValue()))
+                            .creditsByType(creditsByTypeByDate.getOrDefault(date, defaultCreditsByType()))
+                            .build();
+                })
                 .toList();
 
         List<DashboardDailyStats.DailyTokenByModelStat> dailyTokensByModel = tokenRows.stream()
@@ -452,6 +474,12 @@ public class UsageLogService {
                 .dailyCredits(dailyCredits)
                 .dailyTokensByModel(dailyTokensByModel)
                 .build();
+    }
+
+    private static Map<String, BigDecimal> defaultCreditsByType() {
+        Map<String, BigDecimal> map = new LinkedHashMap<>();
+        for (String type : MODEL_TYPES) map.put(type, BigDecimal.ZERO);
+        return map;
     }
 
 }

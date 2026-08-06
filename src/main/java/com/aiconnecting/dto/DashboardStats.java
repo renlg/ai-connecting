@@ -2,6 +2,7 @@ package com.aiconnecting.dto;
 
 import lombok.*;
 import java.math.BigDecimal;
+import java.util.Map;
 
 @Data
 @Builder
@@ -21,6 +22,8 @@ public class DashboardStats {
     private Long outputTokensToday;
     private BigDecimal totalCreditsConsumed;
     private BigDecimal creditsConsumedToday;
+    /** 今日消耗积分按模型类型（text/image/video/audio）拆分 */
+    private Map<String, BigDecimal> creditsByTypeToday;
     private Long totalCachedPromptTokens;
     private Long cachedPromptTokensToday;
     private Long totalCacheCreationTokens;

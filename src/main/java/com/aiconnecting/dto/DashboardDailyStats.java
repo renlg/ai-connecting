@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 @Data
 @Builder
@@ -16,6 +17,8 @@ public class DashboardDailyStats {
     public static class DailyCreditStat {
         private String date;
         private BigDecimal credits;
+        /** 当日消耗积分按模型类型（text/image/video/audio）拆分 */
+        private Map<String, BigDecimal> creditsByType;
     }
 
     @Data
