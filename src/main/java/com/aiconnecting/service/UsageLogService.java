@@ -371,16 +371,6 @@ public class UsageLogService {
     }
 
     /**
-     * 全局缓存创建/读取 token 统计（指定时间起）
-     */
-    public long[] getGlobalCacheStatsSince(LocalDateTime since) {
-        List<Object[]> result = usageLogRepository.sumCacheTokensGlobalSince(since);
-        if (result.isEmpty()) return new long[]{0, 0};
-        Object[] row = result.get(0);
-        return new long[]{((Number) row[0]).longValue(), ((Number) row[1]).longValue()};
-    }
-
-    /**
      * 仪表盘每日统计 - admin 看全局（每日积分从 usage_stats 汇总表），普通用户看自己的数据
      */
     public DashboardDailyStats getDailyStats(User currentUser, int days) {

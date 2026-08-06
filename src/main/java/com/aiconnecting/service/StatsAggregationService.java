@@ -3,14 +3,15 @@ package com.aiconnecting.service;
 import com.aiconnecting.entity.UsageStats;
 import com.aiconnecting.repository.UsageLogRepository;
 import com.aiconnecting.repository.UsageStatsRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -28,12 +29,20 @@ import java.util.List;
  * 例如在 10:00 执行时，聚合 09:45:00 ~ 09:59:59.999 的数据。
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class StatsAggregationService {
 
     private final UsageLogRepository usageLogRepository;
     private final UsageStatsRepository usageStatsRepository;
+    private final TransactionTemplate transactionTemplate;
+
+    public StatsAggregationService(UsageLogRepository usageLogRepository,
+                                    UsageStatsRepository usageStatsRepository,
+                                    PlatformTransactionManager transactionManager) {
+        this.usageLogRepository = usageLogRepository;
+        this.usageStatsRepository = usageStatsRepository;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+    }
 
     /** 窗口大小（分钟） */
     private static final long WINDOW_MINUTES = 15;
@@ -42,8 +51,10 @@ public class StatsAggregationService {
     private static final long MAX_RETENTION_DAYS = 180;
 
     /**
-     * 序列化窗口的 exists-check -> insert 临界区，防止定时任务与启动时的历史补齐
-     * 异步任务在同一时间窗口上产生重复写入（数据库层未加唯一约束）。
+     * 序列化窗口的 exists-check -> aggregate -> insert -> commit 临界区，防止定时任务与启动时的
+     * 历史补齐异步任务在同一时间窗口上产生重复写入（数据库层未加唯一约束）。
+     * 加锁顺序固定为：先获取该 Java 锁，再在锁内通过 TransactionTemplate 开启/提交数据库事务，
+     * 确保提交发生在锁释放之前，避免其他线程在提交前的空隙读到脏状态。
      */
     private final Object aggregationLock = new Object();
 
@@ -54,14 +65,13 @@ public class StatsAggregationService {
      * 每次处理上一个 15 分钟窗口（如 10:00 执行时处理 09:45:00 ~ 09:59:59）。
      */
     @Scheduled(cron = "0 0/15 * * * ?")
-    @Transactional
     public void aggregateLastWindow() {
         LocalDateTime now = LocalDateTime.now();
         // 计算上一个完整窗口的起止时间
         LocalDateTime windowEnd = alignWindowEnd(now);
         LocalDateTime windowStart = windowEnd.minusMinutes(WINDOW_MINUTES);
 
-        // 避免重复聚合（防止任务因延迟/重启被重复执行）；权威检查在 aggregateWindow 的锁内重做
+        // 快速路径的非权威检查（无锁），避免大多数情况下无谓地抢锁；权威检查在 aggregateWindow 的锁内重做
         if (usageStatsRepository.existsByTimeRange(windowStart, windowEnd)) {
             log.debug("窗口 {} ~ {} 已聚合，跳过", windowStart, windowEnd);
             return;
@@ -80,64 +90,71 @@ public class StatsAggregationService {
     }
 
     /**
-     * 聚合指定时间窗口的 usage_logs 数据并写入 usage_stats
+     * 聚合指定时间窗口的 usage_logs 数据并写入 usage_stats。
+     *
+     * 加锁顺序：先获取 Java 锁 aggregationLock，再在锁内通过 TransactionTemplate 开启数据库事务，
+     * exists 重检 -> 聚合查询 -> 保存 -> 提交 全部在同一事务内完成，且提交发生在锁释放之前，
+     * 因此调度任务与启动时的历史补齐任务不会在同一窗口上产生重复写入。
      */
-    @Transactional
     public void aggregateWindow(LocalDateTime windowStart, LocalDateTime windowEnd) {
-        // 查询该窗口内的聚合结果（nativeQuery 兼容 SQLite）
-        List<Object[]> result = usageLogRepository.aggregateWindow(windowStart, windowEnd);
-        if (result.isEmpty()) {
-            log.debug("窗口 {} ~ {} 无数据，跳过", windowStart, windowEnd);
-            return;
-        }
-
-        Object[] row = result.get(0);
-        long totalRequests = ((Number) row[0]).longValue();
-        if (totalRequests == 0) {
-            return; // 无数据
-        }
-
-        long totalTokens = ((Number) row[1]).longValue();
-        long totalPromptTokens = ((Number) row[2]).longValue();
-        long totalCompletionTokens = ((Number) row[3]).longValue();
-        double totalCreditCost = ((Number) row[4]).doubleValue();
-        long totalCachedPromptTokens = ((Number) row[5]).longValue();
-        long totalCacheCreationTokens = ((Number) row[6]).longValue();
-        long totalCacheReadTokens = ((Number) row[7]).longValue();
-
-        String dateStr = windowStart.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE);
-
-        UsageStats stats = UsageStats.builder()
-                .startTime(windowStart)
-                .endTime(windowEnd)
-                .date(dateStr)
-                .totalRequests(totalRequests)
-                .totalTokens(totalTokens)
-                .totalPromptTokens(totalPromptTokens)
-                .totalCompletionTokens(totalCompletionTokens)
-                .totalCreditCost(BigDecimal.valueOf(totalCreditCost))
-                .totalCachedPromptTokens(totalCachedPromptTokens)
-                .totalCacheCreationTokens(totalCacheCreationTokens)
-                .totalCacheReadTokens(totalCacheReadTokens)
-                .build();
-
         synchronized (aggregationLock) {
-            // 锁内重检：调度任务与启动时的历史补齐可能并发跑到同一窗口。
-            // saveAndFlush 立即把写入刷到连接上，尽量缩小“提交前”对其他线程不可见的窗口。
-            if (usageStatsRepository.existsByTimeRange(windowStart, windowEnd)) {
-                log.debug("窗口 {} ~ {} 已被并发聚合，跳过写入", windowStart, windowEnd);
-                return;
-            }
-            usageStatsRepository.saveAndFlush(stats);
+            transactionTemplate.executeWithoutResult(status -> {
+                // 锁内权威重检：调度任务与启动时的历史补齐可能并发跑到同一窗口。
+                if (usageStatsRepository.existsByTimeRange(windowStart, windowEnd)) {
+                    log.debug("窗口 {} ~ {} 已被并发聚合，跳过写入", windowStart, windowEnd);
+                    return;
+                }
+
+                // 查询该窗口内的聚合结果（nativeQuery 兼容 SQLite）
+                List<Object[]> result = usageLogRepository.aggregateWindow(windowStart, windowEnd);
+                if (result.isEmpty()) {
+                    log.debug("窗口 {} ~ {} 无数据，跳过", windowStart, windowEnd);
+                    return;
+                }
+
+                Object[] row = result.get(0);
+                long totalRequests = ((Number) row[0]).longValue();
+                if (totalRequests == 0) {
+                    return; // 无数据
+                }
+
+                long totalTokens = ((Number) row[1]).longValue();
+                long totalPromptTokens = ((Number) row[2]).longValue();
+                long totalCompletionTokens = ((Number) row[3]).longValue();
+                double totalCreditCost = ((Number) row[4]).doubleValue();
+                long totalCachedPromptTokens = ((Number) row[5]).longValue();
+                long totalCacheCreationTokens = ((Number) row[6]).longValue();
+                long totalCacheReadTokens = ((Number) row[7]).longValue();
+
+                String dateStr = windowStart.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE);
+
+                UsageStats stats = UsageStats.builder()
+                        .startTime(windowStart)
+                        .endTime(windowEnd)
+                        .date(dateStr)
+                        .totalRequests(totalRequests)
+                        .totalTokens(totalTokens)
+                        .totalPromptTokens(totalPromptTokens)
+                        .totalCompletionTokens(totalCompletionTokens)
+                        .totalCreditCost(BigDecimal.valueOf(totalCreditCost))
+                        .totalCachedPromptTokens(totalCachedPromptTokens)
+                        .totalCacheCreationTokens(totalCacheCreationTokens)
+                        .totalCacheReadTokens(totalCacheReadTokens)
+                        .build();
+
+                usageStatsRepository.save(stats);
+                log.info("聚合窗口 {} ~ {} 完成：requests={}, tokens={}", windowStart, windowEnd, totalRequests, totalTokens);
+            });
         }
-        log.info("聚合窗口 {} ~ {} 完成：requests={}, tokens={}", windowStart, windowEnd, totalRequests, totalTokens);
     }
 
     /**
      * 初始化历史数据（将 usage_logs 中所有历史数据按 15 分钟窗口聚合到 usage_stats）
-     * 通常在首次部署时调用，或者通过 API 手动触发
+     * 通常在首次部署时调用，或者通过 API 手动触发。
+     * 每个窗口的 exists-check -> aggregate -> save -> commit 由 aggregateWindow 内的
+     * aggregationLock + TransactionTemplate 独立完成一个短事务，因此本方法无需（也不能通过
+     * 同类自调用生效地）包一层大事务。
      */
-    @Transactional
     public void initializeHistoricalData() {
         log.info("开始初始化用量汇总历史数据...");
 
