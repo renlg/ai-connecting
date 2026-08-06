@@ -326,14 +326,15 @@ export default function Dashboard() {
       ) : (
         <Row gutter={[16, 16]}>
           {models.map(model => {
-            const modelData = (dailyStats?.dailyTokensByModel || [])
-              .filter(d => d.model === model)
+            const rows = (dailyStats?.dailyTokensByModel || []).filter(d => d.model === model)
+            const modelData = rows
               .map(d => ({ date: d.date, cacheMiss: d.cacheMissTokens, cacheHit: d.cachedTokens }))
               .sort((a, b) => a.date.localeCompare(b.date))
+            const displayName = rows[0]?.displayName || model
             return (
               <Col xs={24} sm={24} md={12} key={model}>
                 <Card
-                  title={<span style={{ fontSize: 14 }}>{model}</span>}
+                  title={<span style={{ fontSize: 14 }}>{displayName}</span>}
                   size="small"
                   style={{ borderRadius: 8 }}
                 >

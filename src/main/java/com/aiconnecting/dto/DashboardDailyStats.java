@@ -26,6 +26,8 @@ public class DashboardDailyStats {
     public static class DailyTokenByModelStat {
         private String date;
         private String model;
+        /** 展示名称，取自 model_configs.display_name；无匹配时回退为 model 原始名称 */
+        private String displayName;
         private long inputTokens;
         private long cachedTokens;
         private long cacheMissTokens;

@@ -116,31 +116,28 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
             "GROUP BY date, model ORDER BY date ASC, model ASC", nativeQuery = true)
     List<Object[]> findDailyTokenByModelByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
-    // 全局按模型类型统计积分消耗（用于仪表盘"今日消耗积分"卡片 tooltip）
-    @Query(value = "SELECT mc.type, COALESCE(SUM(u.credit_cost), 0) " +
-            "FROM usage_logs u JOIN model_configs mc ON u.model = mc.name " +
-            "WHERE u.created_at >= :since GROUP BY mc.type", nativeQuery = true)
-    List<Object[]> findCreditByTypeSince(@Param("since") LocalDateTime since);
+    // 全局按模型名统计积分消耗（用于仪表盘"今日消耗积分"卡片 tooltip，按类型合并在服务层完成，
+    // 避免 JOIN model_configs：同名多行会产生笛卡尔积，见 model_configs.name='deepseek-v4-flash' 重复问题）
+    @Query(value = "SELECT model, COALESCE(SUM(credit_cost), 0) " +
+            "FROM usage_logs WHERE created_at >= :since GROUP BY model", nativeQuery = true)
+    List<Object[]> findCreditByModelSince(@Param("since") LocalDateTime since);
 
-    // 按 Token ID 列表统计按模型类型积分消耗
-    @Query(value = "SELECT mc.type, COALESCE(SUM(u.credit_cost), 0) " +
-            "FROM usage_logs u JOIN model_configs mc ON u.model = mc.name " +
-            "WHERE u.token_id IN :tokenIds AND u.created_at >= :since GROUP BY mc.type", nativeQuery = true)
-    List<Object[]> findCreditByTypeByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
+    // 按 Token ID 列表统计按模型名积分消耗
+    @Query(value = "SELECT model, COALESCE(SUM(credit_cost), 0) " +
+            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since GROUP BY model", nativeQuery = true)
+    List<Object[]> findCreditByModelByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
-    // 全局每日按模型类型统计积分消耗（用于仪表盘"每日消耗积分"柱状图 tooltip）
-    @Query(value = "SELECT DATE(datetime(u.created_at / 1000, 'unixepoch', '+8 hours')) as date, mc.type, " +
-            "COALESCE(SUM(u.credit_cost), 0) " +
-            "FROM usage_logs u JOIN model_configs mc ON u.model = mc.name " +
-            "WHERE u.created_at >= :since GROUP BY date, mc.type ORDER BY date ASC", nativeQuery = true)
-    List<Object[]> findDailyCreditByTypeSince(@Param("since") LocalDateTime since);
+    // 全局每日按模型名统计积分消耗（用于仪表盘"每日消耗积分"柱状图 tooltip）
+    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, " +
+            "COALESCE(SUM(credit_cost), 0) " +
+            "FROM usage_logs WHERE created_at >= :since GROUP BY date, model ORDER BY date ASC", nativeQuery = true)
+    List<Object[]> findDailyCreditByModelSince(@Param("since") LocalDateTime since);
 
-    // 按 Token ID 列表统计每日按模型类型积分消耗
-    @Query(value = "SELECT DATE(datetime(u.created_at / 1000, 'unixepoch', '+8 hours')) as date, mc.type, " +
-            "COALESCE(SUM(u.credit_cost), 0) " +
-            "FROM usage_logs u JOIN model_configs mc ON u.model = mc.name " +
-            "WHERE u.token_id IN :tokenIds AND u.created_at >= :since GROUP BY date, mc.type ORDER BY date ASC", nativeQuery = true)
-    List<Object[]> findDailyCreditByTypeByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
+    // 按 Token ID 列表统计每日按模型名积分消耗
+    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, " +
+            "COALESCE(SUM(credit_cost), 0) " +
+            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since GROUP BY date, model ORDER BY date ASC", nativeQuery = true)
+    List<Object[]> findDailyCreditByModelByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
     // ========== 汇总表聚合查询 ==========
 

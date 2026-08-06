@@ -449,17 +449,11 @@ public class UsageLogService {
             tokenRows = usageLogRepository.findDailyTokenByModelByTokenIdsSince(tokenIds, since);
         }
 
-        // 每日按模型类型（text/image/video/audio）拆分积分消耗 —— 用于每日消耗积分柱状图 tooltip
-        List<Object[]> creditByTypeRows = isAdmin
-                ? usageLogRepository.findDailyCreditByTypeSince(since)
-                : usageLogRepository.findDailyCreditByTypeByTokenIdsSince(tokenIds, since);
-        Map<String, Map<String, BigDecimal>> creditsByTypeByDate = new HashMap<>();
-        for (Object[] row : creditByTypeRows) {
-            String date = (String) row[0];
-            String type = (String) row[1];
-            BigDecimal credits = BigDecimal.valueOf(((Number) row[2]).doubleValue());
-            creditsByTypeByDate.computeIfAbsent(date, d -> defaultCreditsByType()).put(type, credits);
-        }
+        // 每日按模型名统计积分消耗，再在服务层合并为按类型（text/image/video/audio）—— 用于每日消耗积分柱状图 tooltip
+        List<Object[]> creditByModelRows = isAdmin
+                ? usageLogRepository.findDailyCreditByModelSince(since)
+                : usageLogRepository.findDailyCreditByModelByTokenIdsSince(tokenIds, since);
+        Map<String, Map<String, BigDecimal>> creditsByTypeByDate = mergeDailyCreditsByModelToType(creditByModelRows);
 
         List<DashboardDailyStats.DailyCreditStat> dailyCredits = creditRows.stream()
                 .map(row -> {
@@ -472,14 +466,20 @@ public class UsageLogService {
                 })
                 .toList();
 
+        Map<String, ModelConfigService.ModelInfo> modelInfoMap = modelConfigService.getModelInfoMap();
         List<DashboardDailyStats.DailyTokenByModelStat> dailyTokensByModel = tokenRows.stream()
                 .map(row -> {
+                    String model = (String) row[1];
                     long inputTokens = ((Number) row[2]).longValue();
                     long cachedTokens = ((Number) row[3]).longValue();
                     long totalTokens = ((Number) row[4]).longValue();
+                    ModelConfigService.ModelInfo info = modelInfoMap.get(model);
+                    String displayName = (info != null && info.displayName() != null && !info.displayName().isBlank())
+                            ? info.displayName() : model;
                     return DashboardDailyStats.DailyTokenByModelStat.builder()
                             .date((String) row[0])
-                            .model((String) row[1])
+                            .model(model)
+                            .displayName(displayName)
                             .inputTokens(inputTokens)
                             .cachedTokens(cachedTokens)
                             .cacheMissTokens(inputTokens - cachedTokens)
@@ -500,6 +500,56 @@ public class UsageLogService {
         Map<String, BigDecimal> map = new LinkedHashMap<>();
         for (String type : MODEL_TYPES) map.put(type, BigDecimal.ZERO);
         return map;
+    }
+
+    /**
+     * 全局按模型类型统计积分消耗（今日/累计等，取决于 since），用于仪表盘卡片 tooltip。
+     * 按模型名查询后在服务层合并为类型，避免 JOIN model_configs 产生的笛卡尔积。
+     */
+    public Map<String, BigDecimal> getCreditsByTypeSince(LocalDateTime since) {
+        return mergeCreditsByModelToType(usageLogRepository.findCreditByModelSince(since));
+    }
+
+    /**
+     * 按 Token ID 列表统计按模型类型积分消耗
+     */
+    public Map<String, BigDecimal> getCreditsByTypeByTokenIdsSince(List<Long> tokenIds, LocalDateTime since) {
+        return mergeCreditsByModelToType(usageLogRepository.findCreditByModelByTokenIdsSince(tokenIds, since));
+    }
+
+    /**
+     * 将按模型名分组的积分统计（model, credit）合并为按类型（text/image/video/audio）统计。
+     * 未在 model_configs 中找到对应名称的模型会被忽略（与原先 INNER JOIN 行为一致）。
+     */
+    private Map<String, BigDecimal> mergeCreditsByModelToType(List<Object[]> modelRows) {
+        Map<String, ModelConfigService.ModelInfo> modelInfoMap = modelConfigService.getModelInfoMap();
+        Map<String, BigDecimal> result = defaultCreditsByType();
+        for (Object[] row : modelRows) {
+            String model = (String) row[0];
+            ModelConfigService.ModelInfo info = modelInfoMap.get(model);
+            if (info == null) continue;
+            BigDecimal credit = BigDecimal.valueOf(((Number) row[1]).doubleValue());
+            result.merge(info.type(), credit, BigDecimal::add);
+        }
+        return result;
+    }
+
+    /**
+     * 将按 (date, model) 分组的积分统计合并为按 (date, type) 统计。
+     * 未在 model_configs 中找到对应名称的模型会被忽略（与原先 INNER JOIN 行为一致）。
+     */
+    private Map<String, Map<String, BigDecimal>> mergeDailyCreditsByModelToType(List<Object[]> modelRows) {
+        Map<String, ModelConfigService.ModelInfo> modelInfoMap = modelConfigService.getModelInfoMap();
+        Map<String, Map<String, BigDecimal>> result = new HashMap<>();
+        for (Object[] row : modelRows) {
+            String date = (String) row[0];
+            String model = (String) row[1];
+            ModelConfigService.ModelInfo info = modelInfoMap.get(model);
+            if (info == null) continue;
+            BigDecimal credit = BigDecimal.valueOf(((Number) row[2]).doubleValue());
+            result.computeIfAbsent(date, d -> defaultCreditsByType()).merge(info.type(), credit, BigDecimal::add);
+        }
+        return result;
     }
 
 }

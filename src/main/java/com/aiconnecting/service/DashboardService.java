@@ -63,7 +63,7 @@ public class DashboardService {
         LocalDateTime todayStart = LocalDate.now().atStartOfDay();
         Object[] statsToday = getCombinedStats(todayStart, lastCompleteWindow);
 
-        Map<String, BigDecimal> creditsByTypeToday = creditsByType(usageLogRepository.findCreditByTypeSince(todayStart));
+        Map<String, BigDecimal> creditsByTypeToday = usageLogService.getCreditsByTypeSince(todayStart);
 
         return DashboardStats.builder()
                 .totalChannels((long) channels.size())
@@ -148,7 +148,7 @@ public class DashboardService {
         long requestsToday = 0, tokensUsedToday = 0, inputTokensToday = 0, outputTokensToday = 0;
         long cachedPromptTokensToday = 0;
         BigDecimal creditsConsumedToday = BigDecimal.ZERO;
-        Map<String, BigDecimal> creditsByTypeToday = creditsByType(List.of());
+        Map<String, BigDecimal> creditsByTypeToday = defaultCreditsByType();
         if (!tokenIds.isEmpty()) {
             Object[] m = usageLogService.sumAllMetricsByTokenIdsSince(tokenIds, todayStart);
             requestsToday          = longVal(m[0]);
@@ -157,7 +157,7 @@ public class DashboardService {
             outputTokensToday      = longVal(m[3]);
             creditsConsumedToday   = bigDecVal(m[4]);
             cachedPromptTokensToday = longVal(m[5]);
-            creditsByTypeToday = creditsByType(usageLogRepository.findCreditByTypeByTokenIdsSince(tokenIds, todayStart));
+            creditsByTypeToday = usageLogService.getCreditsByTypeByTokenIdsSince(tokenIds, todayStart);
         }
 
         // 缓存统计（同样 90 天限制）
@@ -195,14 +195,11 @@ public class DashboardService {
     // ========== 工具方法 ==========
 
     /**
-     * 将按模型类型分组的查询结果转为固定四类型（text/image/video/audio）的积分映射，未出现的类型补 0
+     * 固定四类型（text/image/video/audio）的积分映射，初始为 0
      */
-    private static Map<String, BigDecimal> creditsByType(List<Object[]> rows) {
+    private static Map<String, BigDecimal> defaultCreditsByType() {
         Map<String, BigDecimal> map = new LinkedHashMap<>();
         for (String type : MODEL_TYPES) map.put(type, BigDecimal.ZERO);
-        for (Object[] row : rows) {
-            map.put((String) row[0], BigDecimal.valueOf(((Number) row[1]).doubleValue()));
-        }
         return map;
     }
 

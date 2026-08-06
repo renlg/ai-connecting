@@ -6,11 +6,14 @@ import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.repository.ChannelRepository;
 import com.aiconnecting.repository.ModelConfigRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -18,10 +21,48 @@ import java.util.Set;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ModelConfigService {
 
     private final ModelConfigRepository modelConfigRepository;
     private final ChannelRepository channelRepository;
+
+    /** 按 model_configs.name 索引的模型信息（type/displayName），用于仪表盘按模型名合并统计，避免与 usage_logs JOIN */
+    public record ModelInfo(String type, String displayName) {}
+
+    private static final long MODEL_INFO_CACHE_TTL_MS = 3 * 60 * 1000L;
+    private volatile CachedModelInfoMap modelInfoMapCache;
+
+    private record CachedModelInfoMap(Map<String, ModelInfo> map, long cachedAt) {
+        boolean isExpired() {
+            return System.currentTimeMillis() - cachedAt > MODEL_INFO_CACHE_TTL_MS;
+        }
+    }
+
+    /**
+     * 获取 name -> (type, displayName) 映射，用于仪表盘将按模型名分组的统计结果合并为按类型统计，
+     * 从而避免 usage_logs JOIN model_configs（同名多行会产生笛卡尔积）。缓存 3 分钟。
+     */
+    public Map<String, ModelInfo> getModelInfoMap() {
+        CachedModelInfoMap cached = modelInfoMapCache;
+        if (cached != null && !cached.isExpired()) {
+            return cached.map();
+        }
+        Map<String, ModelInfo> map = new HashMap<>();
+        for (ModelConfig mc : modelConfigRepository.findAll()) {
+            ModelInfo existing = map.get(mc.getName());
+            if (existing != null) {
+                if (!existing.type().equals(mc.getType())) {
+                    log.warn("model_configs 中模型名 '{}' 存在不同的 type（'{}' vs '{}'），按先出现的为准",
+                            mc.getName(), existing.type(), mc.getType());
+                }
+                continue;
+            }
+            map.put(mc.getName(), new ModelInfo(mc.getType(), mc.getDisplayName()));
+        }
+        modelInfoMapCache = new CachedModelInfoMap(map, System.currentTimeMillis());
+        return map;
+    }
 
     public List<ModelConfig> listAll() {
         return modelConfigRepository.findAllOrderByUpdatedAtDesc();
