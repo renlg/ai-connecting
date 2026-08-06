@@ -1,7 +1,6 @@
 package com.aiconnecting.config;
 
 import brave.Span;
-import brave.Tracer;
 import brave.Tracing;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletResponse;

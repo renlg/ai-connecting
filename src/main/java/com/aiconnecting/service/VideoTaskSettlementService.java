@@ -1,7 +1,6 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.entity.ModelConfig;
-import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.VideoTask;
 import com.aiconnecting.repository.UsageLogRepository;
 import com.aiconnecting.repository.VideoTaskRepository;
