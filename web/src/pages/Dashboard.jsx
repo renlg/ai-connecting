@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, Row, Col, Statistic, Spin, message, Modal, Table, Tag, Segmented, Empty, Tooltip as AntTooltip } from 'antd'
 import { KeyOutlined, SendOutlined, NumberOutlined, DollarOutlined } from '@ant-design/icons'
 import { ApiOutlined, CloudServerOutlined, UserOutlined, WalletOutlined, StopOutlined } from '@ant-design/icons'
@@ -47,28 +47,40 @@ function buildTokenChartData(data) {
   }
 }
 
+/** 每日统计按天数本地缓存的 TTL（毫秒），与后端每日统计缓存 TTL 保持一致量级 */
+const DAILY_STATS_CACHE_TTL_MS = 60 * 1000
+
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [statsLoading, setStatsLoading] = useState(true)
   const [blockedModalOpen, setBlockedModalOpen] = useState(false)
   const [blockedChannels, setBlockedChannels] = useState([])
   const [blockedLoading, setBlockedLoading] = useState(false)
   const [dailyStats, setDailyStats] = useState(null)
   const [dailyStatsLoading, setDailyStatsLoading] = useState(true)
   const [days, setDays] = useState(7)
+  const dailyStatsCacheRef = useRef({})
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const isAdmin = user.role === 'admin'
 
   useEffect(() => {
     getDashboard().then(res => {
       if (res.code === 200) setStats(res.data)
-    }).catch(() => message.error('加载仪表盘数据失败')).finally(() => setLoading(false))
+    }).catch(() => message.error('加载仪表盘数据失败')).finally(() => setStatsLoading(false))
   }, [])
 
   useEffect(() => {
+    const cached = dailyStatsCacheRef.current[days]
+    if (cached && Date.now() - cached.cachedAt < DAILY_STATS_CACHE_TTL_MS) {
+      setDailyStats(cached.data)
+      return
+    }
     setDailyStatsLoading(true)
     getDailyStats(days).then(res => {
-      if (res.code === 200) setDailyStats(res.data)
+      if (res.code === 200) {
+        setDailyStats(res.data)
+        dailyStatsCacheRef.current[days] = { data: res.data, cachedAt: Date.now() }
+      }
     }).catch(() => message.error('加载每日统计数据失败')).finally(() => setDailyStatsLoading(false))
   }, [days])
 
@@ -93,7 +105,6 @@ export default function Dashboard() {
     },
   ]
 
-  if (loading) return <Spin size="large" style={{ display: 'block', margin: '100px auto' }} />
 
   // ── Top: Today's data (prominent) ──
   const cacheHitRateToday = stats?.inputTokensToday > 0
@@ -197,6 +208,10 @@ export default function Dashboard() {
     <div>
       <h2 style={{ marginBottom: 24 }}>{isAdmin ? '仪表盘' : '我的概览'}</h2>
 
+      {statsLoading ? (
+        <Spin size="large" style={{ display: 'block', margin: '100px auto' }} />
+      ) : (
+      <>
       {/* ── Section 1: 今日数据（最显眼，大卡片加粗） ── */}
       <h3 style={{ fontSize: 18, marginBottom: 12, color: '#f5222d', fontWeight: 600 }}>
         📊 今日数据
@@ -278,6 +293,8 @@ export default function Dashboard() {
           </Col>
         ))}
       </Row>
+      </>
+      )}
 
       {/* ── Section 4: 每日消耗趋势 ── */}
       <Row align="middle" justify="space-between" style={{ marginTop: 32, marginBottom: 12 }}>

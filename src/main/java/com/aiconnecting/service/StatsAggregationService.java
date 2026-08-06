@@ -3,9 +3,11 @@ package com.aiconnecting.service;
 import com.aiconnecting.entity.UsageStats;
 import com.aiconnecting.repository.UsageLogRepository;
 import com.aiconnecting.repository.UsageStatsRepository;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -158,8 +160,9 @@ public class StatsAggregationService {
     }
 
     /**
-     * 清理超过保留期限的旧汇总数据
+     * 清理超过保留期限的旧汇总数据。每天凌晨 03:30 执行，保留 180 天数据。
      */
+    @Scheduled(cron = "0 30 3 * * ?")
     @Transactional
     public void cleanOldData() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(MAX_RETENTION_DAYS);
@@ -168,9 +171,12 @@ public class StatsAggregationService {
     }
 
     /**
-     * 应用启动时自动初始化历史汇总数据
+     * 应用启动时自动初始化历史汇总数据（异步执行，避免阻塞启动并与仪表盘查询抢资源）。
+     * 监听 ApplicationReadyEvent 而非 @PostConstruct，因为 @Async 代理在 @PostConstruct
+     * 阶段尚未包装到目标 bean 上，此时用 @Async 不会生效。
      */
-    @PostConstruct
+    @Async
+    @EventListener(ApplicationReadyEvent.class)
     public void init() {
         log.info("检测是否需要在启动时初始化用量汇总历史数据...");
         try {

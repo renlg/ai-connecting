@@ -40,18 +40,6 @@ public interface UsageStatsRepository extends JpaRepository<UsageStats, Long> {
            "FROM UsageStats u")
     List<Object[]> sumAll();
 
-    /** 指定日期之后（含）的汇总行 SUM —— 用于今日统计 */
-    @Query("SELECT COALESCE(SUM(u.totalRequests), 0), " +
-           "COALESCE(SUM(u.totalTokens), 0), " +
-           "COALESCE(SUM(u.totalPromptTokens), 0), " +
-           "COALESCE(SUM(u.totalCompletionTokens), 0), " +
-           "COALESCE(SUM(u.totalCreditCost), 0), " +
-           "COALESCE(SUM(u.totalCachedPromptTokens), 0), " +
-           "COALESCE(SUM(u.totalCacheCreationTokens), 0), " +
-           "COALESCE(SUM(u.totalCacheReadTokens), 0) " +
-           "FROM UsageStats u WHERE u.date >= :date")
-    List<Object[]> sumSinceDate(@Param("date") String date);
-
     /** 指定时间之后的所有汇总行 SUM（用于当日 + 历史） */
     @Query("SELECT COALESCE(SUM(u.totalRequests), 0), " +
            "COALESCE(SUM(u.totalTokens), 0), " +
@@ -76,16 +64,4 @@ public interface UsageStatsRepository extends JpaRepository<UsageStats, Long> {
            "COALESCE(SUM(u.totalCacheReadTokens), 0) " +
            "FROM UsageStats u WHERE u.date >= :startDate GROUP BY u.date ORDER BY u.date ASC")
     List<Object[]> sumGroupByDateSince(@Param("startDate") String startDate);
-
-    /** 查某日（含）之后的所有汇总行（按日期分组 + 累计总量），用于仪表盘今日累计 */
-    @Query("SELECT COALESCE(SUM(u.totalRequests), 0), " +
-           "COALESCE(SUM(u.totalTokens), 0), " +
-           "COALESCE(SUM(u.totalPromptTokens), 0), " +
-           "COALESCE(SUM(u.totalCompletionTokens), 0), " +
-           "COALESCE(SUM(u.totalCreditCost), 0), " +
-           "COALESCE(SUM(u.totalCachedPromptTokens), 0), " +
-           "COALESCE(SUM(u.totalCacheCreationTokens), 0), " +
-           "COALESCE(SUM(u.totalCacheReadTokens), 0) " +
-           "FROM UsageStats u WHERE u.date = :date")
-    List<Object[]> sumByDate(@Param("date") String date);
 }

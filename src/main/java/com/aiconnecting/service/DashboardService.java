@@ -15,6 +15,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 @RequiredArgsConstructor
@@ -35,15 +36,35 @@ public class DashboardService {
     private final UsageStatsRepository usageStatsRepository;
     private final UsageLogRepository usageLogRepository;
 
+    /** 仪表盘统计缓存，避免每次请求都跑 5 条 SQL，缓存 45 秒 */
+    private final ConcurrentHashMap<DashboardCacheKey, CachedDashboardStats> dashboardCache = new ConcurrentHashMap<>();
+    private static final long DASHBOARD_CACHE_TTL_MS = 45 * 1000L;
+
+    private record DashboardCacheKey(boolean isAdmin, List<Long> tokenIds) {}
+
+    private record CachedDashboardStats(DashboardStats stats, long cachedAt) {
+        boolean isExpired() {
+            return System.currentTimeMillis() - cachedAt > DASHBOARD_CACHE_TTL_MS;
+        }
+    }
+
     /**
      * 构建仪表盘统计数据 - admin 看全局（汇总表），普通用户看自己的数据（tokenIds 分片）
      */
     public DashboardStats buildDashboardStats(User currentUser) {
-        if ("admin".equalsIgnoreCase(currentUser.getRole())) {
-            return buildAdminStats();
-        } else {
-            return buildUserStats(currentUser);
+        boolean isAdmin = "admin".equalsIgnoreCase(currentUser.getRole());
+        DashboardCacheKey cacheKey = isAdmin
+                ? new DashboardCacheKey(true, null)
+                : new DashboardCacheKey(false, tokenService.getUserTokenIds(currentUser.getId()));
+
+        CachedDashboardStats cached = dashboardCache.get(cacheKey);
+        if (cached != null && !cached.isExpired()) {
+            return cached.stats();
         }
+
+        DashboardStats stats = isAdmin ? buildAdminStats() : buildUserStats(currentUser);
+        dashboardCache.put(cacheKey, new CachedDashboardStats(stats, System.currentTimeMillis()));
+        return stats;
     }
 
     // ========================================================================
