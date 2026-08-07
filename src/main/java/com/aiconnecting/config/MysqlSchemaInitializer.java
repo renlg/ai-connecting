@@ -29,6 +29,8 @@ import java.nio.charset.StandardCharsets;
 @RequiredArgsConstructor
 public class MysqlSchemaInitializer {
 
+    private static final int MYSQL_DUPLICATE_KEY_NAME_ERROR_CODE = 1061;
+
     private final JdbcTemplate jdbcTemplate;
 
     @PostConstruct
@@ -61,9 +63,9 @@ public class MysqlSchemaInitializer {
                 jdbcTemplate.execute(statement);
                 executed++;
             } catch (DataAccessException e) {
-                // 索引/唯一键不支持 MySQL 的 "IF NOT EXISTS"，重复执行时忽略已存在错误，保持幂等
-                String message = e.getMostSpecificCause() != null ? e.getMostSpecificCause().getMessage() : e.getMessage();
-                if (message != null && message.contains("Duplicate key name")) {
+                // 索引/唯一键不支持 MySQL 的 "IF NOT EXISTS"，重复执行时按错误码（而非可能被驱动包装
+                // 或本地化的文案）忽略已存在错误，保持幂等
+                if (DbDialectUtil.mysqlErrorCode(e) == MYSQL_DUPLICATE_KEY_NAME_ERROR_CODE) {
                     log.debug("Index already exists, skip: {}", statement);
                 } else {
                     throw e;

@@ -44,4 +44,21 @@ public final class DbDialectUtil {
                 .map(row -> String.valueOf(row.get("name")).toLowerCase())
                 .collect(Collectors.toSet());
     }
+
+    /**
+     * 沿异常链找到最深的 {@link SQLException} 并返回其 errorCode，供调用方按 MySQL 官方错误码
+     * （而不是可能被驱动包装或本地化的错误文案）判断是否为可忽略的幂等冲突。找不到 SQLException
+     * 时返回 -1，不会匹配任何已知 MySQL 错误码。
+     */
+    public static int mysqlErrorCode(Throwable e) {
+        Throwable cause = e;
+        SQLException sqlException = null;
+        while (cause != null) {
+            if (cause instanceof SQLException) {
+                sqlException = (SQLException) cause;
+            }
+            cause = cause.getCause();
+        }
+        return sqlException != null ? sqlException.getErrorCode() : -1;
+    }
 }

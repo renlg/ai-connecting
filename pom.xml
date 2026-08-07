@@ -72,7 +72,7 @@
             <artifactId>hibernate-community-dialects</artifactId>
         </dependency>
 
-        <!-- MySQL JDBC (可选，多实例部署时通过 DB_TYPE=mysql 启用) -->
+        <!-- MySQL JDBC (可选，多实例部署时通过 spring.profiles.active=mysql / SPRING_PROFILES_ACTIVE=mysql 启用) -->
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
