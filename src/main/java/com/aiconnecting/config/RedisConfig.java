@@ -12,6 +12,7 @@ import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.serializer.GenericToStringSerializer;
@@ -83,6 +84,36 @@ public class RedisConfig {
         template.setHashValueSerializer(new GenericToStringSerializer<>(Long.class));
         template.afterPropertiesSet();
         return template;
+    }
+
+    /**
+     * String 类型的 RedisTemplate，供分布式锁（{@link com.aiconnecting.common.RedisDistributedLock}）使用，
+     * 锁的持有令牌为 UUID 字符串，不适合复用上面 Long 值类型的 redisTemplate。
+     */
+    @Bean
+    public StringRedisTemplate lockRedisTemplate(RedisConnectionFactory connectionFactory) {
+        return new StringRedisTemplate(connectionFactory);
+    }
+
+    /**
+     * 分布式锁释放 Lua 脚本：仅当 key 当前的值等于调用方持有的 token 时才删除，
+     * 保证"比较并删除"的原子性，避免释放掉已被其他实例重新获取的锁。
+     *
+     * KEYS[1] = 锁 key
+     * ARGV[1] = 持有令牌
+     *
+     * 返回: 1=删除成功, 0=未删除（key 不存在或 token 不匹配）
+     */
+    @Bean
+    public RedisScript<Long> lockUnlockScript() {
+        String luaScript = """
+                if redis.call('GET', KEYS[1]) == ARGV[1] then
+                    return redis.call('DEL', KEYS[1])
+                else
+                    return 0
+                end
+                """;
+        return new DefaultRedisScript<>(luaScript, Long.class);
     }
 
     /**

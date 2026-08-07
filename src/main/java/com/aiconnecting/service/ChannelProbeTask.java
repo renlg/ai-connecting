@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.common.RedisDistributedLock;
 import com.aiconnecting.entity.Channel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -10,9 +11,6 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.RedisTemplate;
 
 /**
  * 渠道探测定时任务
@@ -27,14 +25,12 @@ public class ChannelProbeTask {
 
     private final ChannelHealthTracker healthTracker;
     private final ChannelService channelService;
-
-    @Autowired(required = false)
-    private RedisTemplate<String, Long> redisTemplate;
+    private final RedisDistributedLock distributedLock;
 
     /** 分布式锁 key，防止多机重复执行 */
-    private static final String LOCK_KEY = "lock:channel_probe";
-    /** 锁过期时间 30 分钟（小于定小时间隔 1 小时） */
-    private static final long LOCK_EXPIRE_MS = 30 * 60 * 1000L;
+    private static final String LOCK_KEY = "job:channelProbe";
+    /** 锁过期时间 30 分钟：小于调度间隔 1 小时，且大于探测批次的最长耗时（渠道数 × 15s 读超时） */
+    private static final long LOCK_TTL_SECONDS = 30 * 60L;
 
     private final OkHttpClient probeClient = new OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -46,50 +42,7 @@ public class ChannelProbeTask {
      */
     @Scheduled(fixedRate = 60 * 60 * 1000, initialDelay = 60 * 60 * 1000)
     public void probeBlockedChannels() {
-        if (!tryLock()) {
-            log.debug("未获取到分布式锁，跳过本次探测（可能其他实例正在执行）");
-            return;
-        }
-        try {
-            doProbe();
-        } finally {
-            releaseLock();
-        }
-    }
-
-    /**
-     * 尝试获取 Redis 分布式锁
-     */
-    private boolean tryLock() {
-        if (redisTemplate == null) {
-            // Redis 不可用，单机模式直接放行
-            return true;
-        }
-        try {
-            Boolean acquired = redisTemplate.opsForValue()
-                    .setIfAbsent(LOCK_KEY, 1L, LOCK_EXPIRE_MS, TimeUnit.MILLISECONDS);
-            if (Boolean.TRUE.equals(acquired)) {
-                log.info("获取探测分布式锁成功");
-                return true;
-            }
-            return false;
-        } catch (Exception e) {
-            log.warn("获取分布式锁异常，降级放行: {}", e.getMessage());
-            return true; // Redis 异常时降级放行
-        }
-    }
-
-    /**
-     * 释放分布式锁
-     */
-    private void releaseLock() {
-        if (redisTemplate == null) return;
-        try {
-            redisTemplate.delete(LOCK_KEY);
-            log.debug("释放探测分布式锁");
-        } catch (Exception e) {
-            log.warn("释放分布式锁异常: {}", e.getMessage());
-        }
+        distributedLock.runIfLocked(LOCK_KEY, LOCK_TTL_SECONDS, this::doProbe);
     }
 
     /**

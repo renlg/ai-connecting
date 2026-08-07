@@ -4,6 +4,7 @@ import com.aiconnecting.common.AudioDurationUtil;
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.MediaDurationLimits;
 import com.aiconnecting.common.ProtocolConverter;
+import com.aiconnecting.common.RedisDistributedLock;
 import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Token;
@@ -14,6 +15,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -49,6 +51,11 @@ public class OpenAiRelayService {
     private final VideoTaskSettlementService videoTaskSettlementService;
     private final VideoTaskUsageLogService videoTaskUsageLogService;
     private final OssMediaStorageService ossMediaStorageService;
+
+    // 字段注入而非通过 @RequiredArgsConstructor 加入构造函数参数列表，
+    // 以保持现有构造函数签名不变（OpenAiRelayServiceTest 直接以固定参数个数 new 出该类，不经过 Spring 容器）
+    @Autowired
+    private RedisDistributedLock distributedLock;
 
     /**
      * 中转请求 (非流式) - 最多重试 3 次，每次选择不同渠道
@@ -472,6 +479,14 @@ public class OpenAiRelayService {
     private static final long VIDEO_TASK_LEASE_MINUTES = 10;
 
     /**
+     * 对账任务分布式锁 key。任务本身已通过 claimForProcessing 做了行级租约，多实例并发执行本身是安全的；
+     * 加此锁主要是避免多实例同时扫描同一批 50 条候选任务、造成重复的行级 CAS 竞争和无谓的上游查询。
+     */
+    private static final String RECONCILE_LOCK_KEY = "job:videoReconcile";
+    /** 锁 TTL：5 分钟，等于调度间隔；批次最多 50 个任务、逐个顺序请求上游，最坏情况下需覆盖该时长 */
+    private static final long RECONCILE_LOCK_TTL_SECONDS = 5 * 60L;
+
+    /**
      * 后台对账：定期扫描长时间未结算的视频任务，主动向上游查询状态并结算，
      * 兜底客户端从不轮询、轮询提前中止或断线的场景（否则这些任务将永远不会被退款/结算）。
      * 与轮询接口共用同一套幂等结算逻辑（{@link VideoTaskSettlementService} 内的原子置位 + 同事务
@@ -479,39 +494,41 @@ public class OpenAiRelayService {
      */
     @Scheduled(fixedDelay = 5 * 60 * 1000L, initialDelay = 5 * 60 * 1000L)
     public void reconcileUnsettledVideoTasks() {
-        LocalDateTime now = LocalDateTime.now();
-        LocalDateTime cutoff = now.minusMinutes(RECONCILE_MIN_AGE_MINUTES);
-        List<VideoTask> pending = videoTaskRepository.findReconcileCandidates(
-                cutoff, now, PageRequest.of(0, RECONCILE_BATCH_SIZE));
-        if (pending.isEmpty()) {
-            return;
-        }
-        log.info("视频任务对账：待处理 {} 个未结算任务", pending.size());
-        for (VideoTask task : pending) {
-            LocalDateTime claimTime = LocalDateTime.now();
-            LocalDateTime leaseUntil = claimTime.plusMinutes(VIDEO_TASK_LEASE_MINUTES);
-            if (videoTaskRepository.claimForProcessing(task.getId(), claimTime, leaseUntil) != 1) {
-                continue;
+        distributedLock.runIfLocked(RECONCILE_LOCK_KEY, RECONCILE_LOCK_TTL_SECONDS, () -> {
+            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime cutoff = now.minusMinutes(RECONCILE_MIN_AGE_MINUTES);
+            List<VideoTask> pending = videoTaskRepository.findReconcileCandidates(
+                    cutoff, now, PageRequest.of(0, RECONCILE_BATCH_SIZE));
+            if (pending.isEmpty()) {
+                return;
             }
-            try {
-                videoTaskUsageLogService.ensureLinked(task.getId());
-                Channel channel = channelService.getById(task.getChannelId());
-                String response = support.forwardGetRequest(channel,
-                        support.videoStatusPath(channel, task.getUpstreamId(), task.getModel()));
-                settleVideoTaskIfTerminal(task, response);
-            } catch (Exception e) {
-                log.warn("视频任务对账失败，将于下次调度重试: taskId={}, upstreamId={}", task.getId(), task.getUpstreamId(), e);
-            } finally {
-                // 无论本轮是否结算成功都推迟 nextReconcileAt：已结算的任务后续查询会被 settled=false
-                // 条件过滤掉，不受影响；仍未结算的任务借此让位给其它任务，避免同一批任务被反复选中
+            log.info("视频任务对账：待处理 {} 个未结算任务", pending.size());
+            for (VideoTask task : pending) {
+                LocalDateTime claimTime = LocalDateTime.now();
+                LocalDateTime leaseUntil = claimTime.plusMinutes(VIDEO_TASK_LEASE_MINUTES);
+                if (videoTaskRepository.claimForProcessing(task.getId(), claimTime, leaseUntil) != 1) {
+                    continue;
+                }
                 try {
-                    videoTaskRepository.touchNextReconcileAt(task.getId(),
-                            LocalDateTime.now().plusMinutes(RECONCILE_RETRY_DELAY_MINUTES));
+                    videoTaskUsageLogService.ensureLinked(task.getId());
+                    Channel channel = channelService.getById(task.getChannelId());
+                    String response = support.forwardGetRequest(channel,
+                            support.videoStatusPath(channel, task.getUpstreamId(), task.getModel()));
+                    settleVideoTaskIfTerminal(task, response);
+                } catch (Exception e) {
+                    log.warn("视频任务对账失败，将于下次调度重试: taskId={}, upstreamId={}", task.getId(), task.getUpstreamId(), e);
                 } finally {
-                    videoTaskRepository.releaseClaim(task.getId(), leaseUntil);
+                    // 无论本轮是否结算成功都推迟 nextReconcileAt：已结算的任务后续查询会被 settled=false
+                    // 条件过滤掉，不受影响；仍未结算的任务借此让位给其它任务，避免同一批任务被反复选中
+                    try {
+                        videoTaskRepository.touchNextReconcileAt(task.getId(),
+                                LocalDateTime.now().plusMinutes(RECONCILE_RETRY_DELAY_MINUTES));
+                    } finally {
+                        videoTaskRepository.releaseClaim(task.getId(), leaseUntil);
+                    }
                 }
             }
-        }
+        });
     }
 
     private String firstText(JsonNode... nodes) {

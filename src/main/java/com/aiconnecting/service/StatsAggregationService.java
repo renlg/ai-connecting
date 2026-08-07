@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.common.RedisDistributedLock;
 import com.aiconnecting.entity.UsageStats;
 import com.aiconnecting.repository.UsageLogRepository;
 import com.aiconnecting.repository.UsageStatsRepository;
@@ -34,13 +35,16 @@ public class StatsAggregationService {
     private final UsageLogRepository usageLogRepository;
     private final UsageStatsRepository usageStatsRepository;
     private final TransactionTemplate transactionTemplate;
+    private final RedisDistributedLock distributedLock;
 
     public StatsAggregationService(UsageLogRepository usageLogRepository,
                                     UsageStatsRepository usageStatsRepository,
-                                    PlatformTransactionManager transactionManager) {
+                                    PlatformTransactionManager transactionManager,
+                                    RedisDistributedLock distributedLock) {
         this.usageLogRepository = usageLogRepository;
         this.usageStatsRepository = usageStatsRepository;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.distributedLock = distributedLock;
     }
 
     /** 窗口大小（分钟） */
@@ -48,6 +52,16 @@ public class StatsAggregationService {
 
     /** 保留汇总数据的天数上限（超过此天数的旧数据可清理） */
     private static final long MAX_RETENTION_DAYS = 180;
+
+    /** 聚合任务分布式锁 key */
+    private static final String AGGREGATION_LOCK_KEY = "job:statsAggregation";
+    /** 聚合任务锁 TTL：10 分钟，远大于单窗口聚合的预期耗时，覆盖 usage_logs 表较大时的极端情况 */
+    private static final long AGGREGATION_LOCK_TTL_SECONDS = 10 * 60L;
+
+    /** 清理任务分布式锁 key */
+    private static final String CLEAN_LOCK_KEY = "job:cleanOldData";
+    /** 清理任务锁 TTL：10 分钟，覆盖 usage_stats 大批量删除的预期耗时 */
+    private static final long CLEAN_LOCK_TTL_SECONDS = 10 * 60L;
 
     /**
      * 序列化窗口的 exists-check -> aggregate -> insert -> commit 临界区，防止定时任务与启动时的
@@ -65,18 +79,20 @@ public class StatsAggregationService {
      */
     @Scheduled(cron = "0 0/15 * * * ?")
     public void aggregateLastWindow() {
-        LocalDateTime now = LocalDateTime.now();
-        // 计算上一个完整窗口的起止时间
-        LocalDateTime windowEnd = alignWindowEnd(now);
-        LocalDateTime windowStart = windowEnd.minusMinutes(WINDOW_MINUTES);
+        distributedLock.runIfLocked(AGGREGATION_LOCK_KEY, AGGREGATION_LOCK_TTL_SECONDS, () -> {
+            LocalDateTime now = LocalDateTime.now();
+            // 计算上一个完整窗口的起止时间
+            LocalDateTime windowEnd = alignWindowEnd(now);
+            LocalDateTime windowStart = windowEnd.minusMinutes(WINDOW_MINUTES);
 
-        // 快速路径的非权威检查（无锁），避免大多数情况下无谓地抢锁；权威检查在 aggregateWindow 的锁内重做
-        if (usageStatsRepository.existsByTimeRange(windowStart, windowEnd)) {
-            log.debug("窗口 {} ~ {} 已聚合，跳过", windowStart, windowEnd);
-            return;
-        }
+            // 快速路径的非权威检查（无锁），避免大多数情况下无谓地抢锁；权威检查在 aggregateWindow 的锁内重做
+            if (usageStatsRepository.existsByTimeRange(windowStart, windowEnd)) {
+                log.debug("窗口 {} ~ {} 已聚合，跳过", windowStart, windowEnd);
+                return;
+            }
 
-        aggregateWindow(windowStart, windowEnd);
+            aggregateWindow(windowStart, windowEnd);
+        });
     }
 
     /**
@@ -195,9 +211,11 @@ public class StatsAggregationService {
     @Scheduled(cron = "0 30 3 * * ?")
     @Transactional
     public void cleanOldData() {
-        LocalDateTime cutoff = LocalDateTime.now().minusDays(MAX_RETENTION_DAYS);
-        usageStatsRepository.deleteByEndTimeBefore(cutoff);
-        log.info("清理了 {} 天前的旧汇总数据", MAX_RETENTION_DAYS);
+        distributedLock.runIfLocked(CLEAN_LOCK_KEY, CLEAN_LOCK_TTL_SECONDS, () -> {
+            LocalDateTime cutoff = LocalDateTime.now().minusDays(MAX_RETENTION_DAYS);
+            usageStatsRepository.deleteByEndTimeBefore(cutoff);
+            log.info("清理了 {} 天前的旧汇总数据", MAX_RETENTION_DAYS);
+        });
     }
 
     /**
