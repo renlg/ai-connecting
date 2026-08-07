@@ -29,25 +29,34 @@ OpenAI 协议中转站管理面板。支持多渠道池、加权负载均衡、�
 - **积分券** — 生成兑换码，用户自助兑换积分
 - **操作审计** — 管理员所有写操作自动记录日志，可追溯
 
+### 媒体计费
+
+- **多模型类型计费** — 模型分 `text` / `image` / `video` / `audio` 四类，图片按分辨率档位（1k/2k/4k）、视频按分辨率档位（480p/720p/1080p/4k）、音频按标准/高清档位分别计价
+- **预扣模式** — 媒体类请求在调用上游前原子预扣积分，避免上游耗时任务期间的透支；实际计费与预扣金额有差异时按差额结算/退款
+- **视频任务对账** — 视频生成为异步任务，通过 `settled`/`processingLeaseUntil` 等字段做乐观锁式条件 UPDATE（`WHERE ... AND settled = false`），保证客户端轮询与后台对账任务并发访问同一任务时不会重复扣款/退款
+- **渠道密钥加密** — 渠道 API Key 落库前经 AES-256-GCM 加密（`enc:v1:` 前缀），密钥通过 `CHANNEL_ENCRYPTION_KEY` 环境变量提供，历史明文密钥启动时自动迁移加密
+
 ### 性能与可观测
 
 - **数据缓存** — 渠道列表、模型名称、用户信息、Token 验证均带内存缓存（60s TTL）
-- **SQL 聚合查询** — Token 统计等聚合操作直接在数据库层完成，避免全量加载
+- **SQL 聚合查询** — Token 统计等聚合操作直接在数据库层完成，避免全量加载；仪表盘统计每 15 分钟聚合一次写入独立的 `usage_stats` 表，避免仪表盘查询扫描明细表
+- **有界缓存** — 仪表盘等内存缓存采用 LRU 限制条目数上限，避免长期运行下的内存无界增长
 - **全链路追踪** — 集成 Zipkin，请求链路可追踪，traceId 写入响应头便于排查
-- **健康检查** — `/health` 端点（公开），用于蓝绿部署和服务监控
-- **Redis 可选** — 限流和健康追踪支持 Redis（分布式）和纯内存两种模式
+- **健康检查** — `/health` 端点（公开），用于部署时的启动探活和服务监控
+- **Redis 可选** — 限流、健康追踪、登录失败锁定支持 Redis（可跨进程共享）和纯内存两种模式，通过 `RATE_LIMIT_ENABLED` 控制
 
 ## 技术栈
 
 | 层 | 技术 |
 |---|---|
 | 后端 | Spring Boot 3.2 + Spring Security + JPA + Hibernate |
-| 数据库 | SQLite（通过 Hibernate 社区方言） |
+| 数据库 | SQLite（通过 Hibernate 社区方言），HikariCP 连接池（WAL 模式，`busy_timeout=5000`，最大连接数 4） |
 | 前端 | React 18 + Ant Design 5 + Vite |
 | 认证 | JWT + API Key 双因子鉴权 |
-| 缓存 | Redis（可选，通过 `RATE_LIMIT_ENABLED` 控制，全局限流需要） |
+| 缓存 | Redis（可选，通过 `RATE_LIMIT_ENABLED` 控制；限流 / 渠道健康追踪 / 登录失败锁定共用） |
+| 对象存储 | 阿里云 OSS（图片/视频等媒体产物转存为匿名直链，`OSS_ENABLED` 可关闭） |
 | 追踪 | Zipkin |
-| 部署 | 蓝绿部署（8080 / 8081 端口交替） |
+| 部署 | 单机 systemd 服务，`deploy/deploy.sh` 一键构建 + 上传 + 重启 |
 
 ## 认证体系
 
@@ -126,7 +135,8 @@ cd web && npm install && npm run dev
 | `JWT_SECRET` | JWT 签名密钥 | 是 |
 | `ADMIN_DEFAULT_PASSWORD` | 初始管理员密码 | 是 |
 | `ADMIN_RESET_PASSWORD` | 重置管理员密码（非空时触发） | 否 |
-| `REDIS_HOST` | Redis 地址 | 限流功能需要 |
+| `CHANNEL_ENCRYPTION_KEY` | 渠道 API Key 加密密钥（base64 编码的 32 字节 AES-256-GCM 密钥） | 是 |
+| `REDIS_HOST` | Redis 地址 | 限流 / 渠道健康分布式模式 / 登录失败锁定需要 |
 | `REDIS_PORT` | Redis 端口（默认 6379） | 否 |
 | `REDIS_PASSWORD` | Redis 密码 | 否 |
 | `REDIS_DATABASE` | Redis 数据库编号（默认 0） | 否 |
@@ -148,15 +158,33 @@ cd web && npm install && npm run dev
 
 ## 生产部署
 
-项目使用蓝绿部署策略，详见 `deploy/` 目录。
+当前为单机部署（阿里云 ECS），通过 `deploy/deploy.sh` 一键构建发布，详见 `deploy/` 目录。
 
 ```bash
 bash deploy/deploy.sh
 ```
 
-部署流程：构建前端 → 构建后端 JAR → SCP 上传到服务器 → 启动新端口 → 健康检查 → 切换 Nginx upstream → 关闭旧服务。
+部署流程：构建前端 → 构建后端 JAR → 单元测试 → SCP 上传 JAR 与 systemd 单元文件到服务器 → `systemctl restart` 重启服务 → 健康检查（`systemctl is-active`）。
 
-服务器环境文件 `/opt/ai-connecting/.env` 需提前配置所有环境变量。
+注意：这是单实例原地重启，重启期间会有短暂服务中断（`Restart=on-failure` 由 systemd 保证进程崩溃后自动拉起，但不是零停机的蓝绿切换）；仓库中未包含 Nginx 双端口切换脚本。
+
+服务器环境文件 `/opt/ai-connecting/.env` 需提前配置所有环境变量，且需要在服务器上手动准备（不随部署脚本同步）。
+
+## 多端部署 (Multi-instance Deployment)
+
+> 以下为架构设计分析笔记，描述当前**尚未支持**、未来若要多实例横向扩展需要解决的问题，不代表已实现的功能。
+
+项目当前按单实例设计和部署。若要在负载均衡后面部署多个应用节点并保持数据一致，现有实现存在以下阻塞点：
+
+- **SQLite 单写者语义**：数据库是应用本地的单一文件（`./data/ai-connecting.db`），每个节点各自持有一份文件即数据互相独立、不共享；若改为通过 NFS/云盘挂载同一份文件，WAL 模式在网络文件系统上的锁语义没有可靠保证，存在损坏风险，SQLite 本质上不是为多进程跨主机并发写设计的。
+- **`ddl-auto: update` 竞态**：多个节点同时启动会并发对同一份 schema 做变更，缺少分布式迁移锁，存在建表/加列竞态。
+- **启动期迁移逻辑依赖 SQLite 方言**：`ApiKeyMigrationRunner`、`ModelTypeMigrationRunner`、`DashboardIndexMigrationRunner`、`VideoTaskMigrationRunner` 均通过 `PRAGMA table_info(...)` 等 SQLite 专有语法探测列是否存在，迁移到其他数据库需要重写。
+- **定时任务重复执行**：`StatsAggregationService`（每 15 分钟聚合、每日 03:30 清理旧数据）、`ChannelProbeTask`（每小时探测被封禁渠道）、`OpenAiRelayService` 中的视频任务对账任务均为 `@Scheduled`，多节点部署下会在每个节点各跑一份。聚合任务内部靠 JVM 内 `synchronized` 锁 + 事务内二次校验防重复写入，这只在单进程内有效，多进程下需要换成 Redis 分布式锁（当前项目里**没有**现成的分布式锁工具类，只有限流用的滑动窗口 Lua 脚本）。
+- **进程内缓存不同步**：渠道列表、模型信息、用户信息、Token 校验结果等使用 `ConcurrentHashMap` 做本地内存缓存（60s TTL），多节点下各节点缓存互不感知，写操作后其他节点最多 60s 内可能读到旧数据。
+- **Redis 现状是可选依赖而非强依赖**：`RATE_LIMIT_ENABLED=false` 时限流、登录失败锁定完全不生效（相关 Bean 通过 `@ConditionalOnProperty` 直接不装配），渠道健康追踪退化为纯内存模式；多节点部署下必须强制启用 Redis，否则限流/防爆破/健康状态在节点间完全不一致。
+- **积分/额度写路径本身具备较好的原子性基础**：`UsageLogService.recordUsageAndQuotas` 内的余额与额度更新（`UserRepository.tryDeductCredits`、`ChannelRepository.addUsedQuota`、`TokenRepository.addUsedQuota`）都是条件 `UPDATE ... WHERE` 语句而非"读出改回写"，视频任务结算也用 `WHERE settled = false` 的条件 UPDATE 做乐观锁；这一模式可以直接迁移到 MySQL/PostgreSQL 且并发语义不变，是多节点改造中不需要重写的部分。
+
+**推荐方向**：数据库迁移到 MySQL 或 PostgreSQL（真正支持多连接并发写、行级锁、跨主机访问），迁移期间将四个迁移 Runner 中的 SQLite 专有 SQL 替换为目标数据库方言的等价写法，`ddl-auto` 收敛为 `validate`（配合独立的建表 SQL/迁移工具管理 schema），并为所有 `@Scheduled` 任务加上基于 Redis 的分布式锁（此时 Redis 需从可选依赖提升为强制依赖）。这是一次涉及数据层和部分服务层的改造，暂无实施计划。
 
 ## 项目结构
 
