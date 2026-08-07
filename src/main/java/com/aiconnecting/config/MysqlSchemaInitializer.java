@@ -45,10 +45,16 @@ public class MysqlSchemaInitializer {
             throw new IllegalStateException("Failed to load schema-mysql.sql", e);
         }
 
+        // 逐行剔除整行注释（以 -- 开头的行），避免按 ; 切分后 CREATE TABLE 语句因紧邻的注释行
+        // 被误判为注释片段而整体跳过（注释行与其后的 DDL 语句同属一个 ; 分隔片段）
+        String withoutComments = sql.lines()
+                .filter(line -> !line.strip().startsWith("--"))
+                .collect(java.util.stream.Collectors.joining("\n"));
+
         int executed = 0;
-        for (String rawStatement : sql.split(";")) {
+        for (String rawStatement : withoutComments.split(";")) {
             String statement = rawStatement.strip();
-            if (statement.isEmpty() || statement.startsWith("--")) {
+            if (statement.isEmpty()) {
                 continue;
             }
             try {

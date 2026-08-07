@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -50,6 +51,9 @@ public class DashboardIndexMigrationRunner implements ApplicationRunner {
     /**
      * MySQL 的 CREATE INDEX 不支持 IF NOT EXISTS，需先查 information_schema.statistics 判断索引是否已存在；
      * SQLite 继续使用原有的 IF NOT EXISTS 语句，逻辑不变。
+     *
+     * 先查后建存在多实例同时启动时的竞态：两个实例都可能查到 count=0 后同时尝试建索引，
+     * 后完成的一方会收到 MySQL 1061 "Duplicate key name" 错误，此时视为索引已被对方创建成功，忽略即可。
      */
     private void createIndexIfAbsent(boolean mysql, String table, String indexName, String sqliteSql, String mysqlSql) {
         if (mysql) {
@@ -58,7 +62,16 @@ public class DashboardIndexMigrationRunner implements ApplicationRunner {
                             "WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?",
                     Integer.class, table, indexName);
             if (count == null || count == 0) {
-                jdbcTemplate.execute(mysqlSql);
+                try {
+                    jdbcTemplate.execute(mysqlSql);
+                } catch (DataAccessException e) {
+                    String message = e.getMostSpecificCause() != null ? e.getMostSpecificCause().getMessage() : e.getMessage();
+                    if (message != null && message.contains("Duplicate key name")) {
+                        log.debug("Index {} already created by another instance, skip: {}", indexName, message);
+                    } else {
+                        throw e;
+                    }
+                }
             }
         } else {
             jdbcTemplate.execute(sqliteSql);

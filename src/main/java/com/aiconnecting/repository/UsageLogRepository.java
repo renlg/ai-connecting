@@ -7,7 +7,7 @@ import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
 import java.util.List;
 
-public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
+public interface UsageLogRepository extends JpaRepository<UsageLog, Long>, UsageLogRepositoryCustom {
 
     @Query("SELECT COALESCE(SUM(u.totalTokens), 0) FROM UsageLog u WHERE u.createdAt >= :since")
     Long sumTotalTokensSince(LocalDateTime since);
@@ -39,21 +39,8 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
     @Query("SELECT COALESCE(SUM(u.promptTokensCacheHit), 0) FROM UsageLog u WHERE u.createdAt >= :since")
     long sumCachedPromptTokensSince(LocalDateTime since);
 
-    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, " +
-            "COALESCE(SUM(credit_cost), 0) as credits, " +
-            "COALESCE(SUM(prompt_tokens), 0) as input_tokens, " +
-            "COALESCE(SUM(completion_tokens), 0) as output_tokens " +
-            "FROM usage_logs WHERE token_id = ?1 AND created_at >= ?2 " +
-            "GROUP BY DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) ORDER BY date DESC", nativeQuery = true)
-    List<Object[]> findDailyCreditCostByTokenIdSince(Long tokenId, LocalDateTime since);
-
-    // 按 Token ID + 指定日期查询单条消耗记录明细（含输入/输出 token 数）
-    @Query(value = "SELECT id, model, prompt_tokens, completion_tokens, credit_cost, " +
-            "datetime(created_at / 1000, 'unixepoch', '+8 hours') as created_at " +
-            "FROM usage_logs WHERE token_id = ?1 " +
-            "AND DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) = ?2 " +
-            "ORDER BY created_at DESC", nativeQuery = true)
-    List<Object[]> findLogDetailsByTokenIdAndDate(Long tokenId, String date);
+    // findDailyCreditCostByTokenIdSince / findLogDetailsByTokenIdAndDate 使用 SQLite 专属的
+    // datetime()/unixepoch 函数做按天分桶，MySQL 无此函数，已迁移到 UsageLogRepositoryImpl 按方言分支实现
 
     // Dashboard 聚合查询：一次查询获取所有指标（Token 相关列仅统计 text 类型模型，请求数/积分不受影响）
     @Query(value = "SELECT COALESCE(COUNT(*), 0), " +
@@ -71,26 +58,8 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
             "AND model IN (SELECT name FROM model_configs WHERE type = 'text')", nativeQuery = true)
     List<Object[]> sumCacheTokensByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
-    // 按 Token ID 列表统计每日消耗积分
-    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, " +
-            "COALESCE(SUM(credit_cost), 0) as credits " +
-            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since GROUP BY date ORDER BY date ASC", nativeQuery = true)
-    List<Object[]> findDailyCreditCostByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
-
-    // 全局每日按模型统计 token 数（仅 text 类型模型，用于仪表盘按模型柱状图）
-    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, " +
-            "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) " +
-            "FROM usage_logs WHERE created_at >= :since AND model IN (SELECT name FROM model_configs WHERE type = 'text') " +
-            "GROUP BY date, model ORDER BY date ASC, model ASC", nativeQuery = true)
-    List<Object[]> findDailyTokenByModelSince(@Param("since") LocalDateTime since);
-
-    // 按 Token ID 列表统计每日按模型 token 数（仅 text 类型模型，用于仪表盘按模型柱状图）
-    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, " +
-            "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) " +
-            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since " +
-            "AND model IN (SELECT name FROM model_configs WHERE type = 'text') " +
-            "GROUP BY date, model ORDER BY date ASC, model ASC", nativeQuery = true)
-    List<Object[]> findDailyTokenByModelByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
+    // findDailyCreditCostByTokenIdsSince / findDailyTokenByModelSince / findDailyTokenByModelByTokenIdsSince
+    // 同样使用 SQLite 专属的 datetime()/unixepoch 函数做按天分桶，已迁移到 UsageLogRepositoryImpl 按方言分支实现
 
     // 全局按模型名统计积分消耗（用于仪表盘"今日消耗积分"卡片 tooltip，按类型合并在服务层完成，
     // 避免 JOIN model_configs：同名多行会产生笛卡尔积，见 model_configs.name='deepseek-v4-flash' 重复问题）
@@ -103,17 +72,8 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long> {
             "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since GROUP BY model", nativeQuery = true)
     List<Object[]> findCreditByModelByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
-    // 全局每日按模型名统计积分消耗（用于仪表盘"每日消耗积分"柱状图 tooltip）
-    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, " +
-            "COALESCE(SUM(credit_cost), 0) " +
-            "FROM usage_logs WHERE created_at >= :since GROUP BY date, model ORDER BY date ASC", nativeQuery = true)
-    List<Object[]> findDailyCreditByModelSince(@Param("since") LocalDateTime since);
-
-    // 按 Token ID 列表统计每日按模型名积分消耗
-    @Query(value = "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, " +
-            "COALESCE(SUM(credit_cost), 0) " +
-            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since GROUP BY date, model ORDER BY date ASC", nativeQuery = true)
-    List<Object[]> findDailyCreditByModelByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
+    // findDailyCreditByModelSince / findDailyCreditByModelByTokenIdsSince 同样使用 SQLite 专属的
+    // datetime()/unixepoch 函数做按天分桶，已迁移到 UsageLogRepositoryImpl 按方言分支实现
 
     // ========== 汇总表聚合查询 ==========
 

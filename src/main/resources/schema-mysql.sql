@@ -85,8 +85,6 @@ CREATE TABLE IF NOT EXISTS model_configs (
     updated_at DATETIME(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE UNIQUE INDEX idx_model_configs_name ON model_configs (name);
-
 -- 使用记录表（credit_cost 修正为 DECIMAL(19,6) NOT NULL DEFAULT 0，而非历史快照中的 BIGINT）
 CREATE TABLE IF NOT EXISTS usage_logs (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
