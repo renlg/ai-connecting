@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
 
 /**
@@ -35,6 +36,9 @@ public class RedisDistributedLock {
 
     /** 锁 key 命名空间前缀，避免共享 Redis 的不同环境之间互相锁定 */
     private final String keyPrefix;
+
+    /** Redis disabled/unavailable fallback for single-instance coordination values. */
+    private final ConcurrentHashMap<String, Long> localLongValues = new ConcurrentHashMap<>();
 
     public RedisDistributedLock(ObjectProvider<StringRedisTemplate> redisTemplateProvider,
                                  @Qualifier("lockUnlockScript") ObjectProvider<RedisScript<Long>> lockUnlockScriptProvider,
@@ -101,6 +105,38 @@ public class RedisDistributedLock {
             return true;
         } finally {
             unlock(key, token);
+        }
+    }
+
+    /**
+     * Reads a namespaced long-lived coordination value. Compound read/modify/write operations must be
+     * performed while holding the corresponding distributed lock.
+     */
+    public Long getLongValue(String key) {
+        if (redisTemplate == null) {
+            return localLongValues.get(key);
+        }
+        try {
+            String value = redisTemplate.opsForValue().get(keyPrefix + key);
+            return value != null ? Long.valueOf(value) : null;
+        } catch (Exception e) {
+            log.warn("读取分布式协调值异常，降级为单机值: key={}, error={}", key, e.getMessage());
+            return localLongValues.get(key);
+        }
+    }
+
+    /**
+     * Writes a namespaced long-lived coordination value. See {@link #getLongValue(String)} for locking rules.
+     */
+    public void setLongValue(String key, long value) {
+        localLongValues.put(key, value);
+        if (redisTemplate == null) {
+            return;
+        }
+        try {
+            redisTemplate.opsForValue().set(keyPrefix + key, Long.toString(value));
+        } catch (Exception e) {
+            log.warn("写入分布式协调值异常，已降级为单机值: key={}, error={}", key, e.getMessage());
         }
     }
 }

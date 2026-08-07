@@ -240,7 +240,8 @@ public class StatsAggregationService {
 
         // 从最早的使用日志开始
         List<Object[]> earliest = usageLogRepository.findEarliestCreatedAt();
-        if (earliest.isEmpty() || earliest.get(0)[0] == null) {
+        if (earliest == null || earliest.isEmpty() || earliest.get(0) == null
+                || earliest.get(0).length == 0 || earliest.get(0)[0] == null) {
             log.info("usage_logs 表无数据，跳过初始化");
             return;
         }

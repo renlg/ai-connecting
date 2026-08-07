@@ -11,7 +11,6 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -39,8 +38,11 @@ public class ChannelProbeTask {
      * 超出本次批次的渠道仍处于熔断 OPEN 状态，会在下一轮调度（1 小时后）被探测。
      */
     private static final int MAX_CHANNELS_PER_RUN = 60;
-    /** 上次批次的最后一个 ID；按 ID 排序并环形续读，保证持续 OPEN 的渠道不会饥饿。 */
-    private final AtomicLong lastProbedChannelId = new AtomicLong(Long.MIN_VALUE);
+    /**
+     * 上次批次最后一个 ID 的共享游标。该值与任务锁使用相同的 APP_ENV 命名空间持久化在 Redis，
+     * 因此任意实例接手或实例重启后都会从同一位置继续；Redis 未启用时仅用于单实例内存回退。
+     */
+    private static final String CURSOR_KEY = "job:channelProbe:cursor";
 
     private final OkHttpClient probeClient = new OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -66,13 +68,17 @@ public class ChannelProbeTask {
         }
 
         List<Long> sortedIds = openIds.stream().sorted().toList();
-        long cursor = lastProbedChannelId.get();
+        Long savedCursor = distributedLock.getLongValue(CURSOR_KEY);
+        long cursor = savedCursor != null ? savedCursor : Long.MIN_VALUE;
         List<Long> batch = java.util.stream.Stream.concat(
                         sortedIds.stream().filter(id -> id > cursor),
                         sortedIds.stream().filter(id -> id <= cursor))
                 .limit(MAX_CHANNELS_PER_RUN)
                 .toList();
-        lastProbedChannelId.set(batch.get(batch.size() - 1));
+        // doProbe itself is guarded by LOCK_KEY, so this shared read/advance is serialized across instances.
+        // Every finite set of continuously OPEN channels is therefore covered after at most
+        // ceil(channelCount / MAX_CHANNELS_PER_RUN) successful rounds, regardless of which instance runs them.
+        distributedLock.setLongValue(CURSOR_KEY, batch.get(batch.size() - 1));
         if (batch.size() < openIds.size()) {
             log.info("熔断 OPEN 渠道数 {} 超过单次探测上限 {}，本轮从轮转游标后探测 {} 个",
                     openIds.size(), MAX_CHANNELS_PER_RUN, batch.size());

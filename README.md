@@ -145,6 +145,7 @@ cd web && npm install && npm run dev
 | `REDIS_DATABASE` | Redis 数据库编号（默认 0） | 否 |
 | `REDIS_USERNAME` | Redis 用户名 | 否 |
 | `RATE_LIMIT_ENABLED` | 限流功能开关（默认 false，需 Redis） | 否 |
+| `APP_ENV` | Redis 锁命名空间（默认 `default`）；同一部署的所有实例必须一致，共享 Redis 的不同环境必须不同（如 `dev`/`test`/`prod`） | 否 |
 | `CORS_ALLOWED_ORIGINS` | 允许的跨域源（逗号分隔，默认允许所有） | 否 |
 | `TRUSTED_PROXIES` | 信任的代理 IP（逗号分隔，默认 127.0.0.1,::1） | 否 |
 | `ZIPKIN_ENDPOINT` | Zipkin 服务地址 | 否 |
