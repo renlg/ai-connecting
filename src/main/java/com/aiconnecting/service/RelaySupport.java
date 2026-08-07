@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.common.MediaDurationLimits;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
@@ -17,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.context.event.EventListener;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -256,6 +258,13 @@ public class RelaySupport {
     public void clearModelNameCache() {
         modelNameCache.clear();
         modelConfigCache.clear();
+    }
+
+    @EventListener
+    public void onCacheInvalidation(CacheInvalidationService.CacheInvalidationEvent event) {
+        if (CacheInvalidationService.MODEL_CONFIG.equals(event.route())) {
+            clearModelNameCache();
+        }
     }
 
     /**

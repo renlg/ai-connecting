@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.repository.ChannelRepository;
@@ -8,6 +9,7 @@ import com.aiconnecting.repository.ModelConfigRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.context.event.EventListener;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
@@ -26,6 +28,7 @@ public class ModelConfigService {
 
     private final ModelConfigRepository modelConfigRepository;
     private final ChannelRepository channelRepository;
+    private final CacheInvalidationService cacheInvalidationService;
 
     /** 按 model_configs.name 索引的模型信息（type/displayName），用于仪表盘按模型名合并统计，避免与 usage_logs JOIN */
     public record ModelInfo(String type, String displayName) {}
@@ -96,7 +99,9 @@ public class ModelConfigService {
     }
 
     public ModelConfig save(ModelConfig config) {
-        return modelConfigRepository.save(config);
+        ModelConfig saved = modelConfigRepository.save(config);
+        cacheInvalidationService.publish(CacheInvalidationService.MODEL_CONFIG);
+        return saved;
     }
 
     /**
@@ -117,6 +122,7 @@ public class ModelConfigService {
             throw new BusinessException("模型不存在");
         }
         modelConfigRepository.deleteById(id);
+        cacheInvalidationService.publish(CacheInvalidationService.MODEL_CONFIG);
     }
 
     public boolean existsById(Long id) {
@@ -146,7 +152,16 @@ public class ModelConfigService {
                 .filter(name -> name != null && !name.isBlank())
                 .map(name -> ModelConfig.builder().name(name).status(1).build())
                 .toList();
-        return modelConfigRepository.saveAll(configs);
+        List<ModelConfig> saved = modelConfigRepository.saveAll(configs);
+        cacheInvalidationService.publish(CacheInvalidationService.MODEL_CONFIG);
+        return saved;
+    }
+
+    @EventListener
+    public void onCacheInvalidation(CacheInvalidationService.CacheInvalidationEvent event) {
+        if (CacheInvalidationService.MODEL_CONFIG.equals(event.route())) {
+            modelInfoMapCache = null;
+        }
     }
 
     /**

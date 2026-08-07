@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.dto.LoginRequest;
 import com.aiconnecting.dto.LoginResponse;
 import com.aiconnecting.dto.RegisterRequest;
@@ -37,6 +38,7 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final CacheInvalidationService cacheInvalidationService;
 
     @Autowired(required = false)
     private RedisTemplate<String, Long> redisTemplate;
@@ -71,7 +73,8 @@ public class UserService {
                     .usedQuota(0L)
                     .status(1)
                     .build();
-            userRepository.save(admin);
+            User saved = userRepository.save(admin);
+            cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + saved.getId());
             log.warn("数据库中无 admin 用户，已使用默认密码创建默认管理员，请尽快修改密码");
         }
     }
@@ -164,7 +167,9 @@ public class UserService {
                 .inviteCode(generateInviteCode())
                 .build();
 
-        return userRepository.save(user);
+        User saved = userRepository.save(user);
+        cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + saved.getId());
+        return saved;
     }
 
     public User getById(Long id) {
@@ -193,6 +198,7 @@ public class UserService {
     public void evictUserCache(Long userId) {
         if (userId != null) {
             userCache.remove(userId);
+            cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + userId);
         }
     }
 
@@ -208,7 +214,9 @@ public class UserService {
         User user = getById(userId);
         if (nickname != null) user.setNickname(nickname);
         if (email != null) user.setEmail(email);
-        return userRepository.save(user);
+        User saved = userRepository.save(user);
+        cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + userId);
+        return saved;
     }
 
     @Transactional
@@ -219,6 +227,7 @@ public class UserService {
         }
         user.setPassword(passwordEncoder.encode(newPassword));
         userRepository.save(user);
+        cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + userId);
         clearLoginFailRecords(user.getUsername());
     }
 
@@ -367,7 +376,22 @@ public class UserService {
         for (User u : usersWithoutCode) {
             u.setInviteCode(generateInviteCode());
             userRepository.save(u);
+            cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + u.getId());
             log.info("为用户 {} 生成邀请码: {}", u.getUsername(), u.getInviteCode());
+        }
+    }
+
+    @org.springframework.context.event.EventListener
+    public void onCacheInvalidation(CacheInvalidationService.CacheInvalidationEvent event) {
+        String route = event.route();
+        if (!route.startsWith(CacheInvalidationService.USER_PREFIX)) {
+            return;
+        }
+        try {
+            Long userId = Long.valueOf(route.substring(CacheInvalidationService.USER_PREFIX.length()));
+            userCache.remove(userId);
+        } catch (NumberFormatException ignored) {
+            // 非法/未知消息忽略
         }
     }
 }

@@ -1,11 +1,13 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.dto.TokenRequest;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.repository.TokenRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.context.event.EventListener;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -17,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TokenService {
 
     private final TokenRepository tokenRepository;
+    private final CacheInvalidationService cacheInvalidationService;
 
     /** Token 验证缓存，减少数据库查询，缓存 30 秒（缩短以减少禁用/过期Token延迟） */
     private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
@@ -70,7 +73,9 @@ public class TokenService {
                 .status(1)
                 .build();
 
-        return tokenRepository.save(token);
+        Token saved = tokenRepository.save(token);
+        cacheInvalidationService.publish(CacheInvalidationService.TOKEN_PREFIX + saved.getTokenKey());
+        return saved;
     }
 
     public Token update(Long id, TokenRequest request) {
@@ -89,8 +94,8 @@ public class TokenService {
     public void delete(Long id) {
         Token token = tokenRepository.findById(id)
                 .orElseThrow(() -> new BusinessException("Token 不存在"));
-        evictTokenCache(token.getTokenKey());
         tokenRepository.deleteById(id);
+        evictTokenCache(token.getTokenKey());
     }
 
     public void updateStatus(Long id, Integer status) {
@@ -131,6 +136,7 @@ public class TokenService {
     public void addUsedQuota(Long tokenId, long quota) {
         if (quota > 0) {
             tokenRepository.addUsedQuota(tokenId, quota);
+            cacheInvalidationService.publish(CacheInvalidationService.TOKEN_ID_PREFIX + tokenId);
         }
     }
 
@@ -147,6 +153,27 @@ public class TokenService {
     public void evictTokenCache(String tokenKey) {
         if (tokenKey != null) {
             tokenCache.remove(tokenKey);
+            cacheInvalidationService.publish(CacheInvalidationService.TOKEN_PREFIX + tokenKey);
+        }
+    }
+
+    @EventListener
+    public void onCacheInvalidation(CacheInvalidationService.CacheInvalidationEvent event) {
+        String route = event.route();
+        if (route.startsWith(CacheInvalidationService.TOKEN_PREFIX)) {
+            String tokenKey = route.substring(CacheInvalidationService.TOKEN_PREFIX.length());
+            if (!tokenKey.isBlank()) {
+                tokenCache.remove(tokenKey);
+            }
+            return;
+        }
+        if (route.startsWith(CacheInvalidationService.TOKEN_ID_PREFIX)) {
+            try {
+                long tokenId = Long.parseLong(route.substring(CacheInvalidationService.TOKEN_ID_PREFIX.length()));
+                tokenCache.entrySet().removeIf(entry -> tokenId == entry.getValue().token().getId());
+            } catch (NumberFormatException ignored) {
+                // 非法/未知消息忽略
+            }
         }
     }
 

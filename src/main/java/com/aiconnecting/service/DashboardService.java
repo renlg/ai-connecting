@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.dto.DashboardStats;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.User;
@@ -8,6 +9,7 @@ import com.aiconnecting.repository.UsageStatsRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.context.event.EventListener;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -83,6 +85,19 @@ public class DashboardService {
         DashboardStats stats = isAdmin ? buildAdminStats() : buildUserStats(currentUser);
         dashboardCache.put(cacheKey, new CachedDashboardStats(stats, System.currentTimeMillis()));
         return stats;
+    }
+
+    @EventListener
+    public void onCacheInvalidation(CacheInvalidationService.CacheInvalidationEvent event) {
+        String route = event.route();
+        if (CacheInvalidationService.CHANNEL_LIST.equals(route)
+                || CacheInvalidationService.MODEL_CONFIG.equals(route)
+                || CacheInvalidationService.USAGE_STATS.equals(route)
+                || route.startsWith(CacheInvalidationService.USER_PREFIX)
+                || route.startsWith(CacheInvalidationService.TOKEN_PREFIX)
+                || route.startsWith(CacheInvalidationService.TOKEN_ID_PREFIX)) {
+            dashboardCache.clear();
+        }
     }
 
     // ========================================================================

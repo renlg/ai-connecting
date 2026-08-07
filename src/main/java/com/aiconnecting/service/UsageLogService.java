@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.dto.DashboardDailyStats;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.User;
@@ -13,6 +14,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.context.event.EventListener;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -38,6 +40,7 @@ public class UsageLogService {
     private final ModelConfigService modelConfigService;
     private final UserRepository userRepository;
     private final TokenService tokenService;
+    private final CacheInvalidationService cacheInvalidationService;
 
     /** 仪表盘按模型类型拆分积分消耗时展示的固定类型集合 */
     private static final List<String> MODEL_TYPES = List.of("text", "image", "video", "audio");
@@ -139,6 +142,7 @@ public class UsageLogService {
     @Transactional
     public void recordUsageAndQuotas(UsageLog usageLog, Long tokenId, Long channelId, int totalTokens, Long userId) {
         usageLogRepository.save(usageLog);
+        cacheInvalidationService.publish(CacheInvalidationService.USAGE_STATS);
         // 原子更新 token 额度
         if (totalTokens > 0) {
             channelService.addUsedQuota(channelId, totalTokens);
@@ -146,6 +150,7 @@ public class UsageLogService {
         // 扣减用户积分
         if (usageLog.getCreditCost() != null && usageLog.getCreditCost().compareTo(BigDecimal.ZERO) > 0 && userId != null) {
             userRepository.deductCredits(userId, usageLog.getCreditCost());
+            cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + userId);
         }
         // 更新 token 已用额度
         tokenService.addUsedQuota(tokenId, totalTokens);
@@ -158,7 +163,9 @@ public class UsageLogService {
      */
     @Transactional
     public UsageLog recordPrepaidUsage(UsageLog usageLog) {
-        return usageLogRepository.save(usageLog);
+        UsageLog saved = usageLogRepository.save(usageLog);
+        cacheInvalidationService.publish(CacheInvalidationService.USAGE_STATS);
+        return saved;
     }
 
     /**
@@ -474,6 +481,16 @@ public class UsageLogService {
         Map<String, BigDecimal> map = new LinkedHashMap<>();
         for (String type : MODEL_TYPES) map.put(type, BigDecimal.ZERO);
         return map;
+    }
+
+    @EventListener
+    public void onCacheInvalidation(CacheInvalidationService.CacheInvalidationEvent event) {
+        if (CacheInvalidationService.MODEL_CONFIG.equals(event.route())) {
+            creditRateCache.clear();
+            dailyStatsCache.clear();
+        } else if (CacheInvalidationService.USAGE_STATS.equals(event.route())) {
+            dailyStatsCache.clear();
+        }
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.dto.CouponRedemptionDTO;
 import com.aiconnecting.entity.Coupon;
 import com.aiconnecting.entity.CouponRedemptionLog;
@@ -28,6 +29,7 @@ public class CouponService {
     private final CouponRepository couponRepository;
     private final UserRepository userRepository;
     private final CouponRedemptionLogRepository redemptionLogRepository;
+    private final CacheInvalidationService cacheInvalidationService;
 
     private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -88,6 +90,7 @@ public class CouponService {
                 .orElseThrow(() -> new BusinessException("积分券不存在"));
 
         userRepository.addCredits(user.getId(), coupon.getCredits());
+        cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + user.getId());
 
         // 记录兑换日志
         CouponRedemptionLog log = CouponRedemptionLog.builder()

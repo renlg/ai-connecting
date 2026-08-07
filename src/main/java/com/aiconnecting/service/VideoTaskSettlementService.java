@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.VideoTask;
 import com.aiconnecting.repository.UsageLogRepository;
@@ -30,6 +31,7 @@ public class VideoTaskSettlementService {
     private final ModelConfigService modelConfigService;
     private final UsageLogService usageLogService;
     private final VideoTaskUsageLogService videoTaskUsageLogService;
+    private final CacheInvalidationService cacheInvalidationService;
 
     public enum Outcome { SETTLED, SKIPPED }
 
@@ -129,6 +131,7 @@ public class VideoTaskSettlementService {
         usageLogRepository.findById(task.getUsageLogId()).ifPresent(usageLog -> {
             usageLog.setCreditCost(finalCost);
             usageLogRepository.save(usageLog);
+            cacheInvalidationService.publish(CacheInvalidationService.USAGE_STATS);
         });
     }
 }

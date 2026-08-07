@@ -1,8 +1,10 @@
 package com.aiconnecting.config;
 
+import com.aiconnecting.common.CacheInvalidationService;
 import io.lettuce.core.resource.ClientResources;
 import io.lettuce.core.resource.DefaultClientResources;
 import io.lettuce.core.resource.DnsResolver;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -11,6 +13,8 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -23,6 +27,7 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
  */
 @Configuration
 @ConditionalOnProperty(name = "app.rate-limit.enabled", havingValue = "true")
+@Slf4j
 public class RedisConfig {
 
     @Value("${spring.data.redis.host:127.0.0.1}")
@@ -93,6 +98,35 @@ public class RedisConfig {
     @Bean
     public StringRedisTemplate lockRedisTemplate(RedisConnectionFactory connectionFactory) {
         return new StringRedisTemplate(connectionFactory);
+    }
+
+    /**
+     * 缓存失效订阅器仅随本 Redis 配置启用。关闭限流时整个 RedisConfig 不装配，
+     * 因而既不会创建连接，也不会注册监听器。
+     */
+    @Bean
+    public RedisMessageListenerContainer cacheInvalidationListenerContainer(
+            RedisConnectionFactory connectionFactory,
+            CacheInvalidationService cacheInvalidationService) {
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer() {
+            @Override
+            public void start() {
+                try {
+                    super.start();
+                } catch (RuntimeException e) {
+                    log.warn("Redis 缓存失效订阅器启动失败，降级为 TTL 缓存: {}", e.getMessage());
+                    try {
+                        super.stop();
+                    } catch (RuntimeException stopException) {
+                        log.debug("停止未启动的 Redis 缓存失效订阅器时出现异常", stopException);
+                    }
+                }
+            }
+        };
+        container.setConnectionFactory(connectionFactory);
+        container.addMessageListener(cacheInvalidationService,
+                new ChannelTopic(CacheInvalidationService.CHANNEL));
+        return container;
     }
 
     /**

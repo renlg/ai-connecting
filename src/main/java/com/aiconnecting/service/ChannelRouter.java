@@ -1,10 +1,12 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.entity.Channel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.context.event.EventListener;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -224,6 +226,14 @@ public class ChannelRouter {
         channelCache.clear();
         healthTracker.clearAll();
         log.info("渠道路由缓存已清除");
+    }
+
+    @EventListener
+    public void onCacheInvalidation(CacheInvalidationService.CacheInvalidationEvent event) {
+        if (CacheInvalidationService.CHANNEL_LIST.equals(event.route())) {
+            channelCache.clear();
+            log.debug("收到广播，已清除渠道路由缓存");
+        }
     }
 
     private CachedChannelList getCachedChannelList(String channelModelId) {

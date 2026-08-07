@@ -1,5 +1,6 @@
 package com.aiconnecting.security;
 
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.repository.UserRepository;
 import jakarta.servlet.FilterChain;
@@ -12,6 +13,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
+import org.springframework.context.event.EventListener;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -80,7 +82,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
      * 清除指定用户的缓存（密码修改、状态变更时调用）
      */
     public void evictUserCache(String username) {
-        userCache.remove(username);
+        if (username != null) {
+            userCache.remove(username);
+        }
+    }
+
+    @EventListener
+    public void onCacheInvalidation(CacheInvalidationService.CacheInvalidationEvent event) {
+        String route = event.route();
+        if (!route.startsWith(CacheInvalidationService.USER_PREFIX)) {
+            return;
+        }
+        try {
+            long userId = Long.parseLong(route.substring(CacheInvalidationService.USER_PREFIX.length()));
+            userCache.entrySet().removeIf(entry -> userId == entry.getValue().user().getId());
+        } catch (NumberFormatException ignored) {
+            // 非法/未知消息忽略
+        }
     }
 
 }

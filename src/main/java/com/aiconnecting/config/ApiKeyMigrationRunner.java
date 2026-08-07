@@ -1,5 +1,6 @@
 package com.aiconnecting.config;
 
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.repository.ChannelRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +18,7 @@ public class ApiKeyMigrationRunner implements ApplicationRunner {
 
     private static final String ENCRYPTED_PREFIX = "enc:v1:";
     private final ChannelRepository channelRepository;
+    private final CacheInvalidationService cacheInvalidationService;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -31,6 +33,7 @@ public class ApiKeyMigrationRunner implements ApplicationRunner {
             }
         }
         if (migrated > 0) {
+            cacheInvalidationService.publish(CacheInvalidationService.CHANNEL_LIST);
             log.info("Migrated {} channel(s) with legacy plaintext apiKey to encrypted storage", migrated);
         } else {
             log.info("No legacy plaintext apiKey found, migration skipped");

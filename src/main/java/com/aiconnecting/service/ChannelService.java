@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.dto.ChannelRequest;
 import com.aiconnecting.entity.Channel;
@@ -39,6 +40,9 @@ import java.util.stream.Collectors;
 public class ChannelService {
 
     private final ChannelRepository channelRepository;
+
+    @Autowired(required = false)
+    private CacheInvalidationService cacheInvalidationService;
 
     @Autowired(required = false)
     private okhttp3.Interceptor tracingInterceptor;
@@ -214,7 +218,9 @@ public class ChannelService {
                         ? request.getSupportedLevels() : "1,2,3,4,5")
                 .usedQuota(0L)
                 .build();
-        return channelRepository.save(channel);
+        Channel saved = channelRepository.save(channel);
+        publishChannelInvalidation();
+        return saved;
     }
 
     public Channel update(Long id, ChannelRequest request) {
@@ -231,7 +237,9 @@ public class ChannelService {
         if (request.getPriority() != null) channel.setPriority(request.getPriority());
         if (request.getRateLimit() != null) channel.setRateLimit(request.getRateLimit());
         if (request.getSupportedLevels() != null) channel.setSupportedLevels(request.getSupportedLevels());
-        return channelRepository.save(channel);
+        Channel saved = channelRepository.save(channel);
+        publishChannelInvalidation();
+        return saved;
     }
 
     public void delete(Long id) {
@@ -239,12 +247,14 @@ public class ChannelService {
             throw new BusinessException("渠道不存在");
         }
         channelRepository.deleteById(id);
+        publishChannelInvalidation();
     }
 
     public void updateStatus(Long id, Integer status) {
         Channel channel = getById(id);
         channel.setStatus(status);
         channelRepository.save(channel);
+        publishChannelInvalidation();
     }
 
     /**
@@ -255,6 +265,7 @@ public class ChannelService {
         if (channel.getStatus() != 0) {
             channel.setStatus(0);
             channelRepository.save(channel);
+            publishChannelInvalidation();
             log.warn("渠道 {} ({}) 已被禁用", id, channel.getName());
         }
     }
@@ -265,6 +276,12 @@ public class ChannelService {
     public void addUsedQuota(Long channelId, long quota) {
         if (quota > 0) {
             channelRepository.addUsedQuota(channelId, quota);
+        }
+    }
+
+    private void publishChannelInvalidation() {
+        if (cacheInvalidationService != null) {
+            cacheInvalidationService.publish(CacheInvalidationService.CHANNEL_LIST);
         }
     }
 

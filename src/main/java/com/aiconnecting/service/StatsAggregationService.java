@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.common.RedisDistributedLock;
 import com.aiconnecting.entity.UsageStats;
 import com.aiconnecting.repository.UsageLogRepository;
@@ -35,15 +36,18 @@ public class StatsAggregationService {
     private final UsageStatsRepository usageStatsRepository;
     private final TransactionTemplate transactionTemplate;
     private final RedisDistributedLock distributedLock;
+    private final CacheInvalidationService cacheInvalidationService;
 
     public StatsAggregationService(UsageLogRepository usageLogRepository,
                                     UsageStatsRepository usageStatsRepository,
                                     PlatformTransactionManager transactionManager,
-                                    RedisDistributedLock distributedLock) {
+                                    RedisDistributedLock distributedLock,
+                                    CacheInvalidationService cacheInvalidationService) {
         this.usageLogRepository = usageLogRepository;
         this.usageStatsRepository = usageStatsRepository;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.distributedLock = distributedLock;
+        this.cacheInvalidationService = cacheInvalidationService;
     }
 
     /** 窗口大小（分钟） */
@@ -157,6 +161,7 @@ public class StatsAggregationService {
                         .build();
 
                 usageStatsRepository.save(stats);
+                cacheInvalidationService.publish(CacheInvalidationService.USAGE_STATS);
                 log.info("聚合窗口 {} ~ {} 完成：requests={}, tokens={}", windowStart, windowEnd, totalRequests, totalTokens);
             });
         }
@@ -221,6 +226,7 @@ public class StatsAggregationService {
                 transactionTemplate.executeWithoutResult(status -> {
                     LocalDateTime cutoff = LocalDateTime.now().minusDays(MAX_RETENTION_DAYS);
                     usageStatsRepository.deleteByEndTimeBefore(cutoff);
+                    cacheInvalidationService.publish(CacheInvalidationService.USAGE_STATS);
                     log.info("清理了 {} 天前的旧汇总数据", MAX_RETENTION_DAYS);
                 }));
     }
