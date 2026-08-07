@@ -11,8 +11,8 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 /**
  * 渠道探测定时任务
@@ -39,6 +39,8 @@ public class ChannelProbeTask {
      * 超出本次批次的渠道仍处于熔断 OPEN 状态，会在下一轮调度（1 小时后）被探测。
      */
     private static final int MAX_CHANNELS_PER_RUN = 60;
+    /** 上次批次的最后一个 ID；按 ID 排序并环形续读，保证持续 OPEN 的渠道不会饥饿。 */
+    private final AtomicLong lastProbedChannelId = new AtomicLong(Long.MIN_VALUE);
 
     private final OkHttpClient probeClient = new OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -63,9 +65,16 @@ public class ChannelProbeTask {
             return;
         }
 
-        List<Long> batch = openIds.stream().limit(MAX_CHANNELS_PER_RUN).collect(Collectors.toList());
+        List<Long> sortedIds = openIds.stream().sorted().toList();
+        long cursor = lastProbedChannelId.get();
+        List<Long> batch = java.util.stream.Stream.concat(
+                        sortedIds.stream().filter(id -> id > cursor),
+                        sortedIds.stream().filter(id -> id <= cursor))
+                .limit(MAX_CHANNELS_PER_RUN)
+                .toList();
+        lastProbedChannelId.set(batch.get(batch.size() - 1));
         if (batch.size() < openIds.size()) {
-            log.info("熔断 OPEN 渠道数 {} 超过单次探测上限 {}，本轮仅探测前 {} 个，其余留待下一轮调度",
+            log.info("熔断 OPEN 渠道数 {} 超过单次探测上限 {}，本轮从轮转游标后探测 {} 个",
                     openIds.size(), MAX_CHANNELS_PER_RUN, batch.size());
         }
         log.info("开始探测 {} 个熔断 OPEN 状态的渠道: {}", batch.size(), batch);

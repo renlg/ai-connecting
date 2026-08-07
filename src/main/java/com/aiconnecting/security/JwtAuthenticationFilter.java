@@ -28,9 +28,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtils jwtUtils;
     private final UserRepository userRepository;
+    private final CacheInvalidationService cacheInvalidationService;
 
     /** 用户缓存，减少数据库查询，缓存 1 分钟（缩短以减少角色/状态变更延迟） */
     private final Map<String, CachedUser> userCache = new ConcurrentHashMap<>();
+    /** user ID -> username 反向索引，避免每次余额变更都扫描整个 JWT 缓存。 */
+    private final Map<Long, String> usernameByUserId = new ConcurrentHashMap<>();
     private static final long CACHE_TTL_MS = 60 * 1000L;
 
     private record CachedUser(User user, long cachedAt) {
@@ -69,9 +72,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (cached != null && !cached.isExpired()) {
             return cached.user();
         }
+        long generation = cacheInvalidationService.generation(CacheInvalidationService.USER_PREFIX);
         User user = userRepository.findByUsername(username).orElse(null);
         if (user != null) {
-            userCache.put(username, new CachedUser(user, System.currentTimeMillis()));
+            if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.USER_PREFIX, generation)) {
+                CachedUser fresh = new CachedUser(user, System.currentTimeMillis());
+                userCache.put(username, fresh);
+                usernameByUserId.put(user.getId(), username);
+                if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.USER_PREFIX, generation)) {
+                    userCache.remove(username, fresh);
+                    usernameByUserId.remove(user.getId(), username);
+                }
+            }
         } else {
             userCache.remove(username);
         }
@@ -83,7 +95,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
      */
     public void evictUserCache(String username) {
         if (username != null) {
-            userCache.remove(username);
+            CachedUser removed = userCache.remove(username);
+            if (removed != null) {
+                usernameByUserId.remove(removed.user().getId(), username);
+            }
         }
     }
 
@@ -95,7 +110,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
         try {
             long userId = Long.parseLong(route.substring(CacheInvalidationService.USER_PREFIX.length()));
-            userCache.entrySet().removeIf(entry -> userId == entry.getValue().user().getId());
+            String username = usernameByUserId.remove(userId);
+            if (username != null) {
+                userCache.remove(username);
+            }
         } catch (NumberFormatException ignored) {
             // 非法/未知消息忽略
         }

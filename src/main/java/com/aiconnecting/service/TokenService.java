@@ -23,6 +23,8 @@ public class TokenService {
 
     /** Token 验证缓存，减少数据库查询，缓存 30 秒（缩短以减少禁用/过期Token延迟） */
     private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
+    /** token ID -> token key 的本地反向索引，使 tokenId 广播可 O(1) 精确驱逐。 */
+    private final ConcurrentHashMap<Long, String> tokenKeyById = new ConcurrentHashMap<>();
     private static final long TOKEN_CACHE_TTL_MS = 30 * 1000L;
 
     private record CachedToken(Token token, long cachedAt) {
@@ -74,7 +76,7 @@ public class TokenService {
                 .build();
 
         Token saved = tokenRepository.save(token);
-        cacheInvalidationService.publish(CacheInvalidationService.TOKEN_PREFIX + saved.getTokenKey());
+        cacheInvalidationService.publish(CacheInvalidationService.TOKEN_ID_PREFIX + saved.getId());
         return saved;
     }
 
@@ -87,7 +89,7 @@ public class TokenService {
         if (request.getAllowedModels() != null) token.setAllowedModels(request.getAllowedModels());
         if (request.getRateLimit() != null) token.setRateLimit(request.getRateLimit());
         Token saved = tokenRepository.save(token);
-        evictTokenCache(saved.getTokenKey());
+        evictTokenCache(saved.getId(), saved.getTokenKey());
         return saved;
     }
 
@@ -95,14 +97,14 @@ public class TokenService {
         Token token = tokenRepository.findById(id)
                 .orElseThrow(() -> new BusinessException("Token 不存在"));
         tokenRepository.deleteById(id);
-        evictTokenCache(token.getTokenKey());
+        evictTokenCache(id, token.getTokenKey());
     }
 
     public void updateStatus(Long id, Integer status) {
         Token token = getById(id);
         token.setStatus(status);
-        tokenRepository.save(token);
-        evictTokenCache(token.getTokenKey());
+        Token saved = tokenRepository.save(token);
+        evictTokenCache(saved.getId(), saved.getTokenKey());
     }
 
     /**
@@ -114,9 +116,18 @@ public class TokenService {
         if (cached != null && !cached.isExpired()) {
             token = cached.token();
         } else {
+            long generation = cacheInvalidationService.generation(CacheInvalidationService.TOKEN_ID_PREFIX);
             token = tokenRepository.findByTokenKey(tokenKey)
                     .orElseThrow(() -> new BusinessException(401, "无效的 Token"));
-            tokenCache.put(tokenKey, new CachedToken(token, System.currentTimeMillis()));
+            if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.TOKEN_ID_PREFIX, generation)) {
+                CachedToken fresh = new CachedToken(token, System.currentTimeMillis());
+                tokenCache.put(tokenKey, fresh);
+                tokenKeyById.put(token.getId(), tokenKey);
+                if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.TOKEN_ID_PREFIX, generation)) {
+                    tokenCache.remove(tokenKey, fresh);
+                    tokenKeyById.remove(token.getId(), tokenKey);
+                }
+            }
         }
 
         if (token.getStatus() != 1) {
@@ -150,27 +161,26 @@ public class TokenService {
     /**
      * 清除指定 Token 的缓存
      */
-    public void evictTokenCache(String tokenKey) {
+    private void evictTokenCache(Long tokenId, String tokenKey) {
         if (tokenKey != null) {
             tokenCache.remove(tokenKey);
-            cacheInvalidationService.publish(CacheInvalidationService.TOKEN_PREFIX + tokenKey);
+        }
+        if (tokenId != null) {
+            tokenKeyById.remove(tokenId, tokenKey);
+            cacheInvalidationService.publish(CacheInvalidationService.TOKEN_ID_PREFIX + tokenId);
         }
     }
 
     @EventListener
     public void onCacheInvalidation(CacheInvalidationService.CacheInvalidationEvent event) {
         String route = event.route();
-        if (route.startsWith(CacheInvalidationService.TOKEN_PREFIX)) {
-            String tokenKey = route.substring(CacheInvalidationService.TOKEN_PREFIX.length());
-            if (!tokenKey.isBlank()) {
-                tokenCache.remove(tokenKey);
-            }
-            return;
-        }
         if (route.startsWith(CacheInvalidationService.TOKEN_ID_PREFIX)) {
             try {
                 long tokenId = Long.parseLong(route.substring(CacheInvalidationService.TOKEN_ID_PREFIX.length()));
-                tokenCache.entrySet().removeIf(entry -> tokenId == entry.getValue().token().getId());
+                String tokenKey = tokenKeyById.remove(tokenId);
+                if (tokenKey != null) {
+                    tokenCache.remove(tokenKey);
+                }
             } catch (NumberFormatException ignored) {
                 // 非法/未知消息忽略
             }

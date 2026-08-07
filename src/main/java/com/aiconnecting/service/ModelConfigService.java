@@ -51,6 +51,7 @@ public class ModelConfigService {
         if (cached != null && !cached.isExpired()) {
             return cached.map();
         }
+        long generation = cacheInvalidationService.generation(CacheInvalidationService.MODEL_CONFIG);
         Map<String, ModelInfo> map = new HashMap<>();
         for (ModelConfig mc : modelConfigRepository.findAll()) {
             ModelInfo existing = map.get(mc.getName());
@@ -63,7 +64,14 @@ public class ModelConfigService {
             }
             map.put(mc.getName(), new ModelInfo(mc.getType(), mc.getDisplayName()));
         }
-        modelInfoMapCache = new CachedModelInfoMap(map, System.currentTimeMillis());
+        if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, generation)) {
+            CachedModelInfoMap fresh = new CachedModelInfoMap(map, System.currentTimeMillis());
+            modelInfoMapCache = fresh;
+            if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, generation)
+                    && modelInfoMapCache == fresh) {
+                modelInfoMapCache = null;
+            }
+        }
         return map;
     }
 

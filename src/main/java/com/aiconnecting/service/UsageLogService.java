@@ -142,7 +142,8 @@ public class UsageLogService {
     @Transactional
     public void recordUsageAndQuotas(UsageLog usageLog, Long tokenId, Long channelId, int totalTokens, Long userId) {
         usageLogRepository.save(usageLog);
-        cacheInvalidationService.publish(CacheInvalidationService.USAGE_STATS);
+        // 普通用量写入不广播聚合缓存失效：仪表盘/每日统计容许依赖 30–45 秒 TTL，
+        // 避免每个请求触发跨实例广播和全缓存清空。用户/Token 额度仍按 ID 精确失效。
         // 原子更新 token 额度
         if (totalTokens > 0) {
             channelService.addUsedQuota(channelId, totalTokens);
@@ -163,9 +164,7 @@ public class UsageLogService {
      */
     @Transactional
     public UsageLog recordPrepaidUsage(UsageLog usageLog) {
-        UsageLog saved = usageLogRepository.save(usageLog);
-        cacheInvalidationService.publish(CacheInvalidationService.USAGE_STATS);
-        return saved;
+        return usageLogRepository.save(usageLog);
     }
 
     /**
@@ -182,13 +181,21 @@ public class UsageLogService {
             outputRate = cached.outputRate();
             cacheCreditRate = cached.cacheCreditRate();
         } else {
+            long generation = cacheInvalidationService.generation(CacheInvalidationService.MODEL_CONFIG);
             List<com.aiconnecting.entity.ModelConfig> models = modelConfigService.findByName(model);
             com.aiconnecting.entity.ModelConfig modelConfig = models.isEmpty() ? null : models.get(0);
             if (modelConfig == null) return BigDecimal.ZERO;
             inputRate = modelConfig.getInputCreditRate();
             outputRate = modelConfig.getOutputCreditRate();
             cacheCreditRate = modelConfig.getCacheCreditRate();
-            creditRateCache.put(model, new CachedCreditRate(inputRate, outputRate, cacheCreditRate, System.currentTimeMillis()));
+            CachedCreditRate fresh = new CachedCreditRate(
+                    inputRate, outputRate, cacheCreditRate, System.currentTimeMillis());
+            if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, generation)) {
+                creditRateCache.put(model, fresh);
+                if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, generation)) {
+                    creditRateCache.remove(model, fresh);
+                }
+            }
         }
 
         int clampedCachedTokens = Math.min(cachedTokens, promptTokens);
@@ -413,6 +420,8 @@ public class UsageLogService {
         if (cached != null && !cached.isExpired()) {
             return cached.stats();
         }
+        long usageGeneration = cacheInvalidationService.generation(CacheInvalidationService.USAGE_STATS);
+        long modelGeneration = cacheInvalidationService.generation(CacheInvalidationService.MODEL_CONFIG);
 
         // 每日积分消耗 —— admin 从 usage_stats 汇总表读取，用户从 usage_logs 读取
         List<Object[]> creditRows;
@@ -473,7 +482,15 @@ public class UsageLogService {
                 .dailyCredits(dailyCredits)
                 .dailyTokensByModel(dailyTokensByModel)
                 .build();
-        dailyStatsCache.put(cacheKey, new CachedDailyStats(stats, System.currentTimeMillis()));
+        CachedDailyStats fresh = new CachedDailyStats(stats, System.currentTimeMillis());
+        if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.USAGE_STATS, usageGeneration)
+                && cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, modelGeneration)) {
+            dailyStatsCache.put(cacheKey, fresh);
+            if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.USAGE_STATS, usageGeneration)
+                    || !cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, modelGeneration)) {
+                dailyStatsCache.remove(cacheKey, fresh);
+            }
+        }
         return stats;
     }
 

@@ -55,6 +55,9 @@ public class RelaySupport {
     private final UserService userService;
     private final VideoTaskUsageLogService videoTaskUsageLogService;
 
+    @Autowired
+    private CacheInvalidationService cacheInvalidationService;
+
     @Autowired(required = false)
     RateLimitService rateLimitService;
 
@@ -226,14 +229,23 @@ public class RelaySupport {
         if (cached != null && !cached.isExpired()) {
             return cached.value();
         }
+        long generation = cacheInvalidationService.generation(CacheInvalidationService.MODEL_CONFIG);
         if (!modelConfigService.findByName(model).isEmpty()) {
-            modelNameCache.put(cacheKey, new CachedValue(model, System.currentTimeMillis()));
+            CachedValue fresh = new CachedValue(model, System.currentTimeMillis());
+            if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, generation)) {
+                modelNameCache.put(cacheKey, fresh);
+                removeIfModelGenerationChanged(modelNameCache, cacheKey, fresh, generation);
+            }
             return model;
         }
         List<ModelConfig> byDisplayName = modelConfigService.findByDisplayName(model);
         if (!byDisplayName.isEmpty()) {
             String resolved = byDisplayName.get(0).getName();
-            modelNameCache.put(cacheKey, new CachedValue(resolved, System.currentTimeMillis()));
+            CachedValue fresh = new CachedValue(resolved, System.currentTimeMillis());
+            if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, generation)) {
+                modelNameCache.put(cacheKey, fresh);
+                removeIfModelGenerationChanged(modelNameCache, cacheKey, fresh, generation);
+            }
             return resolved;
         }
         return model;
@@ -246,10 +258,15 @@ public class RelaySupport {
         if (cached != null && !cached.isExpired()) {
             return cached.value();
         }
+        long generation = cacheInvalidationService.generation(CacheInvalidationService.MODEL_CONFIG);
         List<ModelConfig> models = modelConfigService.findByName(modelName);
         if (!models.isEmpty()) {
             String id = String.valueOf(models.get(0).getId());
-            modelNameCache.put(cacheKey, new CachedValue(id, System.currentTimeMillis()));
+            CachedValue fresh = new CachedValue(id, System.currentTimeMillis());
+            if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, generation)) {
+                modelNameCache.put(cacheKey, fresh);
+                removeIfModelGenerationChanged(modelNameCache, cacheKey, fresh, generation);
+            }
             return id;
         }
         return modelName;
@@ -276,10 +293,24 @@ public class RelaySupport {
         if (cached != null && !cached.isExpired()) {
             return cached.config();
         }
+        long generation = cacheInvalidationService.generation(CacheInvalidationService.MODEL_CONFIG);
         List<ModelConfig> models = modelConfigService.findByName(model);
         ModelConfig config = models.isEmpty() ? null : models.get(0);
-        modelConfigCache.put(model, new CachedModelConfig(config, System.currentTimeMillis()));
+        CachedModelConfig fresh = new CachedModelConfig(config, System.currentTimeMillis());
+        if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, generation)) {
+            modelConfigCache.put(model, fresh);
+            if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, generation)) {
+                modelConfigCache.remove(model, fresh);
+            }
+        }
         return config;
+    }
+
+    private void removeIfModelGenerationChanged(ConcurrentHashMap<String, CachedValue> cache,
+                                                String key, CachedValue value, long generation) {
+        if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, generation)) {
+            cache.remove(key, value);
+        }
     }
 
     // ==================== 渠道判断 ====================

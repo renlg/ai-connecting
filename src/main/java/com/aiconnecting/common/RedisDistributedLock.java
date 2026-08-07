@@ -38,11 +38,15 @@ public class RedisDistributedLock {
 
     public RedisDistributedLock(ObjectProvider<StringRedisTemplate> redisTemplateProvider,
                                  @Qualifier("lockUnlockScript") ObjectProvider<RedisScript<Long>> lockUnlockScriptProvider,
-                                 @Value("${spring.profiles.active:default}") String activeProfile) {
+                                 @Value("${APP_ENV:default}") String appEnvironment) {
         this.redisTemplate = redisTemplateProvider.getIfAvailable();
         this.unlockScript = lockUnlockScriptProvider.getIfAvailable();
-        String env = (activeProfile == null || activeProfile.isBlank())
-                ? "default" : activeProfile.split(",")[0].trim();
+        // APP_ENV must be identical for every instance in one deployment and distinct between
+        // environments sharing Redis. Unlike spring.profiles.active, it is stable across profile ordering.
+        // Deployments upgrading from historical unprefixed job:* keys can overlap for one old-key lease;
+        // roll this change when no scheduled job is active (or wait for the old maximum TTL).
+        String env = (appEnvironment == null || appEnvironment.isBlank())
+                ? "default" : appEnvironment.trim();
         this.keyPrefix = "ai-connecting:" + env + ":";
     }
 
@@ -86,14 +90,15 @@ public class RedisDistributedLock {
     /**
      * 便捷方法：获取锁成功才执行 job，执行完毕（或异常）后释放锁；未获取到锁则记录日志后跳过。
      */
-    public void runIfLocked(String key, long ttlSeconds, Runnable job) {
+    public boolean runIfLocked(String key, long ttlSeconds, Runnable job) {
         String token = tryLock(key, ttlSeconds);
         if (token == null) {
             log.debug("未获取到分布式锁，跳过本次执行（其他实例正在处理）: key={}", key);
-            return;
+            return false;
         }
         try {
             job.run();
+            return true;
         } finally {
             unlock(key, token);
         }

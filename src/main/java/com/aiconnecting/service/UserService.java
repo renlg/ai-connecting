@@ -186,9 +186,16 @@ public class UserService {
         if (cached != null && !cached.isExpired()) {
             return cached.user();
         }
+        long generation = cacheInvalidationService.generation(CacheInvalidationService.USER_PREFIX);
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new BusinessException("用户不存在"));
-        userCache.put(id, new CachedUser(user, System.currentTimeMillis()));
+        if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.USER_PREFIX, generation)) {
+            CachedUser fresh = new CachedUser(user, System.currentTimeMillis());
+            userCache.put(id, fresh);
+            if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.USER_PREFIX, generation)) {
+                userCache.remove(id, fresh);
+            }
+        }
         return user;
     }
 

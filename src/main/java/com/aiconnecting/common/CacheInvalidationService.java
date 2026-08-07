@@ -11,6 +11,8 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 多实例缓存失效广播：写操作在更新本地缓存后调用 {@link #publish}，
@@ -32,9 +34,12 @@ public class CacheInvalidationService implements MessageListener {
     public static final String CHANNEL_LIST = "channelList";
     public static final String MODEL_CONFIG = "modelConfig";
     public static final String USER_PREFIX = "user:";
-    public static final String TOKEN_PREFIX = "token:";
     public static final String TOKEN_ID_PREFIX = "tokenId:";
     public static final String USAGE_STATS = "usageStats";
+
+    private static final String USER_CACHE = "user";
+    private static final String TOKEN_CACHE = "token";
+    private final ConcurrentHashMap<String, AtomicLong> generations = new ConcurrentHashMap<>();
 
     private final StringRedisTemplate redisTemplate;
     private final ApplicationEventPublisher eventPublisher;
@@ -47,10 +52,11 @@ public class CacheInvalidationService implements MessageListener {
 
     /**
      * 发布一条缓存失效消息。message 格式约定为紧凑的路由字符串，如 "channelList"、"modelConfig"、
-     * "user:12"、"token:sk-xxx"、"tokenId:9"、"usageStats"，由监听端路由到具体缓存的清除方法。
+     * "user:12"、"tokenId:9"、"usageStats"，由监听端路由到具体缓存的清除方法。
+     * 凭证原文绝不得作为路由的一部分；Token 只使用数据库 ID。
      */
     public void publish(String message) {
-        if (redisTemplate == null || message == null || message.isBlank()) {
+        if (redisTemplate == null || !isValidRoute(message)) {
             return;
         }
         if (TransactionSynchronizationManager.isSynchronizationActive()
@@ -70,8 +76,8 @@ public class CacheInvalidationService implements MessageListener {
         try {
             redisTemplate.convertAndSend(CHANNEL, message);
         } catch (Exception e) {
-            log.warn("发布缓存失效消息异常，其他实例可能暂时看到旧缓存（等待 TTL 过期）: message={}, error={}",
-                    message, e.getMessage());
+            log.warn("发布缓存失效消息异常，其他实例可能暂时看到旧缓存（等待 TTL 过期）: route={}, error={}",
+                    safeRouteForLog(message), e.getMessage());
         }
     }
 
@@ -86,6 +92,7 @@ public class CacheInvalidationService implements MessageListener {
             if (!isValidRoute(route)) {
                 return;
             }
+            generations.computeIfAbsent(generationKey(route), ignored -> new AtomicLong()).incrementAndGet();
             eventPublisher.publishEvent(new CacheInvalidationEvent(route));
         } catch (Exception e) {
             log.warn("处理缓存失效消息异常，已忽略: error={}", e.getMessage());
@@ -94,6 +101,18 @@ public class CacheInvalidationService implements MessageListener {
 
     /** 仅由 Redis 订阅回调产生，Redis 未配置时不会产生本地失效事件。 */
     public record CacheInvalidationEvent(String route) {
+    }
+
+    /**
+     * 返回路由对应缓存的当前世代。缓存加载器在查库前捕获它，写缓存前再比较，
+     * 从而防止“查库中途收到失效广播”后把旧值回填进缓存。
+     */
+    public long generation(String route) {
+        return generations.computeIfAbsent(generationKey(route), ignored -> new AtomicLong()).get();
+    }
+
+    public boolean isCurrentGeneration(String route, long generation) {
+        return generation(route) == generation;
     }
 
     private boolean isValidRoute(String route) {
@@ -109,7 +128,22 @@ public class CacheInvalidationService implements MessageListener {
         if (route.startsWith(TOKEN_ID_PREFIX)) {
             return isPositiveLong(route.substring(TOKEN_ID_PREFIX.length()));
         }
-        return route.startsWith(TOKEN_PREFIX) && route.length() > TOKEN_PREFIX.length();
+        return false;
+    }
+
+    private String generationKey(String route) {
+        if (route != null && route.startsWith(USER_PREFIX)) {
+            return USER_CACHE;
+        }
+        if (route != null && route.startsWith(TOKEN_ID_PREFIX)) {
+            return TOKEN_CACHE;
+        }
+        return route;
+    }
+
+    /** 防御性日志脱敏：未知路由可能是误传的密钥，绝不输出原文。 */
+    private String safeRouteForLog(String route) {
+        return isValidRoute(route) ? route : "<redacted-invalid-route>";
     }
 
     private boolean isPositiveLong(String value) {

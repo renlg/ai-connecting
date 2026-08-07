@@ -29,6 +29,7 @@ public class ChannelRouter {
 
     private final ChannelService channelService;
     private final ChannelHealthTracker healthTracker;
+    private final CacheInvalidationService cacheInvalidationService;
 
     /** 按模型缓存渠道列表及其 SWRR 状态，避免每次请求查库 */
     private final ConcurrentHashMap<String, CachedChannelList> channelCache = new ConcurrentHashMap<>();
@@ -241,9 +242,15 @@ public class ChannelRouter {
         if (cached != null && !cached.isExpired()) {
             return cached;
         }
+        long generation = cacheInvalidationService.generation(CacheInvalidationService.CHANNEL_LIST);
         List<Channel> channels = channelService.getActiveChannelsByModel(channelModelId);
         CachedChannelList fresh = new CachedChannelList(channels, System.currentTimeMillis(), new SwrrState());
-        channelCache.put(channelModelId, fresh);
+        if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.CHANNEL_LIST, generation)) {
+            channelCache.put(channelModelId, fresh);
+            if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.CHANNEL_LIST, generation)) {
+                channelCache.remove(channelModelId, fresh);
+            }
+        }
         log.debug("刷新渠道缓存: modelId={}, channelCount={}", channelModelId, channels.size());
         return fresh;
     }

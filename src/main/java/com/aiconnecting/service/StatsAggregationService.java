@@ -18,6 +18,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 用量汇总聚合服务
@@ -60,6 +62,16 @@ public class StatsAggregationService {
     private static final String AGGREGATION_LOCK_KEY = "job:statsAggregation";
     /** 聚合任务锁 TTL：10 分钟，远大于单窗口聚合的预期耗时，覆盖 usage_logs 表较大时的极端情况 */
     private static final long AGGREGATION_LOCK_TTL_SECONDS = 10 * 60L;
+    /**
+     * 历史补齐与定时聚合使用同一把锁，但大库全历史扫描需要更长的租约。
+     * 60 分钟避免原 10 分钟 TTL 过期后另一实例重复执行；超大数据库仍应通过监控评估此上限。
+     */
+    private static final long HISTORICAL_INIT_LOCK_TTL_SECONDS = 60 * 60L;
+    private static final int MAX_HISTORICAL_INIT_ATTEMPTS = 10;
+
+    private final AtomicBoolean historicalInitializationPending = new AtomicBoolean();
+    private final AtomicBoolean historicalInitializationRunning = new AtomicBoolean();
+    private final AtomicInteger historicalInitializationAttempts = new AtomicInteger();
 
     /** 清理任务分布式锁 key */
     private static final String CLEAN_LOCK_KEY = "job:cleanOldData";
@@ -175,7 +187,52 @@ public class StatsAggregationService {
      * 同类自调用生效地）包一层大事务。
      */
     public void initializeHistoricalData() {
-        distributedLock.runIfLocked(AGGREGATION_LOCK_KEY, AGGREGATION_LOCK_TTL_SECONDS, this::doInitializeHistoricalData);
+        historicalInitializationAttempts.set(0);
+        historicalInitializationPending.set(true);
+        attemptHistoricalInitialization();
+    }
+
+    /**
+     * 启动/手动初始化抢锁失败时有界重试，避免与 :00/:15/:30/:45 定时任务碰撞后
+     * 静默放弃全历史补齐。最多尝试 10 次（约 10 分钟），不会无限重试。
+     */
+    @Scheduled(fixedDelay = 60 * 1000L, initialDelay = 60 * 1000L)
+    public void retryHistoricalInitialization() {
+        if (historicalInitializationPending.get()) {
+            attemptHistoricalInitialization();
+        }
+    }
+
+    private void attemptHistoricalInitialization() {
+        if (!historicalInitializationPending.get()
+                || !historicalInitializationRunning.compareAndSet(false, true)) {
+            return;
+        }
+        int attempt = historicalInitializationAttempts.incrementAndGet();
+        try {
+            boolean acquired = distributedLock.runIfLocked(
+                    AGGREGATION_LOCK_KEY, HISTORICAL_INIT_LOCK_TTL_SECONDS, this::doInitializeHistoricalData);
+            if (acquired) {
+                historicalInitializationPending.set(false);
+                return;
+            }
+            if (attempt >= MAX_HISTORICAL_INIT_ATTEMPTS) {
+                historicalInitializationPending.set(false);
+                log.warn("历史用量汇总初始化连续 {} 次未获取锁，停止自动重试；可稍后通过管理接口重新触发",
+                        MAX_HISTORICAL_INIT_ATTEMPTS);
+            } else {
+                log.info("历史用量汇总初始化未获取锁，1 分钟后进行第 {} 次尝试", attempt + 1);
+            }
+        } catch (RuntimeException e) {
+            if (attempt >= MAX_HISTORICAL_INIT_ATTEMPTS) {
+                historicalInitializationPending.set(false);
+                log.warn("历史用量汇总初始化连续 {} 次执行失败，停止自动重试",
+                        MAX_HISTORICAL_INIT_ATTEMPTS);
+            }
+            throw e;
+        } finally {
+            historicalInitializationRunning.set(false);
+        }
     }
 
     private void doInitializeHistoricalData() {

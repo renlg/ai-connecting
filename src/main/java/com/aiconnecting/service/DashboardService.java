@@ -37,6 +37,7 @@ public class DashboardService {
     private final UsageLogService usageLogService;
     private final UsageStatsRepository usageStatsRepository;
     private final UsageLogRepository usageLogRepository;
+    private final CacheInvalidationService cacheInvalidationService;
 
     /**
      * 仪表盘统计缓存，避免每次请求都跑 5 条 SQL，缓存 45 秒。
@@ -82,8 +83,21 @@ public class DashboardService {
             return cached.stats();
         }
 
+        long channelGeneration = cacheInvalidationService.generation(CacheInvalidationService.CHANNEL_LIST);
+        long modelGeneration = cacheInvalidationService.generation(CacheInvalidationService.MODEL_CONFIG);
+        long usageGeneration = cacheInvalidationService.generation(CacheInvalidationService.USAGE_STATS);
         DashboardStats stats = isAdmin ? buildAdminStats() : buildUserStats(currentUser);
-        dashboardCache.put(cacheKey, new CachedDashboardStats(stats, System.currentTimeMillis()));
+        CachedDashboardStats fresh = new CachedDashboardStats(stats, System.currentTimeMillis());
+        if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.CHANNEL_LIST, channelGeneration)
+                && cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, modelGeneration)
+                && cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.USAGE_STATS, usageGeneration)) {
+            dashboardCache.put(cacheKey, fresh);
+            if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.CHANNEL_LIST, channelGeneration)
+                    || !cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.MODEL_CONFIG, modelGeneration)
+                    || !cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.USAGE_STATS, usageGeneration)) {
+                dashboardCache.remove(cacheKey, fresh);
+            }
+        }
         return stats;
     }
 
@@ -92,10 +106,7 @@ public class DashboardService {
         String route = event.route();
         if (CacheInvalidationService.CHANNEL_LIST.equals(route)
                 || CacheInvalidationService.MODEL_CONFIG.equals(route)
-                || CacheInvalidationService.USAGE_STATS.equals(route)
-                || route.startsWith(CacheInvalidationService.USER_PREFIX)
-                || route.startsWith(CacheInvalidationService.TOKEN_PREFIX)
-                || route.startsWith(CacheInvalidationService.TOKEN_ID_PREFIX)) {
+                || CacheInvalidationService.USAGE_STATS.equals(route)) {
             dashboardCache.clear();
         }
     }
