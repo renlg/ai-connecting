@@ -1,8 +1,9 @@
 package com.aiconnecting.common;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
@@ -17,6 +18,10 @@ import java.util.UUID;
  * 降级策略：当 Redis 未启用（{@code app.rate-limit.enabled=false}，此时 {@link StringRedisTemplate}
  * bean 不存在）或运行时访问 Redis 异常时，{@link #tryLock} 直接返回本地令牌、任务照常单机执行，
  * {@link #unlock} 对本地令牌为空操作——行为与未接入分布式锁前完全一致，不影响单实例部署。
+ *
+ * 依赖通过 {@link ObjectProvider} 而非构造器参数直接注入：单构造器上的 {@code @Autowired(required=false)}
+ * 不会使该参数变为可选（Spring 仍会因缺少 bean 而启动失败），只有 ObjectProvider/Optional 这类
+ * 惰性/可缺省的注入方式才能在 Redis bean 不存在时让容器正常启动。
  */
 @Slf4j
 @Component
@@ -28,10 +33,17 @@ public class RedisDistributedLock {
     private final StringRedisTemplate redisTemplate;
     private final RedisScript<Long> unlockScript;
 
-    public RedisDistributedLock(@Autowired(required = false) StringRedisTemplate redisTemplate,
-                                 @Autowired(required = false) @Qualifier("lockUnlockScript") RedisScript<Long> lockUnlockScript) {
-        this.redisTemplate = redisTemplate;
-        this.unlockScript = lockUnlockScript;
+    /** 锁 key 命名空间前缀，避免共享 Redis 的不同环境之间互相锁定 */
+    private final String keyPrefix;
+
+    public RedisDistributedLock(ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+                                 @Qualifier("lockUnlockScript") ObjectProvider<RedisScript<Long>> lockUnlockScriptProvider,
+                                 @Value("${spring.profiles.active:default}") String activeProfile) {
+        this.redisTemplate = redisTemplateProvider.getIfAvailable();
+        this.unlockScript = lockUnlockScriptProvider.getIfAvailable();
+        String env = (activeProfile == null || activeProfile.isBlank())
+                ? "default" : activeProfile.split(",")[0].trim();
+        this.keyPrefix = "ai-connecting:" + env + ":";
     }
 
     /**
@@ -48,7 +60,7 @@ public class RedisDistributedLock {
         String token = UUID.randomUUID().toString();
         try {
             Boolean acquired = redisTemplate.opsForValue()
-                    .setIfAbsent(key, token, Duration.ofSeconds(ttlSeconds));
+                    .setIfAbsent(keyPrefix + key, token, Duration.ofSeconds(ttlSeconds));
             return Boolean.TRUE.equals(acquired) ? token : null;
         } catch (Exception e) {
             log.warn("获取分布式锁异常，降级为单机执行: key={}, error={}", key, e.getMessage());
@@ -65,7 +77,7 @@ public class RedisDistributedLock {
             return;
         }
         try {
-            redisTemplate.execute(unlockScript, Collections.singletonList(key), token);
+            redisTemplate.execute(unlockScript, Collections.singletonList(keyPrefix + key), token);
         } catch (Exception e) {
             log.warn("释放分布式锁异常: key={}, error={}", key, e.getMessage());
         }

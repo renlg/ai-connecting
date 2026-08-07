@@ -483,8 +483,12 @@ public class OpenAiRelayService {
      * 加此锁主要是避免多实例同时扫描同一批 50 条候选任务、造成重复的行级 CAS 竞争和无谓的上游查询。
      */
     private static final String RECONCILE_LOCK_KEY = "job:videoReconcile";
-    /** 锁 TTL：5 分钟，等于调度间隔；批次最多 50 个任务、逐个顺序请求上游，最坏情况下需覆盖该时长 */
-    private static final long RECONCILE_LOCK_TTL_SECONDS = 5 * 60L;
+    /**
+     * 锁 TTL：2 小时。批次最多 50 个任务、逐个顺序请求上游，单个任务的上游查询无 callTimeout，
+     * 仅受 30s 连接 / 120s 读超时约束，最坏情况下单任务耗时可达 150s；
+     * 50 × 150s = 7500s ≈ 125 分钟，7200s（2 小时）留出安全余量，可证明覆盖该最坏情况。
+     */
+    private static final long RECONCILE_LOCK_TTL_SECONDS = 2 * 60 * 60L;
 
     /**
      * 后台对账：定期扫描长时间未结算的视频任务，主动向上游查询状态并结算，

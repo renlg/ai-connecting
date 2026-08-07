@@ -9,8 +9,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * 渠道探测定时任务
@@ -29,8 +31,14 @@ public class ChannelProbeTask {
 
     /** 分布式锁 key，防止多机重复执行 */
     private static final String LOCK_KEY = "job:channelProbe";
-    /** 锁过期时间 30 分钟：小于调度间隔 1 小时，且大于探测批次的最长耗时（渠道数 × 15s 读超时） */
+    /** 锁过期时间 30 分钟：小于调度间隔 1 小时，且可证明覆盖下面按 MAX_CHANNELS_PER_RUN 限流后的探测批次 */
     private static final long LOCK_TTL_SECONDS = 30 * 60L;
+    /**
+     * 单次运行最多探测的渠道数：单渠道最坏耗时 = 10s 连接超时 + 15s 读超时 = 25s（无 callTimeout，
+     * 顺序探测）。60 × 25s = 1500s（25 分钟）< LOCK_TTL_SECONDS（30 分钟），留有余量，可证明覆盖。
+     * 超出本次批次的渠道仍处于熔断 OPEN 状态，会在下一轮调度（1 小时后）被探测。
+     */
+    private static final int MAX_CHANNELS_PER_RUN = 60;
 
     private final OkHttpClient probeClient = new OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -55,9 +63,14 @@ public class ChannelProbeTask {
             return;
         }
 
-        log.info("开始探测 {} 个熔断 OPEN 状态的渠道: {}", openIds.size(), openIds);
+        List<Long> batch = openIds.stream().limit(MAX_CHANNELS_PER_RUN).collect(Collectors.toList());
+        if (batch.size() < openIds.size()) {
+            log.info("熔断 OPEN 渠道数 {} 超过单次探测上限 {}，本轮仅探测前 {} 个，其余留待下一轮调度",
+                    openIds.size(), MAX_CHANNELS_PER_RUN, batch.size());
+        }
+        log.info("开始探测 {} 个熔断 OPEN 状态的渠道: {}", batch.size(), batch);
 
-        for (Long channelId : openIds) {
+        for (Long channelId : batch) {
             try {
                 Channel channel = channelService.getById(channelId);
                 if (channel.getStatus() == 0) {

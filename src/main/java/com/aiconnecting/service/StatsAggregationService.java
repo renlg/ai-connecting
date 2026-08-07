@@ -11,7 +11,6 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
@@ -171,6 +170,10 @@ public class StatsAggregationService {
      * 同类自调用生效地）包一层大事务。
      */
     public void initializeHistoricalData() {
+        distributedLock.runIfLocked(AGGREGATION_LOCK_KEY, AGGREGATION_LOCK_TTL_SECONDS, this::doInitializeHistoricalData);
+    }
+
+    private void doInitializeHistoricalData() {
         log.info("开始初始化用量汇总历史数据...");
 
         // 从最早的使用日志开始
@@ -207,15 +210,19 @@ public class StatsAggregationService {
 
     /**
      * 清理超过保留期限的旧汇总数据。每天凌晨 03:30 执行，保留 180 天数据。
+     *
+     * 本方法本身不加 {@code @Transactional}：锁必须在事务提交之后才释放，否则另一实例可能在
+     * 本实例提交前就抢到锁并发起清理。用 {@link #transactionTemplate} 在 runIfLocked 的
+     * job 内显式开启并同步提交事务，确保 finally 释放锁时事务已经提交。
      */
     @Scheduled(cron = "0 30 3 * * ?")
-    @Transactional
     public void cleanOldData() {
-        distributedLock.runIfLocked(CLEAN_LOCK_KEY, CLEAN_LOCK_TTL_SECONDS, () -> {
-            LocalDateTime cutoff = LocalDateTime.now().minusDays(MAX_RETENTION_DAYS);
-            usageStatsRepository.deleteByEndTimeBefore(cutoff);
-            log.info("清理了 {} 天前的旧汇总数据", MAX_RETENTION_DAYS);
-        });
+        distributedLock.runIfLocked(CLEAN_LOCK_KEY, CLEAN_LOCK_TTL_SECONDS, () ->
+                transactionTemplate.executeWithoutResult(status -> {
+                    LocalDateTime cutoff = LocalDateTime.now().minusDays(MAX_RETENTION_DAYS);
+                    usageStatsRepository.deleteByEndTimeBefore(cutoff);
+                    log.info("清理了 {} 天前的旧汇总数据", MAX_RETENTION_DAYS);
+                }));
     }
 
     /**
