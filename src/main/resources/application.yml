@@ -14,10 +14,10 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
   datasource:
-    url: jdbc:sqlite:./data/ai-connecting.db?busy_timeout=5000
+    url: jdbc:sqlite:./data/ai-connecting.db?busy_timeout=5000&journal_mode=WAL
     driver-class-name: org.sqlite.JDBC
     hikari:
-      maximum-pool-size: 1
+      maximum-pool-size: 4
       connection-test-query: "SELECT 1"
   jpa:
     database-platform: org.hibernate.community.dialect.SQLiteDialect

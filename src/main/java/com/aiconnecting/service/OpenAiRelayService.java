@@ -799,7 +799,7 @@ public class OpenAiRelayService {
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
             } catch (BusinessException e) {
-                if (lastError != null && !httpResponse.isCommitted()) {
+                if (!httpResponse.isCommitted()) {
                     RelayServiceUtils.writeOpenAiError(httpResponse, 502, "所有渠道均不可用: " + lastError);
                 }
                 return;

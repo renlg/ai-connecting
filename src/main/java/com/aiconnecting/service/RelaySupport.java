@@ -104,8 +104,6 @@ public class RelaySupport {
 
     @jakarta.annotation.PostConstruct
     void initHttpClient() {
-        System.setProperty("http.keepAlive", "false");
-
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(120, TimeUnit.SECONDS)
