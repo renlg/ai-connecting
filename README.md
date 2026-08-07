@@ -50,7 +50,7 @@ OpenAI 协议中转站管理面板。支持多渠道池、加权负载均衡、�
 | 层 | 技术 |
 |---|---|
 | 后端 | Spring Boot 3.2 + Spring Security + JPA + Hibernate |
-| 数据库 | SQLite（通过 Hibernate 社区方言），HikariCP 连接池（WAL 模式，`busy_timeout=5000`，最大连接数 4） |
+| 数据库 | SQLite（默认，单实例部署，通过 Hibernate 社区方言），HikariCP 连接池（WAL 模式，`busy_timeout=5000`，最大连接数 4）；MySQL 为可选配置（`DB_TYPE=mysql`），供未来多实例部署使用 |
 | 前端 | React 18 + Ant Design 5 + Vite |
 | 认证 | JWT + API Key 双因子鉴权 |
 | 缓存 | Redis（可选，通过 `RATE_LIMIT_ENABLED` 控制；限流 / 渠道健康追踪 / 登录失败锁定共用） |
@@ -136,6 +136,9 @@ cd web && npm install && npm run dev
 | `ADMIN_DEFAULT_PASSWORD` | 初始管理员密码 | 是 |
 | `ADMIN_RESET_PASSWORD` | 重置管理员密码（非空时触发） | 否 |
 | `CHANNEL_ENCRYPTION_KEY` | 渠道 API Key 加密密钥（base64 编码的 32 字节 AES-256-GCM 密钥） | 是 |
+| `DB_TYPE` | 数据库类型：留空/不设置为默认 SQLite；设为 `mysql` 切换到 MySQL（可选，供多实例部署使用） | 否 |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | MySQL 连接参数（`DB_TYPE=mysql` 时必填，`DB_PORT` 默认 3306） | 仅 MySQL 模式需要 |
+| `DB_POOL_SIZE` | 数据库连接池最大连接数（默认 4，SQLite/MySQL 通用） | 否 |
 | `REDIS_HOST` | Redis 地址 | 限流 / 渠道健康分布式模式 / 登录失败锁定需要 |
 | `REDIS_PORT` | Redis 端口（默认 6379） | 否 |
 | `REDIS_PASSWORD` | Redis 密码 | 否 |
@@ -176,15 +179,15 @@ bash deploy/deploy.sh
 
 项目当前按单实例设计和部署。若要在负载均衡后面部署多个应用节点并保持数据一致，现有实现存在以下阻塞点：
 
-- **SQLite 单写者语义**：数据库是应用本地的单一文件（`./data/ai-connecting.db`），每个节点各自持有一份文件即数据互相独立、不共享；若改为通过 NFS/云盘挂载同一份文件，WAL 模式在网络文件系统上的锁语义没有可靠保证，存在损坏风险，SQLite 本质上不是为多进程跨主机并发写设计的。
-- **`ddl-auto: update` 竞态**：多个节点同时启动会并发对同一份 schema 做变更，缺少分布式迁移锁，存在建表/加列竞态。
-- **启动期迁移逻辑依赖 SQLite 方言**：`ApiKeyMigrationRunner`、`ModelTypeMigrationRunner`、`DashboardIndexMigrationRunner`、`VideoTaskMigrationRunner` 均通过 `PRAGMA table_info(...)` 等 SQLite 专有语法探测列是否存在，迁移到其他数据库需要重写。
+- ~~**SQLite 单写者语义**~~ **（Round 1 已解决数据库可选性问题）**：数据库默认仍是应用本地的 SQLite 单一文件（`./data/ai-connecting.db`，单实例部署行为不变），但现在可通过 `DB_TYPE=mysql` 切换到 MySQL；MySQL 支持真正的多连接并发写和跨主机访问，是多实例部署的前提。切换后 schema 由 `schema-mysql.sql` 在启动时建表（`CREATE TABLE IF NOT EXISTS`），`ddl-auto` 收敛为 `validate`。
+- ~~**启动期迁移逻辑依赖 SQLite 方言**~~ **（Round 1 已解决）**：`ApiKeyMigrationRunner`、`ModelTypeMigrationRunner`、`DashboardIndexMigrationRunner`、`VideoTaskMigrationRunner` 已改为通过 `DataSource` 元数据探测当前方言，SQLite 下继续使用原有的 `PRAGMA table_info(...)` 逻辑，MySQL 下改用 `information_schema.columns` / `information_schema.statistics` 探测列和索引是否存在。
+- **`ddl-auto: update` 竞态（MySQL 模式下已不适用，仅 SQLite 单实例默认模式存在，且单实例下无竞态）**：多个节点同时启动会并发对同一份 schema 做变更，缺少分布式迁移锁，存在建表/加列竞态。MySQL 模式下 `ddl-auto` 已固定为 `validate`，schema 变更改由 `schema-mysql.sql`（`CREATE TABLE IF NOT EXISTS`，天然幂等）承担，多节点并发启动时重复执行是安全的；后续若需要在线加列等演进式变更，仍建议引入独立的迁移锁或迁移工具。
 - **定时任务重复执行**：`StatsAggregationService`（每 15 分钟聚合、每日 03:30 清理旧数据）、`ChannelProbeTask`（每小时探测被封禁渠道）、`OpenAiRelayService` 中的视频任务对账任务均为 `@Scheduled`，多节点部署下会在每个节点各跑一份。聚合任务内部靠 JVM 内 `synchronized` 锁 + 事务内二次校验防重复写入，这只在单进程内有效，多进程下需要换成 Redis 分布式锁（当前项目里**没有**现成的分布式锁工具类，只有限流用的滑动窗口 Lua 脚本）。
 - **进程内缓存不同步**：渠道列表、模型信息、用户信息、Token 校验结果等使用 `ConcurrentHashMap` 做本地内存缓存（60s TTL），多节点下各节点缓存互不感知，写操作后其他节点最多 60s 内可能读到旧数据。
 - **Redis 现状是可选依赖而非强依赖**：`RATE_LIMIT_ENABLED=false` 时限流、登录失败锁定完全不生效（相关 Bean 通过 `@ConditionalOnProperty` 直接不装配），渠道健康追踪退化为纯内存模式；多节点部署下必须强制启用 Redis，否则限流/防爆破/健康状态在节点间完全不一致。
 - **积分/额度写路径本身具备较好的原子性基础**：`UsageLogService.recordUsageAndQuotas` 内的余额与额度更新（`UserRepository.tryDeductCredits`、`ChannelRepository.addUsedQuota`、`TokenRepository.addUsedQuota`）都是条件 `UPDATE ... WHERE` 语句而非"读出改回写"，视频任务结算也用 `WHERE settled = false` 的条件 UPDATE 做乐观锁；这一模式可以直接迁移到 MySQL/PostgreSQL 且并发语义不变，是多节点改造中不需要重写的部分。
 
-**推荐方向**：数据库迁移到 MySQL 或 PostgreSQL（真正支持多连接并发写、行级锁、跨主机访问），迁移期间将四个迁移 Runner 中的 SQLite 专有 SQL 替换为目标数据库方言的等价写法，`ddl-auto` 收敛为 `validate`（配合独立的建表 SQL/迁移工具管理 schema），并为所有 `@Scheduled` 任务加上基于 Redis 的分布式锁（此时 Redis 需从可选依赖提升为强制依赖）。这是一次涉及数据层和部分服务层的改造，暂无实施计划。
+**推荐方向**：数据库可选支持 MySQL 的 Round 1 已完成（见上）。剩余工作：为所有 `@Scheduled` 任务加上基于 Redis 的分布式锁（此时 Redis 需从可选依赖提升为强制依赖），并解决进程内缓存跨节点不同步的问题。这是后续改造的 Round 2+，暂无实施计划。
 
 ## 项目结构
 

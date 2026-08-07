@@ -24,22 +24,44 @@ public class DashboardIndexMigrationRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        boolean mysql = DbDialectUtil.isMysql(jdbcTemplate);
+
         List<Map<String, Object>> duplicates = jdbcTemplate.queryForList(
                 "SELECT display_name, COUNT(*) as c FROM model_configs " +
                         "WHERE display_name IS NOT NULL AND display_name != '' " +
                         "GROUP BY display_name HAVING COUNT(*) > 1");
         if (duplicates.isEmpty()) {
-            jdbcTemplate.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_model_configs_display_name ON model_configs (display_name)");
+            createIndexIfAbsent(mysql, "model_configs", "idx_model_configs_display_name",
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_model_configs_display_name ON model_configs (display_name)",
+                    "CREATE UNIQUE INDEX idx_model_configs_display_name ON model_configs (display_name)");
         } else {
             log.warn("Skipping unique index on model_configs.display_name: found {} duplicate display_name(s): {}. " +
                             "Resolve duplicates before the unique index can be created.",
                     duplicates.size(), duplicates);
         }
 
-        jdbcTemplate.execute(
-                "CREATE INDEX IF NOT EXISTS idx_usage_logs_model_created ON usage_logs (model, created_at)");
+        createIndexIfAbsent(mysql, "usage_logs", "idx_usage_logs_model_created",
+                "CREATE INDEX IF NOT EXISTS idx_usage_logs_model_created ON usage_logs (model, created_at)",
+                "CREATE INDEX idx_usage_logs_model_created ON usage_logs (model, created_at)");
 
         log.info("Dashboard index migration complete");
+    }
+
+    /**
+     * MySQL 的 CREATE INDEX 不支持 IF NOT EXISTS，需先查 information_schema.statistics 判断索引是否已存在；
+     * SQLite 继续使用原有的 IF NOT EXISTS 语句，逻辑不变。
+     */
+    private void createIndexIfAbsent(boolean mysql, String table, String indexName, String sqliteSql, String mysqlSql) {
+        if (mysql) {
+            Integer count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM information_schema.statistics " +
+                            "WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?",
+                    Integer.class, table, indexName);
+            if (count == null || count == 0) {
+                jdbcTemplate.execute(mysqlSql);
+            }
+        } else {
+            jdbcTemplate.execute(sqliteSql);
+        }
     }
 }

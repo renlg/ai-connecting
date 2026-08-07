@@ -17,7 +17,7 @@ spring:
     url: jdbc:sqlite:./data/ai-connecting.db?busy_timeout=5000&journal_mode=WAL
     driver-class-name: org.sqlite.JDBC
     hikari:
-      maximum-pool-size: 4
+      maximum-pool-size: ${DB_POOL_SIZE:4}
       connection-test-query: "SELECT 1"
   jpa:
     database-platform: org.hibernate.community.dialect.SQLiteDialect
@@ -76,3 +76,28 @@ app:
     endpoint: ${OSS_ENDPOINT:oss-cn-hangzhou.aliyuncs.com}  # 不含协议前缀的 endpoint host
     prefix: ${OSS_PREFIX:ai-connect}  # 对象 key 前缀
   # CHANNEL_ENCRYPTION_KEY: base64-encoded 32-byte key for AES-256-GCM encryption of channel API keys (required, no default)
+
+# ============================================================
+# MySQL 可选配置：当环境变量 DB_TYPE=mysql 时激活本文档块，覆盖上面的 SQLite 默认配置。
+# 未设置 DB_TYPE（或设置为其他值）时，本文档块不生效，行为与单实例 SQLite 部署完全一致。
+# 供未来多实例部署使用；schema 由 schema-mysql.sql 在启动时建表，因此 ddl-auto 为 validate。
+# ============================================================
+---
+spring:
+  config:
+    activate:
+      on-property: DB_TYPE=mysql
+  datasource:
+    url: jdbc:mysql://${DB_HOST}:${DB_PORT:3306}/${DB_NAME}?useSSL=false&serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf8&rewriteBatchedStatements=true
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:4}
+      connection-test-query: "SELECT 1"
+  jpa:
+    database-platform: org.hibernate.dialect.MySQLDialect
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false

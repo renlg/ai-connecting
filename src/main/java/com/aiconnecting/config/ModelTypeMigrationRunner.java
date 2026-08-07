@@ -11,7 +11,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * 模型类型/分辨率档位计费字段迁移：
@@ -26,9 +25,8 @@ public class ModelTypeMigrationRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        Set<String> existing = jdbcTemplate.queryForList("PRAGMA table_info(model_configs)").stream()
-                .map(row -> String.valueOf(row.get("name")).toLowerCase())
-                .collect(Collectors.toSet());
+        boolean mysql = DbDialectUtil.isMysql(jdbcTemplate);
+        Set<String> existing = DbDialectUtil.existingColumns(jdbcTemplate, mysql, "model_configs");
 
         Map<String, String> columns = new LinkedHashMap<>();
         columns.put("type", "VARCHAR(20) NOT NULL DEFAULT 'text'");

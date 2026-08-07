@@ -7,13 +7,13 @@ import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.boot.autoconfigure.orm.jpa.EntityManagerFactoryDependsOnPostProcessor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.DependsOn;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * 视频计费字段迁移：video_tasks 表在计费改造前已存在（不含预扣/结算相关列），
@@ -31,15 +31,15 @@ import java.util.stream.Collectors;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@DependsOn("mysqlSchemaInitializer")
 public class VideoTaskMigrationRunner {
 
     private final JdbcTemplate jdbcTemplate;
 
     @PostConstruct
     public void migrate() {
-        Set<String> existing = jdbcTemplate.queryForList("PRAGMA table_info(video_tasks)").stream()
-                .map(row -> String.valueOf(row.get("name")).toLowerCase())
-                .collect(Collectors.toSet());
+        boolean mysql = DbDialectUtil.isMysql(jdbcTemplate);
+        Set<String> existing = DbDialectUtil.existingColumns(jdbcTemplate, mysql, "video_tasks");
         if (existing.isEmpty()) {
             // 表尚不存在，交由 Hibernate ddl-auto 按实体定义创建全新表
             return;
