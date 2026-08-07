@@ -20,6 +20,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,9 +55,20 @@ public class UsageLogService {
         }
     }
 
-    /** 仪表盘每日统计缓存，避免用户来回切换天数时重复全表 JOIN，缓存 30 秒 */
-    private final ConcurrentHashMap<DailyStatsCacheKey, CachedDailyStats> dailyStatsCache = new ConcurrentHashMap<>();
+    /**
+     * 仪表盘每日统计缓存，避免用户来回切换天数时重复全表 JOIN，缓存 30 秒。
+     * 按访问顺序的有界 LRU：超过上限时只淘汰最久未使用的一条，而非清空整个 Map。
+     */
+    private final Map<DailyStatsCacheKey, CachedDailyStats> dailyStatsCache =
+            Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<DailyStatsCacheKey, CachedDailyStats> eldest) {
+                    return size() > DAILY_STATS_CACHE_MAX_ENTRIES;
+                }
+            });
     private static final long DAILY_STATS_CACHE_TTL_MS = 30 * 1000L;
+    /** 缓存条目上限，超出后淘汰最久未使用的一条 */
+    private static final int DAILY_STATS_CACHE_MAX_ENTRIES = 5000;
 
     private record DailyStatsCacheKey(boolean isAdmin, List<Long> tokenIds, int days) {}
 

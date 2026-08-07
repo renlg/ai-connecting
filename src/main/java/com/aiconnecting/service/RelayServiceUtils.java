@@ -1,36 +1,20 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.entity.Channel;
-import com.aiconnecting.entity.Token;
-import com.aiconnecting.entity.UsageLog;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
-import okhttp3.Request;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.math.BigDecimal;
-import java.net.HttpURLConnection;
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 /**
  * 中转服务公共工具类，提取所有 RelayService / RelaySupport / 各协议 RelayService 中可复用的静态方法。
  * <p>
- * 涵盖：客户端 IP 提取、渠道类型判断、渠道认证头设置、模型权限解析、
- * 各协议 usage 解析、UsageLog 构建、SSE 流式读取、请求体处理、错误响应写入、
- * Gemini 流式 chunk 转换等。
+ * 涵盖：渠道类型判断、各协议 usage 解析、错误响应写入、Gemini 流式 chunk 转换等。
  */
 @Slf4j
 public final class RelayServiceUtils {
@@ -56,27 +40,6 @@ public final class RelayServiceUtils {
         public static final UsageInfo ZERO = new UsageInfo(0, 0, 0, 0, 0, 0);
     }
 
-    // ==================== 客户端 IP 提取 ====================
-
-    /**
-     * 从 HttpServletRequest 中提取客户端真实 IP
-     * 依次检查 X-Forwarded-For → X-Real-IP → remoteAddr
-     */
-    public static String getClientIp(HttpServletRequest request) {
-        if (request == null) return "";
-        String ip = request.getHeader("X-Forwarded-For");
-        if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
-            ip = request.getHeader("X-Real-IP");
-        }
-        if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
-            ip = request.getRemoteAddr();
-        }
-        if (ip != null && ip.contains(",")) {
-            ip = ip.split(",")[0].trim();
-        }
-        return ip;
-    }
-
     // ==================== 渠道类型判断 ====================
 
     /**
@@ -94,83 +57,7 @@ public final class RelayServiceUtils {
         return "gemini".equalsIgnoreCase(channel.getType());
     }
 
-    // ==================== 渠道认证 ====================
-
-    /**
-     * 根据渠道类型为 OkHttp Request.Builder 设置认证头
-     */
-    public static void applyChannelAuth(Request.Builder builder, Channel channel) {
-        if (isClaudeTypeChannel(channel)) {
-            builder.addHeader("x-api-key", channel.getApiKey());
-            builder.addHeader("anthropic-version", "2023-06-01");
-        } else {
-            builder.addHeader("Authorization", "Bearer " + channel.getApiKey());
-        }
-    }
-
-    /**
-     * 根据渠道类型为 HttpURLConnection 设置认证头
-     */
-    public static void applyChannelAuthToConnection(HttpURLConnection conn, Channel channel) {
-        if (isClaudeTypeChannel(channel)) {
-            conn.setRequestProperty("x-api-key", channel.getApiKey());
-            conn.setRequestProperty("anthropic-version", "2023-06-01");
-        } else {
-            conn.setRequestProperty("Authorization", "Bearer " + channel.getApiKey());
-        }
-    }
-
-    // ==================== 模型权限解析 ====================
-
-    /**
-     * 将逗号分隔的允许模型字符串解析为 Set
-     */
-    public static Set<String> parseAllowedModels(String allowedModels) {
-        if (allowedModels == null || allowedModels.isEmpty()) {
-            return Set.of();
-        }
-        return Arrays.stream(allowedModels.split(","))
-                .map(String::trim)
-                .collect(Collectors.toSet());
-    }
-
     // ==================== Usage 解析（各协议） ====================
-
-    /**
-     * 解析 OpenAI 格式的非流式响应 usage
-     * 支持 prompt_tokens_details.cached_tokens 和 Claude 格式的 cache 字段
-     */
-    public static UsageInfo parseOpenAiUsage(ObjectMapper mapper, String response) {
-        try {
-            JsonNode jsonNode = mapper.readTree(response);
-            JsonNode usage = jsonNode.get("usage");
-            if (usage == null) return UsageInfo.ZERO;
-
-            int promptTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt() : 0;
-            int completionTokens = usage.has("completion_tokens") ? usage.get("completion_tokens").asInt() : 0;
-            int totalTokens = usage.has("total_tokens") ? usage.get("total_tokens").asInt() : 0;
-
-            int cachedTokens = 0;
-            JsonNode promptDetails = usage.path("prompt_tokens_details");
-            if (!promptDetails.isMissingNode()) {
-                cachedTokens = promptDetails.has("cached_tokens") ? promptDetails.get("cached_tokens").asInt() : 0;
-            }
-
-            int cacheCreationTokens = usage.has("cache_creation_input_tokens")
-                    ? usage.get("cache_creation_input_tokens").asInt() : 0;
-            int cacheReadTokens = usage.has("cache_read_input_tokens")
-                    ? usage.get("cache_read_input_tokens").asInt() : 0;
-            if (cachedTokens == 0 && cacheReadTokens > 0) {
-                cachedTokens = cacheReadTokens;
-            }
-
-            return new UsageInfo(promptTokens, completionTokens, totalTokens,
-                    cachedTokens, cacheCreationTokens, cacheReadTokens);
-        } catch (Exception e) {
-            log.warn("Failed to parse usage from response");
-            return UsageInfo.ZERO;
-        }
-    }
 
     /**
      * 解析 Claude 格式的非流式响应 usage
@@ -306,113 +193,6 @@ public final class RelayServiceUtils {
         }
     }
 
-    // ==================== UsageLog 构建 ====================
-
-    /**
-     * 构建 UsageLog 实体（非流式，从 UsageInfo 取值）
-     */
-    public static UsageLog buildUsageLog(Token token, Channel channel, String model,
-                                         UsageInfo usage, BigDecimal creditCost,
-                                         long duration, String clientIp, String path) {
-        return UsageLog.builder()
-                .tokenId(token.getId())
-                .channelId(channel.getId())
-                .model(model)
-                .promptTokens(usage.promptTokens())
-                .completionTokens(usage.completionTokens())
-                .totalTokens(usage.totalTokens())
-                .promptTokensCacheHit(usage.cachedTokens())
-                .cachedTokensCacheCreation(usage.cacheCreationTokens())
-                .cachedTokensCacheRead(usage.cacheReadTokens())
-                .creditCost(creditCost)
-                .ip(clientIp)
-                .duration(duration)
-                .requestPath(path)
-                .build();
-    }
-
-    /**
-     * 构建 UsageLog 实体（流式，从显式 token 计数取值）
-     */
-    public static UsageLog buildStreamUsageLog(Token token, Channel channel, String model,
-                                               int promptTokens, int completionTokens,
-                                               int cachedTokens, int cacheCreationTokens, int cacheReadTokens,
-                                               BigDecimal creditCost, long duration,
-                                               String clientIp, String path) {
-        int totalTokens = promptTokens + completionTokens;
-        return UsageLog.builder()
-                .tokenId(token.getId())
-                .channelId(channel.getId())
-                .model(model)
-                .promptTokens(promptTokens)
-                .completionTokens(completionTokens)
-                .totalTokens(totalTokens)
-                .promptTokensCacheHit(cachedTokens)
-                .cachedTokensCacheCreation(cacheCreationTokens)
-                .cachedTokensCacheRead(cacheReadTokens)
-                .creditCost(creditCost)
-                .ip(clientIp)
-                .duration(duration)
-                .requestPath(path)
-                .build();
-    }
-
-    // ==================== SSE 流式读取 ====================
-
-    /**
-     * 流式读取上游 SSE 响应并透传给客户端，返回最后包含 usage 的 data 行内容
-     *
-     * @param conn         上游 HTTP 连接
-     * @param httpResponse 下游 Servlet 响应
-     * @param usageFilter  判断某行 data 是否为 usage 行的谓词；为 null 时使用默认规则（包含 "usage"）
-     */
-    public static String streamSseResponse(HttpURLConnection conn, HttpServletResponse httpResponse,
-                                           Predicate<String> usageFilter) throws IOException {
-        String lastUsageData = null;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
-            var writer = httpResponse.getWriter();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.isEmpty()) {
-                    writer.write("\n");
-                } else {
-                    writer.write(line);
-                    writer.write("\n");
-                }
-                writer.flush();
-                if (line.startsWith("data: ") && !line.equals("data: [DONE]")) {
-                    String data = line.substring(6);
-                    if (usageFilter != null ? usageFilter.test(data) : data.contains("\"usage\"")) {
-                        lastUsageData = data;
-                    }
-                }
-            }
-        }
-        return lastUsageData;
-    }
-
-    // ==================== 请求体处理 ====================
-
-    /**
-     * 为 chat/completions 请求注入 stream_options.include_usage = true
-     */
-    public static String injectStreamOptions(ObjectMapper mapper, String requestBody, String path) {
-        if (!path.contains("/chat/completions")) return requestBody;
-        try {
-            JsonNode jsonBody = mapper.readTree(requestBody);
-            if (jsonBody.isObject()) {
-                ObjectNode streamOptions = mapper.createObjectNode();
-                streamOptions.put("include_usage", true);
-                ((ObjectNode) jsonBody).set("stream_options", streamOptions);
-                return mapper.writeValueAsString(jsonBody);
-            }
-        } catch (Exception e) {
-            log.warn("注入 stream_options 失败，使用原始请求体");
-        }
-        return requestBody;
-    }
-
     // ==================== 错误响应写入 ====================
 
     /**
@@ -508,23 +288,4 @@ public final class RelayServiceUtils {
         }
     }
 
-    // ==================== 渠道限流检查 ====================
-
-    /**
-     * 检查渠道是否被限流。需要外部传入 RateLimitService 的可选引用和检查逻辑。
-     *
-     * @param channel         渠道
-     * @param rateLimitChecker 执行限流检查的回调，如果渠道被限流应抛出 BusinessException
-     * @return true 表示被限流
-     */
-    public static boolean isChannelRateLimited(Channel channel, Runnable rateLimitChecker) {
-        if (rateLimitChecker != null) {
-            try {
-                rateLimitChecker.run();
-            } catch (com.aiconnecting.common.BusinessException e) {
-                return true;
-            }
-        }
-        return false;
-    }
 }
