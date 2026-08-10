@@ -70,7 +70,8 @@ public class OpenAiRelayService {
         try {
             return relayRequestSingleModel(ctx, path, requestBody, model, httpRequest);
         } catch (BusinessException e) {
-            if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null) {
+            if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
+                    && FailureClassifier.isSwitchable(e)) {
                 var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(
                         ctx.modelConfig().getFallbackGroupId(), "text");
                 if (fallbackGroup.isPresent()) {
@@ -162,7 +163,10 @@ public class OpenAiRelayService {
             // 退回本模型预扣的积分（按本模型自身价格）；若配置了故障转移组，转入组内成员时
             // 会按组价重新独立预扣，不会与此处的退款重复或冲突
             support.refundMediaCharge(ctx, charge);
-            if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null) {
+            // 只有上游/渠道级别的失败（BusinessException 且分类为 SWITCH）才转入故障转移组；
+            // 本地校验错误或非预期的运行时异常直接向上抛出，不掩盖真实错误
+            if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
+                    && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
                 var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(), mediaType);
                 if (fallbackGroup.isPresent()) {
                     log.warn("模型 {} 媒体请求失败，转入故障转移组 {} 继续尝试", model, fallbackGroup.get().getName());

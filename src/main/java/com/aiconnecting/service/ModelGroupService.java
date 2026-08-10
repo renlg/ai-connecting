@@ -111,6 +111,11 @@ public class ModelGroupService {
         if (modelGroupRepository.existsByNameExcludingId(name, excludeId)) {
             throw new BusinessException("模型组名称 \"" + name + "\" 已存在");
         }
+        // 组名不得与任何单模型名称冲突：单模型请求按名称精确匹配路由，冲突会使原本走单模型路径的
+        // 请求被劫持进组路径（不同的计费/权限逻辑），详见 RelayService#isGroupModel 的路由优先级约定
+        if (!modelConfigRepository.findByName(name).isEmpty()) {
+            throw new BusinessException(409, "模型组名称 \"" + name + "\" 与已存在的模型名称冲突");
+        }
     }
 
     @Transactional
@@ -132,8 +137,30 @@ public class ModelGroupService {
             validateNameUnique(patch.getName(), id);
             existing.setName(patch.getName());
         }
+        boolean typeChanged = patch.getType() != null && !patch.getType().equals(existing.getType());
         if (patch.getType() != null) {
             existing.setType(validateType(patch.getType()));
+        }
+        // 类型变更但本次请求未一并重新指定成员列表时，必须校验现有成员是否仍与新类型一致，
+        // 否则组内会残留类型不匹配的成员（如文本组改成图片组后仍挂着文本模型），
+        // 故障转移执行时按新类型渲染/计费会产生错误结果
+        if (typeChanged && memberInputs == null) {
+            List<ModelGroupMember> currentMembers = modelGroupMemberRepository.findByGroupIdOrderBySortOrderAsc(id);
+            if (!currentMembers.isEmpty()) {
+                Map<Long, ModelConfig> configs = modelConfigRepository
+                        .findAllById(currentMembers.stream().map(ModelGroupMember::getModelConfigId).toList())
+                        .stream().collect(Collectors.toMap(ModelConfig::getId, c -> c));
+                List<String> mismatched = currentMembers.stream()
+                        .map(m -> configs.get(m.getModelConfigId()))
+                        .filter(c -> c != null)
+                        .filter(c -> !existing.getType().equals(c.getType() == null || c.getType().isBlank() ? "text" : c.getType()))
+                        .map(ModelConfig::getName)
+                        .toList();
+                if (!mismatched.isEmpty()) {
+                    throw new BusinessException(400, "模型组类型变更后，以下现有成员类型与新类型 (" + existing.getType()
+                            + ") 不一致，请一并重新提交成员列表: " + String.join(", ", mismatched));
+                }
+            }
         }
         if (patch.getStrategy() != null) {
             existing.setStrategy(normalizeStrategy(patch.getStrategy()));

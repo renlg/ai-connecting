@@ -70,7 +70,15 @@ public class RelayService {
         openAiRelayService.relayAudioSpeech(tokenKey, requestBody, model, httpRequest, httpResponse);
     }
 
+    /**
+     * 单模型名称优先于同名模型组：若存在同名的 model_config，即便同名的组也已启用，
+     * 请求仍按单模型路径处理（正常情况下二者不应同名，见 ModelGroupService#validateNameUnique
+     * 与 ModelConfigController 的创建/更新校验；此处仅作为路由层的兜底防御）
+     */
     private boolean isGroupModel(String model) {
+        if (relaySupport.findModelConfigCached(model) != null) {
+            return false;
+        }
         return modelGroupFailoverExecutor.findEnabledGroup(model).isPresent();
     }
 

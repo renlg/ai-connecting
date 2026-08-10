@@ -425,7 +425,22 @@ public class RelaySupport {
         return url.replaceAll("([?&]key=)[^&]*", "$1***");
     }
 
+    /** 将 httpClient 的默认 120s 读超时按剩余总耗时预算收窄；为 null/非正数时返回默认客户端 */
+    private OkHttpClient boundedReadTimeoutClient(Long readTimeoutMs) {
+        if (readTimeoutMs == null || readTimeoutMs <= 0) {
+            return httpClient;
+        }
+        return httpClient.newBuilder()
+                .readTimeout(Math.min(readTimeoutMs, 120_000L), TimeUnit.MILLISECONDS)
+                .build();
+    }
+
     HttpURLConnection createSseConnection(Channel channel, String path, String requestBody) throws IOException {
+        return createSseConnection(channel, path, requestBody, null);
+    }
+
+    /** @param readTimeoutMs 覆盖默认 120s 读超时（毫秒），语义同 {@link #forwardRequest(Channel, String, String, Long)} */
+    HttpURLConnection createSseConnection(Channel channel, String path, String requestBody, Long readTimeoutMs) throws IOException {
         String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
         log.info("流式请求: url={}, channel={}", maskApiKey(url), channel.getId());
         java.net.URL urlObj = new java.net.URL(url);
@@ -433,7 +448,8 @@ public class RelaySupport {
         try {
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(15000);
-            conn.setReadTimeout(120000);
+            conn.setReadTimeout(readTimeoutMs != null && readTimeoutMs > 0
+                    ? (int) Math.min(readTimeoutMs, 120_000L) : 120000);
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Accept", "text/event-stream");
@@ -469,6 +485,14 @@ public class RelaySupport {
     // ==================== 上游请求转发 ====================
 
     String forwardRequest(Channel channel, String path, String requestBody) {
+        return forwardRequest(channel, path, requestBody, null);
+    }
+
+    /**
+     * @param readTimeoutMs 覆盖默认 120s 读超时（毫秒），供模型组故障转移按剩余总耗时预算收窄单次尝试的
+     *                       超时使用，避免固定 120s 超时叠加多次尝试导致总耗时远超预算；为 null 时使用默认超时
+     */
+    String forwardRequest(Channel channel, String path, String requestBody, Long readTimeoutMs) {
         String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
 
         RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
@@ -479,7 +503,8 @@ public class RelaySupport {
         applyChannelAuth(requestBuilder, channel);
         Request request = requestBuilder.build();
 
-        try (okhttp3.Response response = httpClient.newCall(request).execute()) {
+        OkHttpClient client = boundedReadTimeoutClient(readTimeoutMs);
+        try (okhttp3.Response response = client.newCall(request).execute()) {
             String responseBody = response.body() != null ? response.body().string() : "";
 
             if (!response.isSuccessful()) {
@@ -531,6 +556,11 @@ public class RelaySupport {
      * 转发 JSON 请求并以原始字节返回上游响应（供 /v1/audio/speech 等二进制响应端点使用）
      */
     BinaryResponse forwardBinaryRequest(Channel channel, String path, String requestBody) {
+        return forwardBinaryRequest(channel, path, requestBody, null);
+    }
+
+    /** @param readTimeoutMs 覆盖默认读超时（毫秒），语义同 {@link #forwardRequest(Channel, String, String, Long)} */
+    BinaryResponse forwardBinaryRequest(Channel channel, String path, String requestBody, Long readTimeoutMs) {
         String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
         RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
         Request.Builder requestBuilder = new Request.Builder()
@@ -538,7 +568,7 @@ public class RelaySupport {
                 .addHeader("Content-Type", "application/json")
                 .post(body);
         applyChannelAuth(requestBuilder, channel);
-        return executeBinary(channel, requestBuilder.build(), MAX_AUDIO_RESPONSE_BYTES);
+        return executeBinary(channel, requestBuilder.build(), MAX_AUDIO_RESPONSE_BYTES, readTimeoutMs);
     }
 
     /**
@@ -551,7 +581,7 @@ public class RelaySupport {
                 .url(url)
                 .post(multipartBody);
         applyChannelAuth(requestBuilder, channel);
-        return executeBinary(channel, requestBuilder.build(), MAX_TRANSCRIPTION_RESPONSE_BYTES);
+        return executeBinary(channel, requestBuilder.build(), MAX_TRANSCRIPTION_RESPONSE_BYTES, null);
     }
 
     /** TTS 二进制音频响应上限，避免与请求体等副本叠加造成单请求内存峰值过高 */
@@ -560,8 +590,9 @@ public class RelaySupport {
     /** 转写/翻译响应仅为 JSON 或纯文本，使用更小的独立上限 */
     static final long MAX_TRANSCRIPTION_RESPONSE_BYTES = 4L * 1024 * 1024;
 
-    private BinaryResponse executeBinary(Channel channel, Request request, long maxResponseBytes) {
-        try (okhttp3.Response response = httpClient.newCall(request).execute()) {
+    private BinaryResponse executeBinary(Channel channel, Request request, long maxResponseBytes, Long readTimeoutMs) {
+        OkHttpClient client = boundedReadTimeoutClient(readTimeoutMs);
+        try (okhttp3.Response response = client.newCall(request).execute()) {
             byte[] bytes = response.body() != null
                     ? readCapped(response.body().byteStream(), maxResponseBytes)
                     : new byte[0];
@@ -624,6 +655,11 @@ public class RelaySupport {
     }
 
     String forwardGeminiRequest(Channel channel, String requestBody) {
+        return forwardGeminiRequest(channel, requestBody, null);
+    }
+
+    /** @param readTimeoutMs 覆盖默认读超时（毫秒），语义同 {@link #forwardRequest(Channel, String, String, Long)} */
+    String forwardGeminiRequest(Channel channel, String requestBody, Long readTimeoutMs) {
         if (isChannelRateLimited(channel)) {
             throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
         }
@@ -645,7 +681,8 @@ public class RelaySupport {
                 .addHeader("X-Goog-Api-Key", channel.getApiKey())
                 .post(body);
 
-        try (okhttp3.Response response = httpClient.newCall(reqBuilder.build()).execute()) {
+        OkHttpClient client = boundedReadTimeoutClient(readTimeoutMs);
+        try (okhttp3.Response response = client.newCall(reqBuilder.build()).execute()) {
             String responseBody = response.body() != null ? response.body().string() : "";
             if (!response.isSuccessful()) {
                 log.error("Gemini upstream API error: {} - {}", response.code(), responseBody);
@@ -661,14 +698,29 @@ public class RelaySupport {
 
     // ==================== 流式读取与请求体处理 ====================
 
+    /** SSE 透传结果：lastUsageData=最后一条包含 usage 的数据行；bytesWritten=是否确有任何数据写出过 */
+    record SseStreamResult(String lastUsageData, boolean bytesWritten) {}
+
     String streamSseResponse(HttpURLConnection conn, HttpServletResponse httpResponse,
                               Predicate<String> usageFilter) throws IOException {
+        return streamSseResponseTracked(conn, httpResponse, usageFilter).lastUsageData();
+    }
+
+    /**
+     * 与 {@link #streamSseResponse} 逻辑完全一致，额外返回是否确有数据写出：
+     * 上游返回 200 后立即 EOF（一行都没有）时，客户端连接虽已建立但从未收到任何内容，
+     * 调用方（模型组故障转移）据此判断此时仍可安全切换成员，而非当作已成功、零 usage 结束
+     */
+    RelaySupport.SseStreamResult streamSseResponseTracked(HttpURLConnection conn, HttpServletResponse httpResponse,
+                                                           Predicate<String> usageFilter) throws IOException {
         String lastUsageData = null;
+        boolean bytesWritten = false;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
             var writer = httpResponse.getWriter();
             String line;
             while ((line = reader.readLine()) != null) {
+                bytesWritten = true;
                 if (line.isEmpty()) {
                     writer.write("\n");
                 } else {
@@ -684,7 +736,7 @@ public class RelaySupport {
                 }
             }
         }
-        return lastUsageData;
+        return new SseStreamResult(lastUsageData, bytesWritten);
     }
 
     String injectStreamOptions(String requestBody, String path) {

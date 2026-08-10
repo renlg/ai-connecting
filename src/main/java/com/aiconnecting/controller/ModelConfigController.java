@@ -41,6 +41,13 @@ public class ModelConfigController {
         }
     }
 
+    /** 模型名称/显示名不得与已存在的模型组名称冲突，理由同 {@link ModelGroupService#validateNameUnique} */
+    private void validateNotGroupName(String name) {
+        if (name != null && !name.isBlank() && modelGroupService.findByName(name).isPresent()) {
+            throw new BusinessException(409, "模型名称 \"" + name + "\" 与已存在的模型组名称冲突");
+        }
+    }
+
     private static final Set<String> VALID_TYPES = Set.of("text", "image", "video", "audio");
 
     private static String validateType(String type) {
@@ -125,6 +132,8 @@ public class ModelConfigController {
             throw new BusinessException("模型名称不能为空");
         }
         modelConfigService.validateDisplayNameUnique(request.getDisplayName(), null);
+        validateNotGroupName(request.getName());
+        validateNotGroupName(request.getDisplayName());
         validatePrices(request);
         String type = validateType(request.getType());
         validateFallbackGroup(request.getFallbackGroupId(), type != null ? type : "text");
@@ -162,10 +171,12 @@ public class ModelConfigController {
         validatePrices(request);
         ModelConfig config = modelConfigService.getById(id);
         if (request.getName() != null) {
+            validateNotGroupName(request.getName());
             config.setName(request.getName());
         }
         if (request.getDisplayName() != null) {
             modelConfigService.validateDisplayNameUnique(request.getDisplayName(), id);
+            validateNotGroupName(request.getDisplayName());
             config.setDisplayName(request.getDisplayName());
         }
         if (request.getDescription() != null) {
