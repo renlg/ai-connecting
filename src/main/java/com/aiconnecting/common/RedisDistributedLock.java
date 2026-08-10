@@ -169,30 +169,39 @@ public class RedisDistributedLock {
             }
         }, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
         RenewalHolder newHolder = new RenewalHolder(token, future);
-        // Race prevented: if this thread stalled (GC pause / scheduler delay) between acquiring the
-        // lock and reaching this point, the lock may have already expired and been re-acquired by a
-        // newer holder (different token) that has since registered its own RenewalHolder here. A plain
-        // put() would blindly overwrite and cancel that newer holder's watchdog, leaving it to expire
-        // silently while its task keeps running. compute() lets us inspect the existing holder's token
-        // atomically: only overwrite when there is no existing holder or it belongs to the SAME token
-        // (a legitimate re-registration by this same lock holder); otherwise leave the newer holder
-        // untouched and mark our own just-created future (which no longer corresponds to the lock's
-        // current owner) for cancellation instead, so it doesn't leak.
-        ScheduledFuture<?>[] staleFuture = new ScheduledFuture<?>[1];
-        activeRenewals.compute(redisKey, (k, existing) -> {
-            if (existing == null || existing.token.equals(token)) {
-                if (existing != null) {
-                    staleFuture[0] = existing.future;
-                }
-                return newHolder;
-            }
-            staleFuture[0] = future;
-            return existing;
-        });
-        // Cancel outside compute() (whose remapping function must be fast/side-effect-free and could
-        // retry under contention) so the cancel itself never races with another registration.
-        if (staleFuture[0] != null) {
-            staleFuture[0].cancel(false);
+        // The local activeRenewals map's registration order is NOT a reliable new/old signal: if this
+        // thread stalled (GC pause / scheduler delay) between acquiring the lock and reaching this
+        // point, ANOTHER thread (B) may have legitimately re-acquired the same key after our lease
+        // expired and already registered its watchdog here before we do. Blindly keeping "whichever
+        // holder is already in the map" (the previous compute()-based approach) gets this backwards:
+        // it would keep the stale holder and cancel B's legitimate future, leaving B's lock unrenewed.
+        // Only Redis actually knows who currently owns the lock, so we ask it directly: if the value
+        // stored under redisKey is not this call's token, we lost the lock before we could register and
+        // must cancel our own just-scheduled future without touching the map (whatever is registered
+        // there belongs to the real current owner). If it IS this call's token, Redis has just proven
+        // we are the current owner, so any holder already in the map is necessarily stale and we
+        // unconditionally replace it.
+        //
+        // Residual (theoretical) race: another instance could re-acquire the key between this GET and
+        // the put() below, but only if this thread stalls for the *entire* TTL (>=3 minutes) in between
+        // — orders of magnitude beyond realistic GC pauses (<1s) or scheduler delays. This GET is what
+        // makes Redis, rather than local map ordering, the single source of truth for ownership.
+        String currentOwner;
+        try {
+            currentOwner = redisTemplate.opsForValue().get(redisKey);
+        } catch (Exception e) {
+            log.warn("续约注册前校验锁归属异常: key={}, error={}", redisKey, e.getMessage());
+            future.cancel(false);
+            return;
+        }
+        if (!token.equals(currentOwner)) {
+            log.debug("注册续约任务时发现锁已不再属于本次持有者，放弃注册: key={}", redisKey);
+            future.cancel(false);
+            return;
+        }
+        RenewalHolder staleHolder = activeRenewals.put(redisKey, newHolder);
+        if (staleHolder != null && staleHolder.future != future) {
+            staleHolder.future.cancel(false);
         }
     }
 
