@@ -168,9 +168,31 @@ public class RedisDistributedLock {
                 log.warn("锁续约异常: key={}, error={}", redisKey, e.getMessage());
             }
         }, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
-        RenewalHolder previous = activeRenewals.put(redisKey, new RenewalHolder(token, future));
-        if (previous != null) {
-            previous.future.cancel(false);
+        RenewalHolder newHolder = new RenewalHolder(token, future);
+        // Race prevented: if this thread stalled (GC pause / scheduler delay) between acquiring the
+        // lock and reaching this point, the lock may have already expired and been re-acquired by a
+        // newer holder (different token) that has since registered its own RenewalHolder here. A plain
+        // put() would blindly overwrite and cancel that newer holder's watchdog, leaving it to expire
+        // silently while its task keeps running. compute() lets us inspect the existing holder's token
+        // atomically: only overwrite when there is no existing holder or it belongs to the SAME token
+        // (a legitimate re-registration by this same lock holder); otherwise leave the newer holder
+        // untouched and mark our own just-created future (which no longer corresponds to the lock's
+        // current owner) for cancellation instead, so it doesn't leak.
+        ScheduledFuture<?>[] staleFuture = new ScheduledFuture<?>[1];
+        activeRenewals.compute(redisKey, (k, existing) -> {
+            if (existing == null || existing.token.equals(token)) {
+                if (existing != null) {
+                    staleFuture[0] = existing.future;
+                }
+                return newHolder;
+            }
+            staleFuture[0] = future;
+            return existing;
+        });
+        // Cancel outside compute() (whose remapping function must be fast/side-effect-free and could
+        // retry under contention) so the cancel itself never races with another registration.
+        if (staleFuture[0] != null) {
+            staleFuture[0].cancel(false);
         }
     }
 
