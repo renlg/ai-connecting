@@ -13,6 +13,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
@@ -38,6 +39,7 @@ public class StatsAggregationService {
     private final UsageLogRepository usageLogRepository;
     private final UsageStatsRepository usageStatsRepository;
     private final TransactionTemplate transactionTemplate;
+    private final TransactionTemplate requiresNewTransactionTemplate;
     private final RedisDistributedLock distributedLock;
     private final CacheInvalidationService cacheInvalidationService;
 
@@ -49,6 +51,8 @@ public class StatsAggregationService {
         this.usageLogRepository = usageLogRepository;
         this.usageStatsRepository = usageStatsRepository;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.requiresNewTransactionTemplate = new TransactionTemplate(transactionManager);
+        this.requiresNewTransactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.distributedLock = distributedLock;
         this.cacheInvalidationService = cacheInvalidationService;
     }
@@ -185,7 +189,11 @@ public class StatsAggregationService {
                         .build();
 
                 try {
-                    usageStatsRepository.save(stats);
+                    // save() 在独立的 REQUIRES_NEW 事务中执行：唯一约束冲突时只回滚这个内层事务，
+                    // 不会把外层 transactionTemplate 的事务标记为 rollback-only（否则即使这里捕获了
+                    // 异常，外层事务提交时仍会抛出 UnexpectedRollbackException，且下面的 existsByTimeRange
+                    // 重检也会跑在一个已被标记回滚的事务上）。
+                    requiresNewTransactionTemplate.executeWithoutResult(s -> usageStatsRepository.save(stats));
                 } catch (DataIntegrityViolationException e) {
                     // aggregationLock 租约过期或跨实例竞态导致两边都写同一窗口时，后完成的一方在这里
                     // 收到唯一约束（uk_usage_stats_window）冲突：重新查一次该窗口是否确实已存在，
