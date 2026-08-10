@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS usage_stats (
     total_cache_read_tokens BIGINT NOT NULL,
     total_credit_cost DECIMAL(19,6) NOT NULL,
     created_at DATETIME(6) NOT NULL,
-    updated_at DATETIME(6) NOT NULL
+    updated_at DATETIME(6) NOT NULL,
+    UNIQUE KEY uk_usage_stats_window (start_time, end_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE INDEX idx_usage_stats_start_time ON usage_stats (start_time);

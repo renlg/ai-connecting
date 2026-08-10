@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.orm.jpa.EntityManagerFactoryDepend
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.DependsOn;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -61,8 +62,16 @@ public class VideoTaskMigrationRunner {
         int added = 0;
         for (Map.Entry<String, String> entry : columns.entrySet()) {
             if (!existing.contains(entry.getKey())) {
-                jdbcTemplate.execute("ALTER TABLE video_tasks ADD COLUMN " + entry.getKey() + " " + entry.getValue());
-                added++;
+                try {
+                    jdbcTemplate.execute("ALTER TABLE video_tasks ADD COLUMN " + entry.getKey() + " " + entry.getValue());
+                    added++;
+                } catch (DataAccessException e) {
+                    if (DbDialectUtil.isDuplicateColumnError(e, mysql)) {
+                        log.debug("Column {} already added by another instance, skip: {}", entry.getKey(), e.getMessage());
+                    } else {
+                        throw e;
+                    }
+                }
             }
         }
 

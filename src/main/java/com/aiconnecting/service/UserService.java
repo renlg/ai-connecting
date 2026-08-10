@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -63,19 +64,25 @@ public class UserService {
     public void initAdmin() {
         if (userRepository.existsByUsername("admin")) {
             log.info("admin 用户已存在，跳过初始化");
-        } else {
-            User admin = User.builder()
-                    .username("admin")
-                    .password(passwordEncoder.encode(adminDefaultPassword))
-                    .nickname("Administrator")
-                    .role("admin")
-                    .quota(-1L)
-                    .usedQuota(0L)
-                    .status(1)
-                    .build();
+            return;
+        }
+        User admin = User.builder()
+                .username("admin")
+                .password(passwordEncoder.encode(adminDefaultPassword))
+                .nickname("Administrator")
+                .role("admin")
+                .quota(-1L)
+                .usedQuota(0L)
+                .status(1)
+                .build();
+        try {
             User saved = userRepository.save(admin);
             cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + saved.getId());
             log.warn("数据库中无 admin 用户，已使用默认密码创建默认管理员，请尽快修改密码");
+        } catch (DataIntegrityViolationException e) {
+            // 多实例在全新数据库上同时启动时，两边都可能查到 admin 不存在并尝试创建，
+            // username 唯一约束让后完成的一方在此处收到违反约束异常：视为已被对方创建成功，正常继续启动。
+            log.info("admin 用户已被其他实例并发创建，跳过本次初始化: {}", e.getMessage());
         }
     }
 

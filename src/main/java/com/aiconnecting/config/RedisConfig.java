@@ -26,7 +26,7 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
  * Redis 配置类
  */
 @Configuration
-@ConditionalOnProperty(name = "app.rate-limit.enabled", havingValue = "true")
+@ConditionalOnProperty(name = "app.redis.enabled", havingValue = "true")
 @Slf4j
 public class RedisConfig {
 
@@ -101,7 +101,7 @@ public class RedisConfig {
     }
 
     /**
-     * 缓存失效订阅器仅随本 Redis 配置启用。关闭限流时整个 RedisConfig 不装配，
+     * 缓存失效订阅器仅随本 Redis 配置启用。app.redis.enabled=false 时整个 RedisConfig 不装配，
      * 因而既不会创建连接，也不会注册监听器。
      */
     @Bean

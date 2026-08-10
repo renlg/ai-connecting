@@ -12,7 +12,8 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "usage_stats", indexes = {
         @Index(name = "idx_usage_stats_start_time", columnList = "startTime"),
-        @Index(name = "idx_usage_stats_date", columnList = "date")
+        @Index(name = "idx_usage_stats_date", columnList = "date"),
+        @Index(name = "uk_usage_stats_window", columnList = "startTime,endTime", unique = true)
 })
 @Data
 @NoArgsConstructor

@@ -16,9 +16,13 @@ import java.util.UUID;
 /**
  * Redis 分布式锁，用于保证多实例部署下 {@code @Scheduled} 任务不会被重复执行。
  *
- * 降级策略：当 Redis 未启用（{@code app.rate-limit.enabled=false}，此时 {@link StringRedisTemplate}
- * bean 不存在）或运行时访问 Redis 异常时，{@link #tryLock} 直接返回本地令牌、任务照常单机执行，
- * {@link #unlock} 对本地令牌为空操作——行为与未接入分布式锁前完全一致，不影响单实例部署。
+ * 降级策略：当 Redis 未启用（{@code app.redis.enabled=false}，此时 {@link StringRedisTemplate}
+ * bean 不存在）时，{@link #tryLock} 直接返回本地令牌、任务照常单机执行，
+ * {@link #unlock} 对本地令牌为空操作——行为与未接入分布式锁前完全一致，不影响单实例部署
+ * （集群模式下 Redis 缺失会在启动期由 {@link com.aiconnecting.config.ClusterConfigValidator} 直接拒绝启动，
+ * 不会走到这里）。
+ * 但运行时访问 Redis 异常（Redis 短暂不可用）时改为 FAIL-CLOSED：{@link #tryLock} 返回 {@code null}，
+ * 本轮任务跳过不执行，避免"多实例同时误判持锁成功"导致的重复执行；等下一轮调度重试即可。
  *
  * 依赖通过 {@link ObjectProvider} 而非构造器参数直接注入：单构造器上的 {@code @Autowired(required=false)}
  * 不会使该参数变为可选（Spring 仍会因缺少 bean 而启动失败），只有 ObjectProvider/Optional 这类
@@ -71,8 +75,10 @@ public class RedisDistributedLock {
                     .setIfAbsent(keyPrefix + key, token, Duration.ofSeconds(ttlSeconds));
             return Boolean.TRUE.equals(acquired) ? token : null;
         } catch (Exception e) {
-            log.warn("获取分布式锁异常，降级为单机执行: key={}, error={}", key, e.getMessage());
-            return LOCAL_TOKEN;
+            // FAIL-CLOSED：Redis 短暂异常时不知道其他实例是否已持锁，宁可本轮跳过，
+            // 也不能像 LOCAL_TOKEN 那样让所有实例同时误判"我获取到了锁"而并发执行。
+            log.warn("获取分布式锁异常，跳过本次执行（等待下一轮调度重试）: key={}, error={}", key, e.getMessage());
+            return null;
         }
     }
 

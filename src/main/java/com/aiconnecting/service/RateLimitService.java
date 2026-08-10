@@ -17,7 +17,7 @@ import java.util.Collections;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-@ConditionalOnProperty(name = "app.rate-limit.enabled", havingValue = "true")
+@ConditionalOnProperty(name = {"app.rate-limit.enabled", "app.redis.enabled"}, havingValue = "true")
 public class RateLimitService {
 
     private final RedisTemplate<String, Long> redisTemplate;

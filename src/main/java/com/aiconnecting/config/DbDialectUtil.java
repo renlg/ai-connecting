@@ -61,4 +61,19 @@ public final class DbDialectUtil {
         }
         return sqlException != null ? sqlException.getErrorCode() : -1;
     }
+
+    private static final int MYSQL_DUPLICATE_COLUMN_ERROR_CODE = 1060;
+
+    /**
+     * 判断 ALTER TABLE ADD COLUMN 失败是否为“列已存在”这类可安全忽略的幂等冲突
+     * （多实例并发启动，两边都探测到列缺失并同时执行 ADD COLUMN 时会出现）。
+     * MySQL 按官方错误码 1060 判断；SQLite 驱动不提供专用错误码，只能退化为按错误文案匹配。
+     */
+    public static boolean isDuplicateColumnError(Throwable e, boolean mysql) {
+        if (mysql) {
+            return mysqlErrorCode(e) == MYSQL_DUPLICATE_COLUMN_ERROR_CODE;
+        }
+        String message = e.getMessage();
+        return message != null && message.toLowerCase().contains("duplicate column name");
+    }
 }

@@ -43,7 +43,7 @@ OpenAI 协议中转站管理面板。支持多渠道池、加权负载均衡、�
 - **有界缓存** — 仪表盘等内存缓存采用 LRU 限制条目数上限，避免长期运行下的内存无界增长
 - **全链路追踪** — 集成 Zipkin，请求链路可追踪，traceId 写入响应头便于排查
 - **健康检查** — `/health` 端点（公开），用于部署时的启动探活和服务监控
-- **Redis 可选** — 限流、健康追踪、登录失败锁定支持 Redis（可跨进程共享）和纯内存两种模式，通过 `RATE_LIMIT_ENABLED` 控制
+- **Redis 可选** — 限流、健康追踪、登录失败锁定、分布式锁、跨实例缓存失效广播支持 Redis（可跨进程共享）和纯内存两种模式，通过 `REDIS_ENABLED` 独立控制（`RATE_LIMIT_ENABLED` 只控制限流逻辑本身，见「多端部署」一节）
 
 ## 技术栈
 
@@ -53,7 +53,7 @@ OpenAI 协议中转站管理面板。支持多渠道池、加权负载均衡、�
 | 数据库 | SQLite（默认，单实例部署，通过 Hibernate 社区方言），HikariCP 连接池（WAL 模式，`busy_timeout=5000`，最大连接数 4）；MySQL 为可选配置（`SPRING_PROFILES_ACTIVE=mysql`），供未来多实例部署使用 |
 | 前端 | React 18 + Ant Design 5 + Vite |
 | 认证 | JWT + API Key 双因子鉴权 |
-| 缓存 | Redis（可选，通过 `RATE_LIMIT_ENABLED` 控制；限流 / 渠道健康追踪 / 登录失败锁定共用） |
+| 缓存 | Redis（可选，通过 `REDIS_ENABLED` 独立控制；限流 / 渠道健康追踪 / 登录失败锁定 / 分布式锁 / 跨实例缓存失效广播共用） |
 | 对象存储 | 阿里云 OSS（图片/视频等媒体产物转存为匿名直链，`OSS_ENABLED` 可关闭） |
 | 追踪 | Zipkin |
 | 部署 | 单机 systemd 服务，`deploy/deploy.sh` 一键构建 + 上传 + 重启 |
@@ -144,7 +144,9 @@ cd web && npm install && npm run dev
 | `REDIS_PASSWORD` | Redis 密码 | 否 |
 | `REDIS_DATABASE` | Redis 数据库编号（默认 0） | 否 |
 | `REDIS_USERNAME` | Redis 用户名 | 否 |
-| `RATE_LIMIT_ENABLED` | 限流功能开关（默认 false，需 Redis） | 否 |
+| `REDIS_ENABLED` | Redis 装配开关（默认 false）；独立控制 `RedisConfig`（连接、分布式锁、缓存失效广播等 Bean），不再与 `RATE_LIMIT_ENABLED` 绑定 | 多实例部署需要 |
+| `CLUSTER_ENABLED` | 多实例部署开关（默认 false）；开启后若 `REDIS_ENABLED=false` 或 Redis 不可用，启动时直接 FAIL FAST | 多实例部署建议开启 |
+| `RATE_LIMIT_ENABLED` | 限流功能开关（默认 false，需同时设置 `REDIS_ENABLED=true`） | 否 |
 | `APP_ENV` | Redis 锁命名空间（默认 `default`）；同一部署的所有实例必须一致，共享 Redis 的不同环境必须不同（如 `dev`/`test`/`prod`） | 否 |
 | `CORS_ALLOWED_ORIGINS` | 允许的跨域源（逗号分隔，默认允许所有） | 否 |
 | `TRUSTED_PROXIES` | 信任的代理 IP（逗号分隔，默认 127.0.0.1,::1） | 否 |
@@ -176,19 +178,19 @@ bash deploy/deploy.sh
 
 ## 多端部署 (Multi-instance Deployment)
 
-> 以下为架构设计分析笔记，描述当前**尚未支持**、未来若要多实例横向扩展需要解决的问题，不代表已实现的功能。
+项目支持在负载均衡后面部署多个应用节点。以下描述当前已实现的多实例能力，以及启用方式：
 
-项目当前按单实例设计和部署。若要在负载均衡后面部署多个应用节点并保持数据一致，现有实现存在以下阻塞点：
+- **数据库**：默认仍是应用本地的 SQLite 单一文件（`./data/ai-connecting.db`，单实例部署行为不变），多实例部署需通过 `SPRING_PROFILES_ACTIVE=mysql` 切换到 MySQL；MySQL 支持真正的多连接并发写和跨主机访问，是多实例部署的前提。切换后 schema 由 `schema-mysql.sql` 在启动时建表（`CREATE TABLE IF NOT EXISTS`），`ddl-auto` 收敛为 `validate`。
+- **启动期迁移逻辑**：`ModelTypeMigrationRunner`、`DashboardIndexMigrationRunner`、`VideoTaskMigrationRunner`、`UsageStatsIndexMigrationRunner` 均通过 `DataSource` 元数据探测当前方言（SQLite 用 `PRAGMA table_info(...)`，MySQL 用 `information_schema`），且对 `ALTER TABLE ADD COLUMN` / `CREATE INDEX` 等 DDL 做了并发容错：多个节点同时在存量库上启动时，后完成的一方收到 MySQL 1060（列已存在）/1061（索引已存在）/1091（索引已删除）等幂等冲突错误会直接忽略并继续启动，不会因为竞态互相打断。
+- **`UserService.initAdmin`（admin 账号初始化）**：多个节点在全新数据库上同时启动时，只会有一个节点成功插入 `admin` 用户，另一个节点捕获 `username` 唯一约束冲突（`DataIntegrityViolationException`）后按"已被其他实例创建"处理，正常继续启动，不会导致容器崩溃。
+- **`usage_stats` 聚合窗口去重**：`(start_time, end_time)` 现有唯一索引 `uk_usage_stats_window`（`schema-mysql.sql` 建表语句 + `UsageStats` 实体 `@Table(indexes = ...)`，SQLite ddl-auto 同步生效），在应用层去重（分布式锁失效/竞态）之外再加一层数据库约束防重复聚合行。存量库可能已有历史重复窗口，`UsageStatsIndexMigrationRunner` 启动时会先探测重复：干净则建唯一索引，存在重复则只记录 WARN 并跳过建索引，保证启动不因历史脏数据崩溃。
+- **定时任务分布式锁**：`StatsAggregationService`（每 15 分钟聚合、每日清理旧数据）、`ChannelProbeTask`（每小时探测被封禁渠道）、`OpenAiRelayService` 的视频任务对账均已通过 `RedisDistributedLock`（基于 Redis `SETNX` + Lua 原子释放）保证多节点下同一时刻只有一个节点执行。锁获取失败（其他实例持有，或 Redis 短暂异常）时**FAIL-CLOSED**——本轮直接跳过、不在本地降级执行，避免 Redis 抖动时多个节点同时误判"抢到锁"而重复跑；等待下一轮调度（如 15 分钟后）重试即可，不需要人工干预。
+- **进程内缓存跨实例失效广播**：渠道列表、模型配置、用户信息、Token 校验结果等 `ConcurrentHashMap` 本地缓存，写操作后通过 `CacheInvalidationService` 基于 Redis pub/sub 广播失效消息，其他节点收到后立即清除本地缓存副本，不需要等待 TTL 过期。
+- **Redis 现在是独立可插拔的基础设施，不再与限流开关绑定**：`app.redis.enabled` / `REDIS_ENABLED`（默认 `false`）单独控制 `RedisConfig` 是否装配（连接、分布式锁 `StringRedisTemplate`、缓存失效发布订阅等全部 Bean），`app.rate-limit.enabled` / `RATE_LIMIT_ENABLED` 只控制限流逻辑本身是否生效，二者不再互相牵连（此前的问题：限流默认关闭会连带整个 Redis 配置都不装配，导致分布式锁/缓存失效广播在默认配置下静默失效）。
+- **集群模式显式声明 + 启动期 Fail Fast**：新增 `app.cluster.enabled` / `CLUSTER_ENABLED`（默认 `false`）声明"这是一次多实例部署"。开启集群模式但 Redis 未启用/不可用时，`ClusterConfigValidator` 会在启动期直接抛出异常拒绝启动，而不是让分布式锁/缓存失效静默退化为单机行为、把不一致问题留到运行时才被发现；未开启集群模式时也会打印明确的 WARN 提示当前处于降级的单机协调模式。
+- **积分/额度写路径本身具备良好的原子性基础**：`UsageLogService.recordUsageAndQuotas` 内的余额与额度更新（`UserRepository.tryDeductCredits`、`ChannelRepository.addUsedQuota`、`TokenRepository.addUsedQuota`）都是条件 `UPDATE ... WHERE` 语句而非"读出改回写"，视频任务结算也用 `WHERE settled = false` 的条件 UPDATE 做乐观锁；这一模式在 MySQL/PostgreSQL 下并发语义不变，多节点部署无需改造。
 
-- ~~**SQLite 单写者语义**~~ **（Round 1 已解决数据库可选性问题）**：数据库默认仍是应用本地的 SQLite 单一文件（`./data/ai-connecting.db`，单实例部署行为不变），但现在可通过 `SPRING_PROFILES_ACTIVE=mysql` 切换到 MySQL；MySQL 支持真正的多连接并发写和跨主机访问，是多实例部署的前提。切换后 schema 由 `schema-mysql.sql` 在启动时建表（`CREATE TABLE IF NOT EXISTS`），`ddl-auto` 收敛为 `validate`。
-- ~~**启动期迁移逻辑依赖 SQLite 方言**~~ **（Round 1 已解决）**：`ModelTypeMigrationRunner`、`DashboardIndexMigrationRunner`、`VideoTaskMigrationRunner` 已改为通过 `DataSource` 元数据探测当前方言，SQLite 下继续使用原有的 `PRAGMA table_info(...)` 逻辑，MySQL 下改用 `information_schema.columns` / `information_schema.statistics` 探测列和索引是否存在；`ApiKeyMigrationRunner` 无需改动 —— 它完全基于 JPA 的 `findAll()`/`save()`，不含任何 SQLite 专属 SQL，两种方言下行为一致。
-- **`ddl-auto: update` 竞态（MySQL 模式下已不适用，仅 SQLite 单实例默认模式存在，且单实例下无竞态）**：多个节点同时启动会并发对同一份 schema 做变更，缺少分布式迁移锁，存在建表/加列竞态。MySQL 模式下 `ddl-auto` 已固定为 `validate`，schema 变更改由 `schema-mysql.sql`（`CREATE TABLE IF NOT EXISTS`，天然幂等）承担，多节点并发启动时重复执行是安全的；后续若需要在线加列等演进式变更，仍建议引入独立的迁移锁或迁移工具。
-- **定时任务重复执行**：`StatsAggregationService`（每 15 分钟聚合、每日 03:30 清理旧数据）、`ChannelProbeTask`（每小时探测被封禁渠道）、`OpenAiRelayService` 中的视频任务对账任务均为 `@Scheduled`，多节点部署下会在每个节点各跑一份。聚合任务内部靠 JVM 内 `synchronized` 锁 + 事务内二次校验防重复写入，这只在单进程内有效，多进程下需要换成 Redis 分布式锁（当前项目里**没有**现成的分布式锁工具类，只有限流用的滑动窗口 Lua 脚本）。
-- **进程内缓存不同步**：渠道列表、模型信息、用户信息、Token 校验结果等使用 `ConcurrentHashMap` 做本地内存缓存（60s TTL），多节点下各节点缓存互不感知，写操作后其他节点最多 60s 内可能读到旧数据。
-- **Redis 现状是可选依赖而非强依赖**：`RATE_LIMIT_ENABLED=false` 时限流、登录失败锁定完全不生效（相关 Bean 通过 `@ConditionalOnProperty` 直接不装配），渠道健康追踪退化为纯内存模式；多节点部署下必须强制启用 Redis，否则限流/防爆破/健康状态在节点间完全不一致。
-- **积分/额度写路径本身具备较好的原子性基础**：`UsageLogService.recordUsageAndQuotas` 内的余额与额度更新（`UserRepository.tryDeductCredits`、`ChannelRepository.addUsedQuota`、`TokenRepository.addUsedQuota`）都是条件 `UPDATE ... WHERE` 语句而非"读出改回写"，视频任务结算也用 `WHERE settled = false` 的条件 UPDATE 做乐观锁；这一模式可以直接迁移到 MySQL/PostgreSQL 且并发语义不变，是多节点改造中不需要重写的部分。
-
-**推荐方向**：数据库可选支持 MySQL 的 Round 1 已完成（见上）。剩余工作：为所有 `@Scheduled` 任务加上基于 Redis 的分布式锁（此时 Redis 需从可选依赖提升为强制依赖），并解决进程内缓存跨节点不同步的问题。这是后续改造的 Round 2+，暂无实施计划。
+**多实例部署最小配置**：`SPRING_PROFILES_ACTIVE=mysql`（真正支持多连接并发写）+ `REDIS_ENABLED=true`（分布式锁/缓存失效广播）+ `CLUSTER_ENABLED=true`（触发启动期一致性校验，Redis 缺失时直接拒绝启动而不是静默退化）+ 所有节点共享同一个 `APP_ENV`（分布式锁 key 命名空间前缀，必须在同一部署内保持一致，见 `RedisDistributedLock`）。
 
 ## 项目结构
 

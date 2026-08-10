@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 多实例缓存失效广播：写操作在更新本地缓存后调用 {@link #publish}，
  * 通过 Redis pub/sub 通知其他实例清除各自的本地缓存副本，实现最终一致。
  *
- * 降级策略：当 Redis 未启用（{@code app.rate-limit.enabled=false}，此时 {@link StringRedisTemplate}
+ * 降级策略：当 Redis 未启用（{@code app.redis.enabled=false}，此时 {@link StringRedisTemplate}
  * bean 不存在）时，{@link #publish} 直接空操作且不会产生进程内事件；运行时访问 Redis 异常也只记录告警。
  * 因此未配置 Redis 的部署保持接入前的纯 TTL/原有本地驱逐行为。
  *
