@@ -81,8 +81,15 @@ public class UserService {
             log.warn("数据库中无 admin 用户，已使用默认密码创建默认管理员，请尽快修改密码");
         } catch (DataIntegrityViolationException e) {
             // 多实例在全新数据库上同时启动时，两边都可能查到 admin 不存在并尝试创建，
-            // username 唯一约束让后完成的一方在此处收到违反约束异常：视为已被对方创建成功，正常继续启动。
-            log.info("admin 用户已被其他实例并发创建，跳过本次初始化: {}", e.getMessage());
+            // username 唯一约束让后完成的一方在此处收到违反约束异常。但同一异常类型也可能是密码列
+            // 长度不够、NOT NULL 违反、schema 不匹配等真实错误，不能一概当作良性竞态吞掉——
+            // 重新查一次 admin 是否确实已存在：存在才是良性竞态，否则说明是真实错误，必须继续抛出，
+            // 避免应用在没有 admin 用户的情况下悄悄启动成功。
+            if (userRepository.existsByUsername("admin")) {
+                log.info("admin 用户已被其他实例并发创建，跳过本次初始化: {}", e.getMessage());
+            } else {
+                throw e;
+            }
         }
     }
 

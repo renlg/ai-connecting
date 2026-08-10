@@ -8,6 +8,7 @@ import com.aiconnecting.repository.UsageStatsRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -72,6 +73,12 @@ public class StatsAggregationService {
     private final AtomicBoolean historicalInitializationPending = new AtomicBoolean();
     private final AtomicBoolean historicalInitializationRunning = new AtomicBoolean();
     private final AtomicInteger historicalInitializationAttempts = new AtomicInteger();
+    /**
+     * 仅统计"锁内执行真正抛出异常"（聚合逻辑本身失败）的连续次数，与"未获取到锁"（可能是被其他
+     * 实例持有，也可能是 Redis 暂时不可用）区分开：后者不应该导致永久放弃重试，见
+     * {@link #attemptHistoricalInitialization()}。
+     */
+    private final AtomicInteger historicalInitializationExecutionFailures = new AtomicInteger();
 
     /** 清理任务分布式锁 key */
     private static final String CLEAN_LOCK_KEY = "job:cleanOldData";
@@ -172,7 +179,18 @@ public class StatsAggregationService {
                         .totalCacheReadTokens(totalCacheReadTokens)
                         .build();
 
-                usageStatsRepository.save(stats);
+                try {
+                    usageStatsRepository.save(stats);
+                } catch (DataIntegrityViolationException e) {
+                    // aggregationLock 租约过期或跨实例竞态导致两边都写同一窗口时，后完成的一方在这里
+                    // 收到唯一约束（uk_usage_stats_window）冲突：重新查一次该窗口是否确实已存在，
+                    // 存在则视为对方已写入成功，属于良性竞态；不存在则说明是真实的写入失败，继续抛出。
+                    if (usageStatsRepository.existsByTimeRange(windowStart, windowEnd)) {
+                        log.info("窗口 {} ~ {} 另一实例已写入，跳过: {}", windowStart, windowEnd, e.getMessage());
+                        return;
+                    }
+                    throw e;
+                }
                 cacheInvalidationService.publish(CacheInvalidationService.USAGE_STATS);
                 log.info("聚合窗口 {} ~ {} 完成：requests={}, tokens={}", windowStart, windowEnd, totalRequests, totalTokens);
             });
@@ -193,8 +211,11 @@ public class StatsAggregationService {
     }
 
     /**
-     * 启动/手动初始化抢锁失败时有界重试，避免与 :00/:15/:30/:45 定时任务碰撞后
-     * 静默放弃全历史补齐。最多尝试 10 次（约 10 分钟），不会无限重试。
+     * 启动/手动初始化抢锁失败时持续重试，避免与 :00/:15/:30/:45 定时任务碰撞、或 Redis 启动时
+     * 短暂不可用后就静默放弃全历史补齐。"未获取到锁"（含 Redis 暂不可用导致 tryLock fail-closed
+     * 返回 null 的情况）不设上限，会一直每分钟重试到成功为止——一旦 Redis 恢复即可自动补齐历史数据；
+     * 只有锁内执行本身连续真正抛异常（聚合逻辑 bug 等，见 {@link #historicalInitializationExecutionFailures}）
+     * 才会在达到上限后放弃，避免无限重复触发同一个真实错误。
      */
     @Scheduled(fixedDelay = 60 * 1000L, initialDelay = 60 * 1000L)
     public void retryHistoricalInitialization() {
@@ -214,19 +235,21 @@ public class StatsAggregationService {
                     AGGREGATION_LOCK_KEY, HISTORICAL_INIT_LOCK_TTL_SECONDS, this::doInitializeHistoricalData);
             if (acquired) {
                 historicalInitializationPending.set(false);
+                historicalInitializationExecutionFailures.set(0);
                 return;
             }
-            if (attempt >= MAX_HISTORICAL_INIT_ATTEMPTS) {
-                historicalInitializationPending.set(false);
-                log.warn("历史用量汇总初始化连续 {} 次未获取锁，停止自动重试；可稍后通过管理接口重新触发",
-                        MAX_HISTORICAL_INIT_ATTEMPTS);
-            } else {
-                log.info("历史用量汇总初始化未获取锁，1 分钟后进行第 {} 次尝试", attempt + 1);
+            // 未获取到锁：可能是被其他实例正持有（良性竞争），也可能是 Redis 暂不可用
+            // （RedisDistributedLock#tryLock 内部 fail-closed 返回 null，两者从这里无法区分）。
+            // 两种情况都继续保持 pending=true，下一轮调度自动重试，不做次数上限。
+            if (attempt <= MAX_HISTORICAL_INIT_ATTEMPTS || attempt % MAX_HISTORICAL_INIT_ATTEMPTS == 0) {
+                log.info("历史用量汇总初始化未获取锁（第 {} 次尝试，可能是其他实例正在处理，或 Redis 暂不可用），"
+                        + "1 分钟后重试", attempt);
             }
         } catch (RuntimeException e) {
-            if (attempt >= MAX_HISTORICAL_INIT_ATTEMPTS) {
+            int failures = historicalInitializationExecutionFailures.incrementAndGet();
+            if (failures >= MAX_HISTORICAL_INIT_ATTEMPTS) {
                 historicalInitializationPending.set(false);
-                log.warn("历史用量汇总初始化连续 {} 次执行失败，停止自动重试",
+                log.warn("历史用量汇总初始化连续 {} 次执行失败，停止自动重试；可稍后通过管理接口重新触发",
                         MAX_HISTORICAL_INIT_ATTEMPTS);
             }
             throw e;

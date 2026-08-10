@@ -4,6 +4,8 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -22,15 +24,18 @@ import org.springframework.stereotype.Component;
 public class ClusterConfigValidator {
 
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
+    private final ObjectProvider<RedisConnectionFactory> redisConnectionFactoryProvider;
     private final boolean clusterEnabled;
     private final boolean redisEnabled;
     private final boolean rateLimitEnabled;
 
     public ClusterConfigValidator(ObjectProvider<StringRedisTemplate> redisTemplateProvider,
+                                   ObjectProvider<RedisConnectionFactory> redisConnectionFactoryProvider,
                                    @Value("${app.cluster.enabled:false}") boolean clusterEnabled,
                                    @Value("${app.redis.enabled:false}") boolean redisEnabled,
                                    @Value("${app.rate-limit.enabled:false}") boolean rateLimitEnabled) {
         this.redisTemplateProvider = redisTemplateProvider;
+        this.redisConnectionFactoryProvider = redisConnectionFactoryProvider;
         this.clusterEnabled = clusterEnabled;
         this.redisEnabled = redisEnabled;
         this.rateLimitEnabled = rateLimitEnabled;
@@ -48,6 +53,13 @@ public class ClusterConfigValidator {
                             + "或者如果这确实是单实例部署，请不要设置 CLUSTER_ENABLED=true。");
         }
 
+        if (clusterEnabled) {
+            // Bean 存在不代表 Redis 可达：Lettuce 连接是懒连接，必须真正发起一次连接/PING 才能
+            // 在启动期发现"配置了错误的 host/port/password"这类问题，而不是让分布式锁/缓存失效
+            // 广播在运行时悄悄永久 fail-closed。
+            verifyRedisConnectivity();
+        }
+
         if (rateLimitEnabled && !redisEnabled) {
             log.warn("app.rate-limit.enabled=true 但 app.redis.enabled=false：限流与登录失败锁定功能不会生效"
                     + "（缺少 Redis 支撑，相关 Bean 不会装配）。如需限流，请同时设置 REDIS_ENABLED=true。");
@@ -57,6 +69,23 @@ public class ClusterConfigValidator {
             log.warn("当前未启用 Redis（app.redis.enabled=false）：分布式锁、跨实例缓存失效广播均降级为单机行为，"
                     + "仅适用于单实例部署。若计划部署多个实例，请设置 REDIS_ENABLED=true 与 CLUSTER_ENABLED=true，"
                     + "否则多实例间的定时任务/缓存一致性无法保证。");
+        }
+    }
+
+    private void verifyRedisConnectivity() {
+        RedisConnectionFactory connectionFactory = redisConnectionFactoryProvider.getIfAvailable();
+        if (connectionFactory == null) {
+            // redisAvailable 已经是 false 的情况在上面已经 throw，这里是防御性判断，理论上不会触发。
+            throw new IllegalStateException(
+                    "app.cluster.enabled=true 但未找到 RedisConnectionFactory，无法校验 Redis 连通性。");
+        }
+        try (RedisConnection connection = connectionFactory.getConnection()) {
+            connection.ping();
+        } catch (RuntimeException e) {
+            throw new IllegalStateException(
+                    "app.cluster.enabled=true（多实例部署模式）但连接 Redis 失败（PING 未成功）："
+                            + e.getMessage() + "。分布式锁与跨实例缓存失效广播依赖 Redis 可用，"
+                            + "请检查 REDIS_HOST/REDIS_PORT/REDIS_PASSWORD 等连接参数后重新启动。", e);
         }
     }
 }

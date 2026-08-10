@@ -1,13 +1,9 @@
 package com.aiconnecting.config;
 
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
-import org.springframework.boot.autoconfigure.orm.jpa.EntityManagerFactoryDependsOnPostProcessor;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.DependsOn;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -25,29 +21,33 @@ import java.util.Set;
  * 因此启动时先探测重复：存在重复则只记录 WARN 并跳过建索引，避免把启动流程搞挂；
  * 数据干净时才创建唯一索引。
  *
- * 与 {@link ModelTypeMigrationRunner} 相同的原因，必须在 Hibernate 创建 EntityManagerFactory 之前运行：
- * usage_stats 实体已经在 {@code @Table(indexes = ...)} 中声明了这个唯一索引，SQLite 下
- * ddl-auto=update 会在容器刷新过程中尝试自动补建；本迁移需要先完成重复数据探测/幂等建索引，
- * 避免和 Hibernate 的自动建索引互相竞争。MySQL 下 ddl-auto=validate 不会自建索引，索引创建
- * 完全由本 Runner 负责（schema-mysql.sql 的 UNIQUE KEY 定义只对全新建表生效，不会给已存在的表补索引）。
+ * 必须在 Hibernate 完成 schema 创建（EntityManagerFactory 已就绪）之后运行，而不是之前：
+ * usage_stats 实体已经在 {@code @Table(indexes = ...)} 中声明了这个唯一索引，但 SQLite 下全新库
+ * 首次启动时，ddl-auto=update 建表这一步本身也是在容器刷新过程中才发生的——如果本 Runner
+ * 在那之前运行，会看到表还不存在而直接跳过，导致首次启动完全没有创建唯一索引（要等第二次启动
+ * 表已存在才会补建），完全起不到防止应用层去重失效时重复写入的作用。因此改用
+ * {@link ApplicationRunner}，在 {@code SpringApplication.run} 完成上下文刷新（含 Hibernate
+ * 建表）之后才执行，此时无论 SQLite 全新建表还是 MySQL 存量表，目标表必然已经存在。
+ * MySQL 下 ddl-auto=validate 不会自建索引，索引创建完全由本 Runner 负责（schema-mysql.sql 的
+ * UNIQUE KEY 定义只对全新建表生效，不会给已存在的表补索引）。
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@DependsOn("mysqlSchemaInitializer")
-public class UsageStatsIndexMigrationRunner {
+public class UsageStatsIndexMigrationRunner implements ApplicationRunner {
 
     private static final int MYSQL_DUPLICATE_KEY_NAME_ERROR_CODE = 1061;
     private static final String INDEX_NAME = "uk_usage_stats_window";
 
     private final JdbcTemplate jdbcTemplate;
 
-    @PostConstruct
-    public void migrate() {
+    @Override
+    public void run(ApplicationArguments args) {
         boolean mysql = DbDialectUtil.isMysql(jdbcTemplate);
         Set<String> existingColumns = DbDialectUtil.existingColumns(jdbcTemplate, mysql, "usage_stats");
         if (existingColumns.isEmpty()) {
-            // 表尚不存在，交由 Hibernate ddl-auto / schema-mysql.sql 按最新定义（含唯一索引）创建全新表
+            // 防御性判断：正常情况下 Hibernate/schema-mysql.sql 已在上下文刷新阶段建表，这里不应该发生。
+            log.warn("usage_stats table not found when running index migration after context refresh, skip");
             return;
         }
 
@@ -93,15 +93,6 @@ public class UsageStatsIndexMigrationRunner {
             } else {
                 throw e;
             }
-        }
-    }
-
-    @Configuration
-    static class UsageStatsIndexMigrationDependsOnConfig {
-
-        @Bean
-        static BeanFactoryPostProcessor usageStatsIndexMigrationEntityManagerFactoryDependsOnPostProcessor() {
-            return new EntityManagerFactoryDependsOnPostProcessor("usageStatsIndexMigrationRunner");
         }
     }
 }
