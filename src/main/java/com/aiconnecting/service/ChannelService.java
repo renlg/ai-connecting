@@ -1101,6 +1101,10 @@ public class ChannelService {
 
         try (Response response = httpClient.newCall(reqBuilder.build()).execute()) {
             if (!response.isSuccessful()) {
+                if (response.code() == 404 || response.code() == 405) {
+                    log.warn("上游不支持 GET /v1/models (HTTP {})，返回空模型列表", response.code());
+                    return new ArrayList<>();
+                }
                 String body = response.body() != null ? response.body().string() : "";
                 throw new BusinessException("上游接口返回 " + response.code() + ": " + body);
             }
