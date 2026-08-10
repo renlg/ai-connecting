@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -25,17 +26,20 @@ public class ClusterConfigValidator {
 
     private final ObjectProvider<StringRedisTemplate> redisTemplateProvider;
     private final ObjectProvider<RedisConnectionFactory> redisConnectionFactoryProvider;
+    private final JdbcTemplate jdbcTemplate;
     private final boolean clusterEnabled;
     private final boolean redisEnabled;
     private final boolean rateLimitEnabled;
 
     public ClusterConfigValidator(ObjectProvider<StringRedisTemplate> redisTemplateProvider,
                                    ObjectProvider<RedisConnectionFactory> redisConnectionFactoryProvider,
+                                   JdbcTemplate jdbcTemplate,
                                    @Value("${app.cluster.enabled:false}") boolean clusterEnabled,
                                    @Value("${app.redis.enabled:false}") boolean redisEnabled,
                                    @Value("${app.rate-limit.enabled:false}") boolean rateLimitEnabled) {
         this.redisTemplateProvider = redisTemplateProvider;
         this.redisConnectionFactoryProvider = redisConnectionFactoryProvider;
+        this.jdbcTemplate = jdbcTemplate;
         this.clusterEnabled = clusterEnabled;
         this.redisEnabled = redisEnabled;
         this.rateLimitEnabled = rateLimitEnabled;
@@ -58,6 +62,14 @@ public class ClusterConfigValidator {
             // 在启动期发现"配置了错误的 host/port/password"这类问题，而不是让分布式锁/缓存失效
             // 广播在运行时悄悄永久 fail-closed。
             verifyRedisConnectivity();
+        }
+
+        if (clusterEnabled && !DbDialectUtil.isMysql(jdbcTemplate)) {
+            throw new IllegalStateException(
+                    "app.cluster.enabled=true（多实例部署模式）但当前数据库不是 MySQL：SQLite 是单文件数据库，"
+                            + "其咨询锁在网络存储上不可靠，无法作为多实例部署下的分布式锁/迁移协调基础。"
+                            + "多实例部署必须使用 MySQL，请配置 MySQL 数据源后重新启动，"
+                            + "或者如果这确实是单实例部署，请不要设置 CLUSTER_ENABLED=true。");
         }
 
         if (rateLimitEnabled && !redisEnabled) {
