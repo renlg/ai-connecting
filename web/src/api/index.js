@@ -49,10 +49,10 @@ export const testChannelMedia = (data) => api.post('/api/admin/channels/test-med
 export const pollChannelTestVideo = (data) => api.post('/api/admin/channels/test-video-status', data, { timeout: 120000 });
 export const downloadChannelTestVideo = (data) => api.post('/api/admin/channels/test-video-content', data, { responseType: 'blob', timeout: 120000 });
 
-// 流式测试渠道聊天（返回 ReadableStream）
-export async function testChannelChatStream(data, onChunk, onComplete, onError) {
+// 流式聊天测试的共享实现
+async function createChatStream(url, data, onChunk, onComplete, onError) {
   const token = localStorage.getItem('token');
-  const response = await fetch('/api/admin/channels/test-chat-stream', {
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -101,56 +101,14 @@ export async function testChannelChatStream(data, onChunk, onComplete, onError) 
   }
 }
 
+// 流式测试渠道聊天（返回 ReadableStream）
+export async function testChannelChatStream(data, onChunk, onComplete, onError) {
+  return createChatStream('/api/admin/channels/test-chat-stream', data, onChunk, onComplete, onError);
+}
+
 // Token 流式测试
 export async function testTokenChatStream(data, onChunk, onComplete, onError) {
-  const token = localStorage.getItem('token');
-  const response = await fetch('/api/tokens/test-chat-stream', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    },
-    body: JSON.stringify(data)
-  });
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        if (trimmed === 'data: [DONE]') {
-          onComplete && onComplete();
-          return;
-        }
-        if (trimmed.startsWith('data: ')) {
-          try {
-            const json = JSON.parse(trimmed.slice(6));
-            onChunk && onChunk(json);
-          } catch (e) {
-            console.error('Parse SSE error:', e, trimmed);
-          }
-        }
-      }
-    }
-  } catch (err) {
-    onError && onError(err);
-    throw err;
-  }
+  return createChatStream('/api/tokens/test-chat-stream', data, onChunk, onComplete, onError);
 }
 
 // Tokens

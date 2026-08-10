@@ -944,8 +944,12 @@ public class ChannelService {
             boolean isClaude = "claude".equalsIgnoreCase(type) || "anthropic".equalsIgnoreCase(type);
             doTestChatStream(baseUrl, apiKey, model, message, response, isClaude);
         } catch (Exception e) {
+            log.error("测试渠道流式对话失败: baseUrl={}, model={}", baseUrl, model, e);
             // 发送错误事件
-            response.getWriter().write("data: {\"error\":\"" + SseUtils.escapeJson(e.getMessage()) + "\"}\n\n");
+            String errorMessage = (e.getMessage() == null || e.getMessage().isBlank())
+                    ? e.getClass().getSimpleName() : e.getMessage();
+            response.getWriter().write("data: {\"error\":\"" + SseUtils.escapeJson(errorMessage) + "\"}\n\n");
+            response.getWriter().write("data: [DONE]\n\n");
             response.getWriter().flush();
         }
     }
