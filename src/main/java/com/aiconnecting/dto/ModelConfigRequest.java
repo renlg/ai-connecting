@@ -58,4 +58,7 @@ public class ModelConfigRequest {
 
     /** 音频高清档价格 (积分/秒) */
     private BigDecimal audioPriceHd;
+
+    /** 可选的故障转移模型组 id：本模型请求失败后转入该组成员继续重试 */
+    private Long fallbackGroupId;
 }

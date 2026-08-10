@@ -81,9 +81,47 @@ CREATE TABLE IF NOT EXISTS model_configs (
     video_price_4k DECIMAL(10,2) NOT NULL DEFAULT 0,
     audio_price_standard DECIMAL(10,2) NOT NULL DEFAULT 0,
     audio_price_hd DECIMAL(10,2) NOT NULL DEFAULT 0,
+    fallback_group_id BIGINT,
     created_at DATETIME(6) NOT NULL,
     updated_at DATETIME(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 模型组：面向客户端的公开别名，绑定同类型多个成员模型，按策略选择并在上游失败时自动切换成员
+CREATE TABLE IF NOT EXISTS model_groups (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    type VARCHAR(20) NOT NULL,
+    strategy VARCHAR(20) NOT NULL DEFAULT 'round_robin',
+    max_attempts INT NOT NULL DEFAULT 5,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    admin_only BOOLEAN NOT NULL DEFAULT FALSE,
+    input_price DECIMAL(10,4),
+    output_price DECIMAL(10,4),
+    cached_price DECIMAL(10,4),
+    price_1k DECIMAL(10,2),
+    price_2k DECIMAL(10,2),
+    price_4k DECIMAL(10,2),
+    price_480p DECIMAL(10,2),
+    price_720p DECIMAL(10,2),
+    price_1080p DECIMAL(10,2),
+    video_price_4k DECIMAL(10,2),
+    price_standard DECIMAL(10,2),
+    price_hd DECIMAL(10,2),
+    created_at DATETIME(6) NOT NULL,
+    UNIQUE KEY uk_model_groups_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 模型组成员：模型组与成员模型 (model_configs) 的关联行，携带权重与排序
+CREATE TABLE IF NOT EXISTS model_group_members (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    group_id BIGINT NOT NULL,
+    model_config_id BIGINT NOT NULL,
+    weight INT NOT NULL DEFAULT 1,
+    sort_order INT NOT NULL DEFAULT 0
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_model_group_members_group_id ON model_group_members (group_id);
+CREATE INDEX idx_model_group_members_model_config_id ON model_group_members (model_config_id);
 
 -- 使用记录表（credit_cost 修正为 DECIMAL(19,6) NOT NULL DEFAULT 0，而非历史快照中的 BIGINT）
 CREATE TABLE IF NOT EXISTS usage_logs (
@@ -91,6 +129,7 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     token_id BIGINT,
     channel_id BIGINT,
     model VARCHAR(100),
+    actual_model VARCHAR(100),
     prompt_tokens INT,
     completion_tokens INT,
     total_tokens INT,

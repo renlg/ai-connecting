@@ -87,7 +87,7 @@ public class RelaySupport {
      */
     record VideoChargeInfo(MediaCharge charge, String size, int durationSeconds, BigDecimal unitPrice) {}
 
-    private record MediaParams(String size, int n, int durationSeconds) {}
+    record MediaParams(String size, int n, int durationSeconds) {}
 
     private record CachedValue(String value, long cachedAt) {
         boolean isExpired() {
@@ -131,6 +131,15 @@ public class RelaySupport {
      * @param endpointType 端点类别: text=文本类端点, image=图片端点, video=视频端点, audio=音频端点
      */
     RelayContext validateAndPrepare(String tokenKey, String model, String endpointType) {
+        return validateAndPrepare(tokenKey, model, model, endpointType);
+    }
+
+    /**
+     * @param permissionModel 用于 Token allowed_models 权限校验的模型名（模型组请求传组名）
+     * @param routingModel    用于模型配置查找/状态校验/渠道路由解析的模型名（模型组请求传实际成员模型名）
+     *                        单模型请求两者相同，与原逻辑完全一致；仅供 {@link ModelGroupFailoverExecutor} 复用。
+     */
+    RelayContext validateAndPrepare(String tokenKey, String permissionModel, String routingModel, String endpointType) {
         Token token = tokenService.validateTokenKey(tokenKey);
         if (token.getQuota() != -1 && token.getUsedQuota() >= token.getQuota()) {
             throw new BusinessException(429, "Token 额度已用完");
@@ -143,24 +152,49 @@ public class RelaySupport {
         if (!isAdmin && tokenUser.getCredits() != null && tokenUser.getCredits().compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(402, "用户积分不足，请先充值");
         }
-        checkModelPermission(token, model);
+        checkModelPermission(token, permissionModel);
 
-        ModelConfig config = findModelConfigCached(model);
+        ModelConfig config = findModelConfigCached(routingModel);
         if (config != null) {
             if (config.getStatus() == null || config.getStatus() != 1) {
-                throw new BusinessException(403, "模型已禁用: " + model);
+                throw new BusinessException(403, "模型已禁用: " + routingModel);
             }
             if (Boolean.TRUE.equals(config.getAdminOnly()) && !isAdmin) {
-                throw new BusinessException(403, "该模型仅限管理员使用: " + model);
+                throw new BusinessException(403, "该模型仅限管理员使用: " + routingModel);
             }
         }
-        checkEndpointTypeMatch(model, config, endpointType);
+        checkEndpointTypeMatch(routingModel, config, endpointType);
 
-        String channelModelId = resolveToChannelModelId(model);
+        String channelModelId = resolveToChannelModelId(routingModel);
         if (rateLimitService != null) {
             rateLimitService.checkTokenRateLimit(token.getId(), token.getRateLimit());
         }
         return new RelayContext(token, channelModelId, tokenUser.getLevel(), tokenUser, config);
+    }
+
+    /**
+     * 模型组请求专用预检：Token 有效性、账号状态、余额、组权限、限流；不涉及具体成员模型的
+     * 状态/类型校验与渠道路由解析（由 {@link ModelGroupFailoverExecutor} 按选中的成员模型分别处理），
+     * 返回的 RelayContext 中 channelModelId/modelConfig 均为 null，调用方不得依赖这两个字段
+     */
+    RelayContext prepareGroupContext(String tokenKey, String groupName) {
+        Token token = tokenService.validateTokenKey(tokenKey);
+        if (token.getQuota() != -1 && token.getUsedQuota() >= token.getQuota()) {
+            throw new BusinessException(429, "Token 额度已用完");
+        }
+        User tokenUser = userService.getByIdCached(token.getUserId());
+        if (tokenUser.getStatus() == null || tokenUser.getStatus() != 1) {
+            throw new BusinessException(403, "账号已被禁用");
+        }
+        boolean isAdmin = "admin".equals(tokenUser.getRole());
+        if (!isAdmin && tokenUser.getCredits() != null && tokenUser.getCredits().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(402, "用户积分不足，请先充值");
+        }
+        checkModelPermission(token, groupName);
+        if (rateLimitService != null) {
+            rateLimitService.checkTokenRateLimit(token.getId(), token.getRateLimit());
+        }
+        return new RelayContext(token, null, tokenUser.getLevel(), tokenUser, null);
     }
 
     private static final Set<String> MEDIA_ENDPOINT_TYPES = Set.of("image", "video", "audio");
@@ -200,7 +234,7 @@ public class RelaySupport {
         return token;
     }
 
-    private void checkModelPermission(Token token, String model) {
+    void checkModelPermission(Token token, String model) {
         if (token.getAllowedModels() != null && !token.getAllowedModels().isEmpty()) {
             CachedAllowedModels cached = allowedModelsCache.get(token.getAllowedModels());
             Set<String> allowed;
@@ -694,7 +728,7 @@ public class RelaySupport {
         return new VideoChargeInfo(charge, params.size(), params.durationSeconds(), unitPrice);
     }
 
-    private MediaParams parseMediaParams(String requestBody) {
+    MediaParams parseMediaParams(String requestBody) {
         String size = null;
         int n = 1;
         int durationSeconds = 0;

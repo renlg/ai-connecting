@@ -5,8 +5,10 @@ import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.dto.ModelConfigRequest;
 import com.aiconnecting.dto.StatusRequest;
 import com.aiconnecting.entity.ModelConfig;
+import com.aiconnecting.entity.ModelGroup;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.service.ModelConfigService;
+import com.aiconnecting.service.ModelGroupService;
 import com.aiconnecting.service.RelayService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -24,7 +26,20 @@ import java.util.Set;
 public class ModelConfigController {
 
     private final ModelConfigService modelConfigService;
+    private final ModelGroupService modelGroupService;
     private final RelayService relayService;
+
+    /** 故障转移组必须存在且类型与本模型一致，否则请求会在切换到组内成员时类型不匹配 */
+    private void validateFallbackGroup(Long fallbackGroupId, String modelType) {
+        if (fallbackGroupId == null) {
+            return;
+        }
+        ModelGroup group = modelGroupService.getById(fallbackGroupId);
+        String effectiveType = modelType != null ? modelType : "text";
+        if (!effectiveType.equals(group.getType())) {
+            throw new BusinessException("故障转移组类型 (" + group.getType() + ") 与模型类型 (" + effectiveType + ") 不一致");
+        }
+    }
 
     private static final Set<String> VALID_TYPES = Set.of("text", "image", "video", "audio");
 
@@ -112,6 +127,7 @@ public class ModelConfigController {
         modelConfigService.validateDisplayNameUnique(request.getDisplayName(), null);
         validatePrices(request);
         String type = validateType(request.getType());
+        validateFallbackGroup(request.getFallbackGroupId(), type != null ? type : "text");
         ModelConfig config = ModelConfig.builder()
                 .name(request.getName())
                 .displayName(request.getDisplayName())
@@ -130,6 +146,7 @@ public class ModelConfigController {
                 .videoPrice4k(request.getVideoPrice4k())
                 .audioPriceStandard(request.getAudioPriceStandard())
                 .audioPriceHd(request.getAudioPriceHd())
+                .fallbackGroupId(request.getFallbackGroupId())
                 .status(1)
                 .build();
         ModelConfig saved = modelConfigService.save(config);
@@ -196,6 +213,10 @@ public class ModelConfigController {
         }
         if (request.getAudioPriceHd() != null) {
             config.setAudioPriceHd(request.getAudioPriceHd());
+        }
+        if (request.getFallbackGroupId() != null) {
+            validateFallbackGroup(request.getFallbackGroupId() == 0 ? null : request.getFallbackGroupId(), config.getType());
+            config.setFallbackGroupId(request.getFallbackGroupId() == 0 ? null : request.getFallbackGroupId());
         }
         ModelConfig saved = modelConfigService.save(config);
         relayService.clearModelNameCache();

@@ -100,6 +100,10 @@ public class ModelConfig {
     @Column(name = "audio_price_hd", columnDefinition = "DECIMAL(10,2) NOT NULL DEFAULT 0")
     private BigDecimal audioPriceHd;
 
+    /** 可选的故障转移组：单模型请求优先使用自身模型，失败后转入该模型组的成员继续重试 */
+    @Column(name = "fallback_group_id")
+    private Long fallbackGroupId;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

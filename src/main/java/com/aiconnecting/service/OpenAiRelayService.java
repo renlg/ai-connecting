@@ -57,12 +57,33 @@ public class OpenAiRelayService {
     @Autowired
     private RedisDistributedLock distributedLock;
 
+    // 同上：模型组故障转移组（fallback_group_id）为后续新增能力，字段注入避免改动构造函数签名
+    @Autowired(required = false)
+    private ModelGroupFailoverExecutor modelGroupFailoverExecutor;
+
     /**
      * 中转请求 (非流式) - 最多重试 3 次，每次选择不同渠道
      */
     public String relayRequest(String tokenKey, String path, String requestBody,
                                String model, HttpServletRequest httpRequest) {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
+        try {
+            return relayRequestSingleModel(ctx, path, requestBody, model, httpRequest);
+        } catch (BusinessException e) {
+            if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null) {
+                var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(
+                        ctx.modelConfig().getFallbackGroupId(), "text");
+                if (fallbackGroup.isPresent()) {
+                    log.warn("模型 {} 请求失败，转入故障转移组 {} 继续尝试: {}", model, fallbackGroup.get().getName(), e.getMessage());
+                    return modelGroupFailoverExecutor.relayRequestWithContext(ctx, fallbackGroup.get(), path, requestBody, httpRequest);
+                }
+            }
+            throw e;
+        }
+    }
+
+    private String relayRequestSingleModel(RelaySupport.RelayContext ctx, String path, String requestBody,
+                                           String model, HttpServletRequest httpRequest) {
         Set<Long> triedChannels = new HashSet<>();
         long startTime = System.currentTimeMillis();
         String lastError = null;
@@ -138,7 +159,18 @@ public class OpenAiRelayService {
                 return support.forwardRequest(channel, path, upstreamBody);
             });
         } catch (RuntimeException e) {
+            // 退回本模型预扣的积分（按本模型自身价格）；若配置了故障转移组，转入组内成员时
+            // 会按组价重新独立预扣，不会与此处的退款重复或冲突
             support.refundMediaCharge(ctx, charge);
+            if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null) {
+                var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(), mediaType);
+                if (fallbackGroup.isPresent()) {
+                    log.warn("模型 {} 媒体请求失败，转入故障转移组 {} 继续尝试", model, fallbackGroup.get().getName());
+                    return isVideo
+                            ? modelGroupFailoverExecutor.relayVideoRequest(tokenKey, path, requestBody, fallbackGroup.get().getName(), httpRequest)
+                            : modelGroupFailoverExecutor.relayImageRequest(tokenKey, path, requestBody, fallbackGroup.get().getName(), httpRequest);
+                }
+            }
             throw e;
         }
 

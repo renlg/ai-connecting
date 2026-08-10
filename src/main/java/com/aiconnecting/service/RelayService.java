@@ -23,22 +23,37 @@ public class RelayService {
     private final OpenAiRelayService openAiRelayService;
     private final ClaudeRelayService claudeRelayService;
     private final GeminiRelayService geminiRelayService;
+    private final ModelGroupFailoverExecutor modelGroupFailoverExecutor;
 
     // ==================== OpenAI 协议中转 ====================
+    // 模型组请求（model 命中一个已启用的模型组名）在此处分流到独立的 ModelGroupFailoverExecutor，
+    // 不进入既有的单模型转发路径；单模型请求（model 未命中任何模型组）行为与改造前完全一致。
 
     public String relayRequest(String tokenKey, String path, String requestBody,
                                String model, HttpServletRequest httpRequest) {
+        if (isGroupModel(model)) {
+            return modelGroupFailoverExecutor.relayRequest(tokenKey, path, requestBody, model, httpRequest);
+        }
         return openAiRelayService.relayRequest(tokenKey, path, requestBody, model, httpRequest);
     }
 
     public void relayStreamRequest(String tokenKey, String path, String requestBody,
                                     String model, HttpServletRequest httpRequest,
                                     HttpServletResponse httpResponse) throws IOException {
+        if (isGroupModel(model)) {
+            modelGroupFailoverExecutor.relayStreamRequest(tokenKey, path, requestBody, model, httpRequest, httpResponse);
+            return;
+        }
         openAiRelayService.relayStreamRequest(tokenKey, path, requestBody, model, httpRequest, httpResponse);
     }
 
     public String relayMediaRequest(String tokenKey, String path, String requestBody,
                                     String model, HttpServletRequest httpRequest, String mediaType) {
+        if (isGroupModel(model)) {
+            return "video".equals(mediaType)
+                    ? modelGroupFailoverExecutor.relayVideoRequest(tokenKey, path, requestBody, model, httpRequest)
+                    : modelGroupFailoverExecutor.relayImageRequest(tokenKey, path, requestBody, model, httpRequest);
+        }
         return openAiRelayService.relayMediaRequest(tokenKey, path, requestBody, model, httpRequest, mediaType);
     }
 
@@ -48,7 +63,15 @@ public class RelayService {
 
     public void relayAudioSpeech(String tokenKey, String requestBody, String model,
                                  HttpServletRequest httpRequest, HttpServletResponse httpResponse) throws IOException {
+        if (isGroupModel(model)) {
+            modelGroupFailoverExecutor.relayAudioSpeech(tokenKey, requestBody, model, httpRequest, httpResponse);
+            return;
+        }
         openAiRelayService.relayAudioSpeech(tokenKey, requestBody, model, httpRequest, httpResponse);
+    }
+
+    private boolean isGroupModel(String model) {
+        return modelGroupFailoverExecutor.findEnabledGroup(model).isPresent();
     }
 
     public org.springframework.http.ResponseEntity<byte[]> relayAudioTranscription(

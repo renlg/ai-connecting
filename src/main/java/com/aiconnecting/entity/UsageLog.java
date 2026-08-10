@@ -31,9 +31,13 @@ public class UsageLog {
     /** 使用的渠道 ID */
     private Long channelId;
 
-    /** 使用的模型 */
+    /** 使用的模型：普通请求为实际模型；模型组请求为组的公开名称（供现有统计/看板按此字段聚合，口径不变） */
     @Column(length = 100)
     private String model;
+
+    /** 实际调用的上游模型名（仅模型组请求填写，非组请求为空）；仅供内部记录，不参与任何统计展示 */
+    @Column(length = 100)
+    private String actualModel;
 
     /** prompt tokens */
     private Integer promptTokens;

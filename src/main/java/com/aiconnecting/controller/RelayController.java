@@ -2,9 +2,12 @@ package com.aiconnecting.controller;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.entity.ModelConfig;
+import com.aiconnecting.entity.ModelGroup;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.service.ModelConfigService;
+import com.aiconnecting.service.ModelGroupRoutingService;
+import com.aiconnecting.service.ModelGroupService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.UserService;
@@ -31,6 +34,8 @@ public class RelayController {
     private final RelayService relayService;
     private final TokenService tokenService;
     private final ModelConfigService modelConfigService;
+    private final ModelGroupService modelGroupService;
+    private final ModelGroupRoutingService modelGroupRoutingService;
     private final UserService userService;
     private final ObjectMapper objectMapper;
 
@@ -233,6 +238,23 @@ public class RelayController {
             modelObj.put("id", model.getDisplayName());
             modelObj.put("object", "model");
             modelObj.put("created", model.getCreatedAt().atZone(java.time.ZoneId.systemDefault()).toEpochSecond());
+            modelObj.put("owned_by", "ai-connecting");
+            modelList.add(modelObj);
+        }
+
+        // 模型组：以组名作为公开 model id，仅展示启用且至少有一个可用成员的组；
+        // 非管理员额外排除 admin_only 组
+        for (ModelGroup group : modelGroupService.listEnabled()) {
+            if (Boolean.TRUE.equals(group.getAdminOnly()) && !isAdmin) {
+                continue;
+            }
+            if (!modelGroupRoutingService.hasAvailableMember(group, isAdmin)) {
+                continue;
+            }
+            Map<String, Object> modelObj = new LinkedHashMap<>();
+            modelObj.put("id", group.getName());
+            modelObj.put("object", "model");
+            modelObj.put("created", group.getCreatedAt().atZone(java.time.ZoneId.systemDefault()).toEpochSecond());
             modelObj.put("owned_by", "ai-connecting");
             modelList.add(modelObj);
         }
