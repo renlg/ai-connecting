@@ -63,8 +63,22 @@ public class RedisDistributedLock {
         return t;
     });
 
-    /** redisKey（含前缀）-> 续约任务，用于 unlock / 续约失败时取消，避免线程/任务泄漏 */
-    private final ConcurrentHashMap<String, ScheduledFuture<?>> activeRenewals = new ConcurrentHashMap<>();
+    /** redisKey（含前缀）-> 续约任务持有者，用于 unlock / 续约失败时取消，避免线程/任务泄漏 */
+    private final ConcurrentHashMap<String, RenewalHolder> activeRenewals = new ConcurrentHashMap<>();
+
+    /**
+     * 续约任务的持有者记录：token 与其对应的 ScheduledFuture 绑定，
+     * 保证取消操作只会作用于登记时的那个 token，不会误删同一 key 之后被重新获取的新持有者的续约任务。
+     */
+    private static final class RenewalHolder {
+        final String token;
+        final ScheduledFuture<?> future;
+
+        RenewalHolder(String token, ScheduledFuture<?> future) {
+            this.token = token;
+            this.future = future;
+        }
+    }
 
     public RedisDistributedLock(ObjectProvider<StringRedisTemplate> redisTemplateProvider,
                                  @Qualifier("lockUnlockScript") ObjectProvider<RedisScript<Long>> lockUnlockScriptProvider,
@@ -118,7 +132,7 @@ public class RedisDistributedLock {
     public void unlock(String key, String token) {
         String redisKey = keyPrefix + key;
         if (!LOCAL_TOKEN.equals(token)) {
-            cancelRenewal(redisKey);
+            cancelRenewal(redisKey, token);
         }
         if (redisTemplate == null || unlockScript == null || LOCAL_TOKEN.equals(token)) {
             return;
@@ -146,7 +160,7 @@ public class RedisDistributedLock {
                         token, String.valueOf(ttlMillis));
                 if (renewed == null || renewed == 0L) {
                     log.debug("锁续约未成功（锁已过期或被其他实例持有），停止续约: key={}", redisKey);
-                    cancelRenewal(redisKey);
+                    cancelRenewal(redisKey, token);
                 }
             } catch (Exception e) {
                 // 续约异常（Redis 短暂不可用）：不中断任务本身，仅记录告警；锁可能因此提前过期，
@@ -154,23 +168,31 @@ public class RedisDistributedLock {
                 log.warn("锁续约异常: key={}, error={}", redisKey, e.getMessage());
             }
         }, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
-        ScheduledFuture<?> previous = activeRenewals.put(redisKey, future);
+        RenewalHolder previous = activeRenewals.put(redisKey, new RenewalHolder(token, future));
         if (previous != null) {
-            previous.cancel(false);
+            previous.future.cancel(false);
         }
     }
 
-    private void cancelRenewal(String redisKey) {
-        ScheduledFuture<?> future = activeRenewals.remove(redisKey);
-        if (future != null) {
-            future.cancel(false);
-        }
+    /**
+     * 仅当当前登记的持有者 token 与给定 token 一致时才移除并取消其续约任务；
+     * 依赖 ConcurrentHashMap#remove(key, value) 的原子 compare-and-remove 语义，
+     * 保证过期/失效的旧 token 的取消操作不会误伤同一 key 之后被重新获取的新持有者。
+     */
+    private void cancelRenewal(String redisKey, String token) {
+        activeRenewals.computeIfPresent(redisKey, (k, holder) -> {
+            if (holder.token.equals(token)) {
+                holder.future.cancel(false);
+                return null;
+            }
+            return holder;
+        });
     }
 
     /** 优雅关闭时取消所有续约任务，避免线程泄漏。 */
     @PreDestroy
     public void shutdown() {
-        activeRenewals.values().forEach(f -> f.cancel(false));
+        activeRenewals.values().forEach(h -> h.future.cancel(false));
         activeRenewals.clear();
         renewalScheduler.shutdownNow();
     }
