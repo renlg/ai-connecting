@@ -63,21 +63,16 @@ public class RedisDistributedLock {
         return t;
     });
 
-    /** redisKey（含前缀）-> 续约任务持有者，用于 unlock / 续约失败时取消，避免线程/任务泄漏 */
-    private final ConcurrentHashMap<String, RenewalHolder> activeRenewals = new ConcurrentHashMap<>();
-
     /**
-     * 续约任务的持有者记录：token 与其对应的 ScheduledFuture 绑定，
-     * 保证取消操作只会作用于登记时的那个 token，不会误删同一 key 之后被重新获取的新持有者的续约任务。
+     * 续约任务登记表，按 (redisKey, token) 而非单独 redisKey 登记：每次成功获取锁都注册自己独立的
+     * 条目，任何一个 token 的续约任务都不会取消/覆盖另一个 token 的续约任务——从根源上消除了旧的
+     * "按 key 单一持有者" 设计下 stale/fresh 获取者互相抢占续约登记的竞态。同一 redisKey 下短暂
+     * 并存多个 token 的续约 future 是无害的：只有当前真正持有 Redis 锁的 token 能通过 Lua CAS
+     * 续约成功，其余 stale token 会在下一次 tick 因 CAS 返回 0 而自行退出。
      */
-    private static final class RenewalHolder {
-        final String token;
-        final ScheduledFuture<?> future;
+    private final ConcurrentHashMap<RenewalKey, ScheduledFuture<?>> activeRenewals = new ConcurrentHashMap<>();
 
-        RenewalHolder(String token, ScheduledFuture<?> future) {
-            this.token = token;
-            this.future = future;
-        }
+    private record RenewalKey(String redisKey, String token) {
     }
 
     public RedisDistributedLock(ObjectProvider<StringRedisTemplate> redisTemplateProvider,
@@ -113,8 +108,19 @@ public class RedisDistributedLock {
             Boolean acquired = redisTemplate.opsForValue()
                     .setIfAbsent(redisKey, token, Duration.ofSeconds(ttlSeconds));
             if (Boolean.TRUE.equals(acquired)) {
-                startRenewal(redisKey, token, ttlSeconds);
-                return token;
+                if (startRenewal(redisKey, token, ttlSeconds)) {
+                    return token;
+                }
+                // Watchdog registration failed: without it the lock can expire mid-job (TTL is
+                // deliberately shorter than worst-case task duration), so FAIL-CLOSED rather than
+                // let the caller run unwatched. Best-effort release what we believe we hold; if that
+                // fails too, natural TTL expiry is the safety net.
+                try {
+                    redisTemplate.execute(unlockScript, Collections.singletonList(redisKey), token);
+                } catch (Exception e) {
+                    log.warn("续约注册失败后释放锁异常: key={}, error={}", key, e.getMessage());
+                }
+                return null;
             }
             return null;
         } catch (Exception e) {
@@ -147,10 +153,16 @@ public class RedisDistributedLock {
     /**
      * 启动续约 watchdog：每 TTL/3 秒尝试续约一次（至少间隔 1 秒），使用 Lua CAS 保证只有仍持有该锁的
      * 实例才能续约成功；LOCAL_TOKEN 降级模式不会走到这里（调用方在 redisTemplate == null 时已提前返回）。
+     * 登记按 (redisKey, token) 进行，不再需要注册前的 Redis GET 归属校验：tryLock 已经通过
+     * setIfAbsent 证明了本次持有权，而续约任务是立即调度的，registration 本身不会覆盖任何其他
+     * token 的登记，因此无需再向 Redis 确认一遍。
+     *
+     * @return true 表示 watchdog 已成功登记（renewScript 缺失时视为登记失败）；false 表示未能登记，
+     *         调用方必须 FAIL-CLOSED（不能让任务在无 watchdog 保护下运行）。
      */
-    private void startRenewal(String redisKey, String token, long ttlSeconds) {
+    private boolean startRenewal(String redisKey, String token, long ttlSeconds) {
         if (renewScript == null) {
-            return;
+            return false;
         }
         long intervalSeconds = Math.max(1, ttlSeconds / 3);
         long ttlMillis = ttlSeconds * 1000;
@@ -168,62 +180,27 @@ public class RedisDistributedLock {
                 log.warn("锁续约异常: key={}, error={}", redisKey, e.getMessage());
             }
         }, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
-        RenewalHolder newHolder = new RenewalHolder(token, future);
-        // The local activeRenewals map's registration order is NOT a reliable new/old signal: if this
-        // thread stalled (GC pause / scheduler delay) between acquiring the lock and reaching this
-        // point, ANOTHER thread (B) may have legitimately re-acquired the same key after our lease
-        // expired and already registered its watchdog here before we do. Blindly keeping "whichever
-        // holder is already in the map" (the previous compute()-based approach) gets this backwards:
-        // it would keep the stale holder and cancel B's legitimate future, leaving B's lock unrenewed.
-        // Only Redis actually knows who currently owns the lock, so we ask it directly: if the value
-        // stored under redisKey is not this call's token, we lost the lock before we could register and
-        // must cancel our own just-scheduled future without touching the map (whatever is registered
-        // there belongs to the real current owner). If it IS this call's token, Redis has just proven
-        // we are the current owner, so any holder already in the map is necessarily stale and we
-        // unconditionally replace it.
-        //
-        // Residual (theoretical) race: another instance could re-acquire the key between this GET and
-        // the put() below, but only if this thread stalls for the *entire* TTL (>=3 minutes) in between
-        // — orders of magnitude beyond realistic GC pauses (<1s) or scheduler delays. This GET is what
-        // makes Redis, rather than local map ordering, the single source of truth for ownership.
-        String currentOwner;
-        try {
-            currentOwner = redisTemplate.opsForValue().get(redisKey);
-        } catch (Exception e) {
-            log.warn("续约注册前校验锁归属异常: key={}, error={}", redisKey, e.getMessage());
-            future.cancel(false);
-            return;
-        }
-        if (!token.equals(currentOwner)) {
-            log.debug("注册续约任务时发现锁已不再属于本次持有者，放弃注册: key={}", redisKey);
-            future.cancel(false);
-            return;
-        }
-        RenewalHolder staleHolder = activeRenewals.put(redisKey, newHolder);
-        if (staleHolder != null && staleHolder.future != future) {
-            staleHolder.future.cancel(false);
-        }
+        // 同一 redisKey 下可能短暂并存多个 token 的续约 future（stale token 尚未退出、fresh token
+        // 已经登记）；这是无害的，因为 Lua CAS 只允许当前真正持有该锁的 token 续约成功，stale 的
+        // 那个会在下一次 tick 因 CAS 返回 0 而自行取消退出（见上面的 cancelRenewal 调用）。
+        activeRenewals.put(new RenewalKey(redisKey, token), future);
+        return true;
     }
 
     /**
-     * 仅当当前登记的持有者 token 与给定 token 一致时才移除并取消其续约任务；
-     * 依赖 ConcurrentHashMap#remove(key, value) 的原子 compare-and-remove 语义，
-     * 保证过期/失效的旧 token 的取消操作不会误伤同一 key 之后被重新获取的新持有者。
+     * 仅移除/取消给定 (redisKey, token) 自己的续约任务，绝不影响同一 redisKey 下其他 token 的登记。
      */
     private void cancelRenewal(String redisKey, String token) {
-        activeRenewals.computeIfPresent(redisKey, (k, holder) -> {
-            if (holder.token.equals(token)) {
-                holder.future.cancel(false);
-                return null;
-            }
-            return holder;
-        });
+        ScheduledFuture<?> future = activeRenewals.remove(new RenewalKey(redisKey, token));
+        if (future != null) {
+            future.cancel(false);
+        }
     }
 
-    /** 优雅关闭时取消所有续约任务，避免线程泄漏。 */
+    /** 优雅关闭时取消所有 token 的续约任务，避免线程泄漏。 */
     @PreDestroy
     public void shutdown() {
-        activeRenewals.values().forEach(h -> h.future.cancel(false));
+        activeRenewals.values().forEach(f -> f.cancel(false));
         activeRenewals.clear();
         renewalScheduler.shutdownNow();
     }
