@@ -95,6 +95,7 @@ async function createChatStream(url, data, onChunk, onComplete, onError) {
         }
       }
     }
+    onComplete && onComplete();
   } catch (err) {
     onError && onError(err);
     throw err;

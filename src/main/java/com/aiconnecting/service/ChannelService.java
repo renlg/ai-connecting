@@ -959,7 +959,11 @@ public class ChannelService {
      */
     private void doTestChatStream(String baseUrl, String apiKey, String model,
                                    String message, HttpServletResponse response, boolean isClaude) throws Exception {
-        String url = baseUrl.replaceAll("/+$", "") + "/v1/chat/completions";
+        String base = baseUrl.replaceAll("/+$", "");
+        if (!base.endsWith("/v1")) {
+            base = base + "/v1";
+        }
+        String url = base + "/chat/completions";
         log.info("{}流式请求: url={}, model={}", isClaude ? "Claude(转OpenAI) " : "", url, model);
         String jsonBody = objectMapper.writeValueAsString(Map.of(
                 "model", model,
@@ -995,6 +999,7 @@ public class ChannelService {
                         ? new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8) : "";
                 log.error("上游返回错误: {}", errorBody);
                 response.getWriter().write("data: {\"error\":\"HTTP " + code + (errorBody.isEmpty() ? "" : ": " + SseUtils.escapeJson(errorBody)) + "\"}\n\n");
+                response.getWriter().write("data: [DONE]\n\n");
                 response.getWriter().flush();
                 return;
             }
