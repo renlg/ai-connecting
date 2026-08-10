@@ -166,25 +166,36 @@ public class RedisDistributedLock {
         }
         long intervalSeconds = Math.max(1, ttlSeconds / 3);
         long ttlMillis = ttlSeconds * 1000;
-        ScheduledFuture<?> future = renewalScheduler.scheduleAtFixedRate(() -> {
-            try {
-                Long renewed = redisTemplate.execute(renewScript, Collections.singletonList(redisKey),
-                        token, String.valueOf(ttlMillis));
-                if (renewed == null || renewed == 0L) {
-                    log.debug("锁续约未成功（锁已过期或被其他实例持有），停止续约: key={}", redisKey);
-                    cancelRenewal(redisKey, token);
+        ScheduledFuture<?> future = null;
+        try {
+            future = renewalScheduler.scheduleAtFixedRate(() -> {
+                try {
+                    Long renewed = redisTemplate.execute(renewScript, Collections.singletonList(redisKey),
+                            token, String.valueOf(ttlMillis));
+                    if (renewed == null || renewed == 0L) {
+                        log.debug("锁续约未成功（锁已过期或被其他实例持有），停止续约: key={}", redisKey);
+                        cancelRenewal(redisKey, token);
+                    }
+                } catch (Exception e) {
+                    // 续约异常（Redis 短暂不可用）：不中断任务本身，仅记录告警；锁可能因此提前过期，
+                    // 由 tryLock 的 FAIL-CLOSED 语义兜底（届时另一实例最多与本实例短暂并发）。
+                    log.warn("锁续约异常: key={}, error={}", redisKey, e.getMessage());
                 }
-            } catch (Exception e) {
-                // 续约异常（Redis 短暂不可用）：不中断任务本身，仅记录告警；锁可能因此提前过期，
-                // 由 tryLock 的 FAIL-CLOSED 语义兜底（届时另一实例最多与本实例短暂并发）。
-                log.warn("锁续约异常: key={}, error={}", redisKey, e.getMessage());
+            }, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+            // 同一 redisKey 下可能短暂并存多个 token 的续约 future（stale token 尚未退出、fresh token
+            // 已经登记）；这是无害的，因为 Lua CAS 只允许当前真正持有该锁的 token 续约成功，stale 的
+            // 那个会在下一次 tick 因 CAS 返回 0 而自行取消退出（见上面的 cancelRenewal 调用）。
+            activeRenewals.put(new RenewalKey(redisKey, token), future);
+            return true;
+        } catch (Exception e) {
+            // 登记阶段异常（例如调度器已 shutdown 抛出 RejectedExecutionException）：确保不遗留
+            // 已创建的 future，并让调用方统一走 tryLock 的 token-checked 释放路径 FAIL-CLOSED。
+            if (future != null) {
+                future.cancel(false);
             }
-        }, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
-        // 同一 redisKey 下可能短暂并存多个 token 的续约 future（stale token 尚未退出、fresh token
-        // 已经登记）；这是无害的，因为 Lua CAS 只允许当前真正持有该锁的 token 续约成功，stale 的
-        // 那个会在下一次 tick 因 CAS 返回 0 而自行取消退出（见上面的 cancelRenewal 调用）。
-        activeRenewals.put(new RenewalKey(redisKey, token), future);
-        return true;
+            log.warn("续约任务登记异常: key={}, error={}", redisKey, e.getMessage());
+            return false;
+        }
     }
 
     /**
