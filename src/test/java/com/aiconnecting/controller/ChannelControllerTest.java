@@ -54,7 +54,7 @@ class ChannelControllerTest {
     @Test
     void list() throws Exception {
         Channel ch = Channel.builder().id(1L).name("OpenAI").type("openai").status(1).build();
-        when(channelService.listAll()).thenReturn(List.of(ch));
+        when(channelService.listAll(isNull(), isNull())).thenReturn(List.of(ch));
 
         mockMvc.perform(get("/api/admin/channels"))
                 .andExpect(status().isOk())
@@ -65,7 +65,7 @@ class ChannelControllerTest {
 
     @Test
     void list_empty() throws Exception {
-        when(channelService.listAll()).thenReturn(List.of());
+        when(channelService.listAll(isNull(), isNull())).thenReturn(List.of());
 
         mockMvc.perform(get("/api/admin/channels"))
                 .andExpect(status().isOk())
