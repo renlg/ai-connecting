@@ -187,7 +187,7 @@ export default function Channels() {
       if (res.code === 200) {
         const upstreamModels = res.data || []
         if (upstreamModels.length === 0) {
-          message.info('上游渠道没有返回任何模型')
+          message.info('该上游不支持获取模型列表,请手动填写模型 ID')
           return
         }
         // 用上游模型名和本地模型列表按 name 匹配
