@@ -2,6 +2,8 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.RedisDistributedLock;
 import com.aiconnecting.entity.Channel;
+import com.aiconnecting.entity.ModelConfig;
+import com.aiconnecting.repository.ModelConfigRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
@@ -27,6 +29,7 @@ public class ChannelProbeTask {
     private final ChannelHealthTracker healthTracker;
     private final ChannelService channelService;
     private final RedisDistributedLock distributedLock;
+    private final ModelConfigRepository modelConfigRepository;
 
     /** 分布式锁 key，防止多机重复执行 */
     private static final String LOCK_KEY = "job:channelProbe";
@@ -114,19 +117,19 @@ public class ChannelProbeTask {
         log.info("探测渠道 {} ({})...", channelId, channel.getName());
 
         Request.Builder reqBuilder = new Request.Builder().get();
+        boolean isOpenaiType = false;
+        String base = channel.getBaseUrl().replaceAll("/+$", "");
 
         if ("gemini".equalsIgnoreCase(channel.getType())) {
             // Gemini 使用 v1beta/models 端点，密钥通过 query 参数传递，不使用 Authorization 头
-            String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1beta/models?key=" + channel.getApiKey();
-            reqBuilder.url(url);
+            reqBuilder.url(base + "/v1beta/models?key=" + channel.getApiKey());
         } else if ("claude".equalsIgnoreCase(channel.getType()) || "anthropic".equalsIgnoreCase(channel.getType())) {
-            String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1/models";
-            reqBuilder.url(url);
+            reqBuilder.url(base + "/v1/models");
             reqBuilder.addHeader("x-api-key", channel.getApiKey());
             reqBuilder.addHeader("anthropic-version", "2023-06-01");
         } else {
-            String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1/models";
-            reqBuilder.url(url);
+            isOpenaiType = true;
+            reqBuilder.url(base + "/v1/models");
             reqBuilder.addHeader("Authorization", "Bearer " + channel.getApiKey());
         }
 
@@ -134,6 +137,12 @@ public class ChannelProbeTask {
             if (response.isSuccessful()) {
                 log.info("渠道 {} 探测成功 (HTTP {})，关闭熔断器", channelId, response.code());
                 healthTracker.unblockChannel(channelId);
+            } else if (isOpenaiType && (response.code() == 404 || response.code() == 405)) {
+                // 部分上游（如 Cloudflare Workers AI）不支持 GET /v1/models，不代表连通性异常，
+                // 改用最小化的 POST chat/completions 请求做连通性探测
+                log.info("渠道 {} GET /v1/models 返回 HTTP {}（端点不支持），改用 POST chat/completions 探测",
+                        channelId, response.code());
+                probeViaChatCompletions(channel, base);
             } else {
                 String body = response.body() != null ? response.body().string() : "";
                 String errorMsg = String.format("HTTP %d: %s", response.code(),
@@ -143,5 +152,63 @@ public class ChannelProbeTask {
         } catch (IOException e) {
             log.warn("渠道 {} 探测连接失败，仍处于熔断状态，等待下一轮探测: {}", channelId, e.getMessage());
         }
+    }
+
+    /**
+     * 针对不支持 GET /v1/models 的 openai 兼容上游（如 Cloudflare Workers AI），
+     * 用最小化的 chat/completions 请求探测连通性
+     */
+    private void probeViaChatCompletions(Channel channel, String base) {
+        Long channelId = channel.getId();
+        String modelName = resolveProbeModelName(channel);
+
+        String jsonBody = String.format(
+                "{\"model\":\"%s\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}",
+                modelName);
+        RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
+        Request request = new Request.Builder()
+                .url(base + "/chat/completions")
+                .addHeader("Authorization", "Bearer " + channel.getApiKey())
+                .addHeader("Content-Type", "application/json")
+                .post(body)
+                .build();
+
+        try (Response response = probeClient.newCall(request).execute()) {
+            if (response.isSuccessful()) {
+                log.info("渠道 {} probe via POST chat/completions (HTTP {})，关闭熔断器", channelId, response.code());
+                healthTracker.unblockChannel(channelId);
+            } else {
+                String respBody = response.body() != null ? response.body().string() : "";
+                String errorMsg = String.format("HTTP %d: %s", response.code(),
+                        respBody.length() > 200 ? respBody.substring(0, 200) : respBody);
+                log.warn("渠道 {} POST chat/completions 探测失败，仍处于熔断状态，等待下一轮探测: {}", channelId, errorMsg);
+            }
+        } catch (IOException e) {
+            log.warn("渠道 {} POST chat/completions 探测连接失败，仍处于熔断状态，等待下一轮探测: {}", channelId, e.getMessage());
+        }
+    }
+
+    /**
+     * 解析渠道启用的第一个模型名称，用于连通性探测；解析失败时回退到 gpt-3.5-turbo
+     */
+    private String resolveProbeModelName(Channel channel) {
+        if (channel.getModelIds() != null && !channel.getModelIds().isEmpty()) {
+            for (String idStr : channel.getModelIds().split(",")) {
+                idStr = idStr.trim();
+                if (idStr.isEmpty()) {
+                    continue;
+                }
+                try {
+                    Long modelId = Long.parseLong(idStr);
+                    ModelConfig model = modelConfigRepository.findById(modelId).orElse(null);
+                    if (model != null && model.getName() != null && !model.getName().isEmpty()) {
+                        return model.getName();
+                    }
+                } catch (NumberFormatException ignored) {
+                    // modelIds 中存在非法 ID，跳过
+                }
+            }
+        }
+        return "gpt-3.5-turbo";
     }
 }
