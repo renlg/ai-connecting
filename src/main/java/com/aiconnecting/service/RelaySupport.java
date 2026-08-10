@@ -29,12 +29,21 @@ import java.net.URI;
 import java.net.SocketTimeoutException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -75,6 +84,11 @@ public class RelaySupport {
     private static final Set<String> AGNES_HOST_SUFFIXES = Set.of("agnes-ai.cn", "agnes-ai.com");
     private static final long MODEL_CACHE_TTL_MS = 2 * 60 * 1000L;
     private static final long ALLOWED_MODELS_CACHE_TTL_MS = 2 * 60 * 1000L;
+    private static final ExecutorService SSE_WRITE_EXECUTOR = Executors.newCachedThreadPool(r -> {
+        Thread thread = new Thread(r, "sse-request-writer");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     record RelayContext(Token token, String channelModelId, Integer userLevel, User user, ModelConfig modelConfig) {}
 
@@ -464,13 +478,54 @@ public class RelaySupport {
             conn.setRequestProperty("Accept", "text/event-stream");
             conn.setRequestProperty("Connection", "close");
             applyChannelAuthToConnection(conn, channel);
-            conn.getOutputStream().write(requestBody.getBytes(StandardCharsets.UTF_8));
-            conn.getOutputStream().flush();
+            byte[] requestBytes = requestBody.getBytes(StandardCharsets.UTF_8);
+            // Disable HttpURLConnection's request buffering so the bounded phase below covers the
+            // actual socket write, rather than only a copy into its internal buffer.
+            conn.setFixedLengthStreamingMode(requestBytes.length);
+            long configuredWriteTimeout = httpClient != null ? httpClient.writeTimeoutMillis() : 30_000L;
+            long writeTimeoutMs = boundedTimeout(budget, configuredWriteTimeout);
+            writeSseRequestBody(conn, requestBytes, writeTimeoutMs);
         } catch (IOException e) {
             conn.disconnect();
             throw e;
         }
         return conn;
+    }
+
+    /**
+     * HttpURLConnection has no public write-timeout API. Run only the finite request-body write on a
+     * deadline-bound worker; on timeout disconnecting the connection closes the socket while leaving
+     * the successful response streaming/read path on the caller thread.
+     */
+    private void writeSseRequestBody(HttpURLConnection conn, byte[] body, long timeoutMs) throws IOException {
+        Future<?> write = SSE_WRITE_EXECUTOR.submit(() -> {
+            try {
+                var output = conn.getOutputStream();
+                output.write(body);
+                output.flush();
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
+        try {
+            write.get(Math.max(1L, timeoutMs), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            conn.disconnect();
+            write.cancel(true);
+            SocketTimeoutException timeout = new SocketTimeoutException(
+                    "SSE request body write timed out after " + timeoutMs + " ms");
+            timeout.initCause(e);
+            throw timeout;
+        } catch (InterruptedException e) {
+            conn.disconnect();
+            write.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new IOException("SSE request body write interrupted", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof java.io.UncheckedIOException io) throw io.getCause();
+            throw new IOException("SSE request body write failed", cause);
+        }
     }
 
     private void applyChannelAuth(Request.Builder builder, Channel channel) {
@@ -519,7 +574,7 @@ public class RelaySupport {
             if (!response.isSuccessful()) {
                 log.error("Upstream API error: {} - {}", response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
-                        responseBody, parseRetryAfterSeconds(response));
+                        responseBody, parseRetryAfterSeconds(response, responseBody));
             }
 
             return responseBody;
@@ -548,7 +603,7 @@ public class RelaySupport {
             if (!response.isSuccessful()) {
                 log.error("Upstream API error: {} - {}", response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
-                        responseBody, parseRetryAfterSeconds(response));
+                        responseBody, parseRetryAfterSeconds(response, responseBody));
             }
             return responseBody;
         } catch (SocketTimeoutException e) {
@@ -615,7 +670,7 @@ public class RelaySupport {
                 String error = new String(bytes, StandardCharsets.UTF_8);
                 log.error("Upstream API error: {} - {}", response.code(), error);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + error,
-                        error, parseRetryAfterSeconds(response));
+                        error, parseRetryAfterSeconds(response, error));
             }
             return new BinaryResponse(bytes, response.header("Content-Type"));
         } catch (SocketTimeoutException e) {
@@ -661,7 +716,7 @@ public class RelaySupport {
             if (!response.isSuccessful()) {
                 log.error("Claude upstream API error: {} - {}", response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
-                        responseBody, parseRetryAfterSeconds(response));
+                        responseBody, parseRetryAfterSeconds(response, responseBody));
             }
             return responseBody;
         } catch (SocketTimeoutException e) {
@@ -704,7 +759,7 @@ public class RelaySupport {
             if (!response.isSuccessful()) {
                 log.error("Gemini upstream API error: {} - {}", response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
-                        responseBody, parseRetryAfterSeconds(response));
+                        responseBody, parseRetryAfterSeconds(response, responseBody));
             }
             return responseBody;
         } catch (SocketTimeoutException e) {
@@ -716,20 +771,85 @@ public class RelaySupport {
 
     // ==================== 流式读取与请求体处理 ====================
 
-    private Long parseRetryAfterSeconds(okhttp3.Response response) {
-        String value = response.header("Retry-After");
+    private Long parseRetryAfterSeconds(okhttp3.Response response, String responseBody) {
+        return resolveCooldownSeconds(response.header("Retry-After"),
+                response.header("X-RateLimit-Reset"), responseBody);
+    }
+
+    static Long resolveCooldownSeconds(HttpURLConnection connection, String responseBody) {
+        return resolveCooldownSeconds(connection.getHeaderField("Retry-After"),
+                connection.getHeaderField("X-RateLimit-Reset"), responseBody);
+    }
+
+    static Long resolveCooldownSeconds(String retryAfter, String rateLimitReset, String responseBody) {
+        Long seconds = parseRetryAfterValue(retryAfter);
+        if (seconds != null) return seconds;
+        seconds = parseEpochSeconds(rateLimitReset);
+        if (seconds != null) return seconds;
+        return parseJsonResetHint(responseBody);
+    }
+
+    private static Long parseRetryAfterValue(String value) {
         if (value == null || value.isBlank()) return null;
         try {
             return Math.max(0L, Long.parseLong(value.trim()));
         } catch (NumberFormatException ignored) {
             try {
-                java.time.ZonedDateTime at = java.time.ZonedDateTime.parse(value,
-                        java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME);
-                return Math.max(0L, java.time.Duration.between(java.time.ZonedDateTime.now(at.getZone()), at).getSeconds());
+                Instant at = ZonedDateTime.parse(value.trim(), DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();
+                return Math.max(0L, Duration.between(Instant.now(), at).getSeconds());
             } catch (Exception ignoredDate) {
                 return null;
             }
         }
+    }
+
+    private static Long parseEpochSeconds(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Math.max(0L, Long.parseLong(value.trim()) - Instant.now().getEpochSecond());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static Long parseJsonResetHint(String body) {
+        if (body == null || body.isBlank()) return null;
+        try {
+            JsonNode root = new ObjectMapper().readTree(body);
+            JsonNode error = root.path("error");
+            if (error.isObject()) {
+                Long hint = parseJsonResetFields(error);
+                if (hint != null) return hint;
+            }
+            return parseJsonResetFields(root);
+        } catch (Exception ignored) {
+            // Invalid or unrelated JSON has no usable cooldown hint.
+        }
+        return null;
+    }
+
+    private static Long parseJsonResetFields(JsonNode source) {
+        for (String field : List.of("retry_after", "retry_after_seconds")) {
+            Long value = parseLongNode(source.path(field));
+            if (value != null) return Math.max(0L, value);
+        }
+        for (String field : List.of("reset", "reset_at")) {
+            Long value = parseLongNode(source.path(field));
+            if (value != null) return Math.max(0L, value - Instant.now().getEpochSecond());
+        }
+        return null;
+    }
+
+    private static Long parseLongNode(JsonNode value) {
+        if (value.isIntegralNumber() && value.canConvertToLong()) return value.asLong();
+        if (value.isTextual()) {
+            try {
+                return Long.parseLong(value.asText().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /** SSE 透传结果：lastUsageData=最后一条包含 usage 的数据行；bytesWritten=是否确有任何数据写出过 */
@@ -767,7 +887,6 @@ public class RelaySupport {
             var writer = httpResponse.getWriter();
             String line;
             while ((line = reader.readLine()) != null) {
-                bytesWritten = true;
                 if (line.isEmpty()) {
                     writer.write("\n");
                 } else {
@@ -775,6 +894,7 @@ public class RelaySupport {
                     writer.write("\n");
                 }
                 writer.flush();
+                bytesWritten = true;
                 if (line.startsWith("data: ") && !line.equals("data: [DONE]")) {
                     String data = line.substring(6);
                     if (usageFilter != null ? usageFilter.test(data) : data.contains("\"usage\"")) {

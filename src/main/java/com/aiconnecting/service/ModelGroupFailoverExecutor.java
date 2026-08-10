@@ -131,16 +131,6 @@ public class ModelGroupFailoverExecutor {
         return BusinessException.upstream(code, "上游 API 错误: " + body, body, retryAfterSeconds);
     }
 
-    private Long retryAfterSeconds(HttpURLConnection conn) {
-        String value = conn.getHeaderField("Retry-After");
-        if (value == null || value.isBlank()) return null;
-        try {
-            return Math.max(0L, Long.parseLong(value.trim()));
-        } catch (NumberFormatException ignored) {
-            return null;
-        }
-    }
-
     // ==================== 文本（非流式） ====================
 
     public String relayRequest(String tokenKey, String path, String requestBody, String groupName,
@@ -354,7 +344,8 @@ public class ModelGroupFailoverExecutor {
                     String errorBody = conn.getErrorStream() != null
                             ? new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8) : "";
                     lastError = "HTTP " + code + " - " + errorBody;
-                    BusinessException upstreamError = upstreamFailure(code, errorBody, retryAfterSeconds(conn));
+                    BusinessException upstreamError = upstreamFailure(code, errorBody,
+                            RelaySupport.resolveCooldownSeconds(conn, errorBody));
                     conn.disconnect();
                     if (!FailureClassifier.isSwitchable(upstreamError)) {
                         RelayServiceUtils.writeOpenAiError(httpResponse, code, "上游返回错误: " + errorBody);

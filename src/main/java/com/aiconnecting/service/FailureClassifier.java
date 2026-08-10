@@ -67,24 +67,11 @@ final class FailureClassifier {
         }
         ParsedError parsed = parse(errorBody);
         if (parsed != null) {
-            Set<String> values = new java.util.HashSet<>();
-            values.add(parsed.code());
-            values.add(parsed.type());
-            if (contains(values, "context_length_exceeded") || intersects(values, INVALID_REQUEST)
-                    || intersects(values, POLICY)) {
-                return new Classification(false, Kind.FAST_FAIL, retryAfterSeconds);
-            }
-            if (intersects(values, MODEL_NOT_FOUND)) {
-                return new Classification(true, Kind.MODEL_NOT_FOUND, retryAfterSeconds);
-            }
-            if (intersects(values, QUOTA)) {
-                return new Classification(true, Kind.QUOTA, retryAfterSeconds);
-            }
-            if (intersects(values, RATE_LIMIT)) {
-                return new Classification(true, Kind.RATE_LIMIT, retryAfterSeconds);
-            }
-            if (intersects(values, UPSTREAM_AUTH)) {
-                return new Classification(true, Kind.CHANNEL, retryAfterSeconds);
+            // Recognized structured fields are authoritative. Message substring matching remains a
+            // compatibility fallback only when neither code nor type has a known classification.
+            Kind structuredKind = classifyStructuredFields(parsed.code(), parsed.type());
+            if (structuredKind != null) {
+                return new Classification(structuredKind != Kind.FAST_FAIL, structuredKind, retryAfterSeconds);
             }
             Kind messageKind = classifyStructuredMessage(parsed.message());
             if (messageKind != null) {
@@ -152,6 +139,19 @@ final class FailureClassifier {
         return null;
     }
 
+    private static Kind classifyStructuredFields(String code, String type) {
+        Set<String> values = new java.util.HashSet<>();
+        values.add(code);
+        values.add(type);
+        if (values.contains("context_length_exceeded") || values.stream().anyMatch(INVALID_REQUEST::contains)
+                || values.stream().anyMatch(POLICY::contains)) return Kind.FAST_FAIL;
+        if (values.stream().anyMatch(MODEL_NOT_FOUND::contains)) return Kind.MODEL_NOT_FOUND;
+        if (values.stream().anyMatch(QUOTA::contains)) return Kind.QUOTA;
+        if (values.stream().anyMatch(RATE_LIMIT::contains)) return Kind.RATE_LIMIT;
+        if (values.stream().anyMatch(UPSTREAM_AUTH::contains)) return Kind.CHANNEL;
+        return null;
+    }
+
     private static Kind classifyLegacyMessage(String message) {
         if (message == null) return null;
         String lower = message.toLowerCase(Locale.ROOT);
@@ -161,14 +161,6 @@ final class FailureClassifier {
         if (lower.contains("insufficient_quota") || lower.contains("insufficient_user_quota") || lower.contains("quota")) return Kind.QUOTA;
         if (lower.contains("rate_limit") || lower.contains("overloaded")) return Kind.RATE_LIMIT;
         return null;
-    }
-
-    private static boolean intersects(Set<String> values, Set<String> expected) {
-        return values.stream().anyMatch(expected::contains);
-    }
-
-    private static boolean contains(Set<String> values, String expected) {
-        return values.contains(expected);
     }
 
     private static String normalize(String value) {

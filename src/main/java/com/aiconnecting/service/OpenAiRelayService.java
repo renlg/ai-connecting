@@ -165,7 +165,7 @@ public class OpenAiRelayService {
         } catch (RuntimeException e) {
             // 退回本模型预扣的积分（按本模型自身价格）；若配置了故障转移组，转入组内成员时
             // 会按组价重新独立预扣，不会与此处的退款重复或冲突
-            support.refundMediaCharge(ctx, charge);
+            requireMediaRefundBeforeFallback(ctx, charge);
             // 只有上游/渠道级别的失败（BusinessException 且分类为 SWITCH）才转入故障转移组；
             // 本地校验错误或非预期的运行时异常直接向上抛出，不掩盖真实错误
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
@@ -667,7 +667,7 @@ public class OpenAiRelayService {
         try {
             result = forwardWithRetry(ctx, channel -> support.forwardBinaryRequest(channel, "/v1/audio/speech", upstreamJson));
         } catch (RuntimeException e) {
-            support.refundMediaCharge(ctx, charge);
+            requireMediaRefundBeforeFallback(ctx, charge);
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null
                     && ctx.modelConfig().getFallbackGroupId() != null
                     && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
@@ -787,7 +787,7 @@ public class OpenAiRelayService {
         try {
             result = forwardWithRetry(ctx, channel -> support.forwardMultipartRequest(channel, path, multipartBody));
         } catch (RuntimeException e) {
-            support.refundMediaCharge(ctx, charge);
+            requireMediaRefundBeforeFallback(ctx, charge);
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null
                     && ctx.modelConfig().getFallbackGroupId() != null
                     && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
@@ -942,7 +942,7 @@ public class OpenAiRelayService {
                             ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
                     lastError = "HTTP " + code + " - " + errorBody;
                     lastFailure = BusinessException.upstream(code, "上游 API 错误: " + errorBody,
-                            errorBody, parseRetryAfterSeconds(conn.getHeaderField("Retry-After")));
+                            errorBody, RelaySupport.resolveCooldownSeconds(conn, errorBody));
                     log.warn("渠道 {} 流式请求失败: {}", channel.getId(), lastError);
                     support.channelHealthTracker.recordFailure(channel.getId(),
                             ChannelHealthTracker.ErrorCategory.fromStatusCode(code), lastError);
@@ -1004,12 +1004,11 @@ public class OpenAiRelayService {
         return true;
     }
 
-    private Long parseRetryAfterSeconds(String value) {
-        if (value == null || value.isBlank()) return null;
-        try {
-            return Math.max(0L, Long.parseLong(value.trim()));
-        } catch (NumberFormatException ignored) {
-            return null;
+    /** A failed refund must stop fallback before the group can pre-deduct the request again. */
+    private void requireMediaRefundBeforeFallback(RelaySupport.RelayContext ctx, RelaySupport.MediaCharge charge) {
+        if (!support.refundMediaCharge(ctx, charge)) {
+            throw new BusinessException(500,
+                    "原模型预扣积分退回失败，已记录待人工补偿，停止进入故障转移组");
         }
     }
 
