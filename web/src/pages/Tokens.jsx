@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography, Tooltip } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
-import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCreditHistoryDetail, testTokenChatStream, getTokenModels } from '../api'
+import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCreditHistoryDetail, testTokenChatStream, getTokenModels, getModelGroups } from '../api'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
@@ -42,18 +42,44 @@ export default function Tokens() {
 
   useEffect(() => { load() }, [])
 
-  const loadModels = () => {
-    getTokenModels().then(res => {
-      if (res.code === 200) {
-        setModelOptions((res.data || []).map(m => ({
+  const loadModels = async () => {
+    try {
+      const res = await getTokenModels()
+      if (res.code !== 200) return
+      const singleModels = res.data || []
+      const options = singleModels.map(m => ({
           value: m.displayName,
           label: m.displayName,
+          kind: 'model',
           inputRate: m.inputCreditRate,
           outputRate: m.outputCreditRate,
           cacheRate: m.cacheCreditRate
-        })))
+        }))
+
+      // 管理端模型组接口提供成员明细；用当前用户可见的单模型 ID 判断组是否至少有一个可用成员。
+      try {
+        const groupRes = await getModelGroups()
+        if (groupRes.code === 200) {
+          const availableModelIds = new Set(singleModels.map(model => model.id))
+          const groupOptions = (groupRes.data || [])
+            .filter(item => item.group?.enabled)
+            .filter(item => isAdmin || !item.group?.adminOnly)
+            .filter(item => (item.members || []).some(member => availableModelIds.has(member.modelConfigId)))
+            .map(item => ({
+              value: item.group.name,
+              label: `${item.group.name}（模型组）`,
+              kind: 'group',
+              memberCount: item.members?.length || 0,
+            }))
+          options.push(...groupOptions)
+        }
+      } catch {
+        // 普通用户可能无权访问管理员模型组接口，仍保留原有单模型列表。
       }
-    })
+      setModelOptions(options)
+    } catch (err) {
+      message.error(err?.message || '可用模型加载失败')
+    }
   }
 
   useEffect(() => { loadModels() }, [])
@@ -65,11 +91,15 @@ export default function Tokens() {
 
   const handleSave = async () => {
     const values = await form.validateFields()
+    const payload = {
+      ...values,
+      allowedModels: (values.allowedModels || []).join(','),
+    }
     if (editing) {
-      await updateToken(editing.id, values)
+      await updateToken(editing.id, payload)
       message.success('更新成功')
     } else {
-      await createToken(values)
+      await createToken(payload)
       message.success('创建成功')
     }
     setModalOpen(false)
@@ -202,7 +232,11 @@ export default function Tokens() {
         <Space size="small" wrap>
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
-            form.setFieldsValue(record)
+            form.resetFields()
+            form.setFieldsValue({
+              ...record,
+              allowedModels: record.allowedModels ? record.allowedModels.split(',').filter(Boolean) : [],
+            })
             setModalOpen(true)
           }}>编辑</Button>
           <Button size="small" icon={<BarChartOutlined />} onClick={() => openCreditHistory(record)}>消耗记录</Button>
@@ -236,7 +270,12 @@ export default function Tokens() {
               prefix={<SearchOutlined />}
             />
           )}
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true) }}>新增 Token</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => {
+            setEditing(null)
+            form.resetFields()
+            form.setFieldsValue({ credits: -1, rateLimit: 0, allowedModels: [] })
+            setModalOpen(true)
+          }}>新增 Token</Button>
         </Space>
       </div>
       {modelOptions.length > 0 && (
@@ -244,7 +283,9 @@ export default function Tokens() {
           <div style={{ marginBottom: 8, fontSize: 13, color: '#888' }}>可用模型（{modelOptions.length}）</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {modelOptions.map(m => {
-              const tooltipContent = (
+              const tooltipContent = m.kind === 'group' ? (
+                <div style={{ fontSize: 13 }}>模型组，可用成员 {m.memberCount} 个</div>
+              ) : (
                 <div style={{ fontSize: 13, lineHeight: '28px' }}>
                   <div>输入比例：{m.inputRate || 0} 积分/百万token</div>
                   <div>输出比例：{m.outputRate || 0} 积分/百万token</div>
@@ -253,7 +294,7 @@ export default function Tokens() {
               )
               return (
                 <Tooltip key={m.value} title={tooltipContent} color="#fff" overlayInnerStyle={{ color: '#333', maxWidth: 300 }}>
-                  <Tag color="blue" style={{ margin: 0, cursor: 'pointer' }}>{m.label}</Tag>
+                  <Tag color={m.kind === 'group' ? 'geekblue' : 'blue'} style={{ margin: 0, cursor: 'pointer' }}>{m.label}</Tag>
                 </Tooltip>
               )
             })}
@@ -265,6 +306,16 @@ export default function Tokens() {
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="Token 名称" /></Form.Item>
           <Form.Item name="credits" label="积分" initialValue={-1}><InputNumber style={{ width: '100%' }} placeholder="-1 表示无限" /></Form.Item>
+          <Form.Item name="allowedModels" label="允许使用的模型" tooltip="不选择表示允许全部模型。">
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="不选择表示允许全部"
+              options={modelOptions}
+            />
+          </Form.Item>
           {isAdmin && (
             <Form.Item name="rateLimit" label="限流(每分钟请求数)" initialValue={0} tooltip="0 表示不限流">
               <InputNumber style={{ width: '100%' }} min={0} step={10} placeholder="每分钟最大请求数，0 表示不限" />

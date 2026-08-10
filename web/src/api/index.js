@@ -130,6 +130,14 @@ export const updateModel = (id, data) => api.put(`/api/admin/models/${id}`, data
 export const deleteModel = (id) => api.delete(`/api/admin/models/${id}`);
 export const updateModelStatus = (id, status) => api.put(`/api/admin/models/${id}/status`, { status });
 
+// Model Groups (Admin)
+export const getModelGroups = () => api.get('/api/admin/model-groups');
+export const getModelGroup = (id) => api.get(`/api/admin/model-groups/${id}`);
+export const createModelGroup = (data) => api.post('/api/admin/model-groups', data);
+export const updateModelGroup = (id, data) => api.put(`/api/admin/model-groups/${id}`, data);
+export const deleteModelGroup = (id) => api.delete(`/api/admin/model-groups/${id}`);
+export const updateModelGroupStatus = (id, enabled) => api.put(`/api/admin/model-groups/${id}/status`, { enabled });
+
 // Admin
 export const getDashboard = () => api.get('/api/admin/dashboard');
 export const getDailyStats = (days = 7) => api.get('/api/admin/dashboard/daily-stats', { params: { days } });

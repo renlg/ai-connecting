@@ -1,7 +1,12 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, SearchOutlined } from '@ant-design/icons'
-import { getModels, createModel, updateModel, deleteModel, updateModelStatus } from '../api'
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Divider, Typography } from 'antd'
+import { PlusOutlined, DeleteOutlined, EditOutlined, SearchOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons'
+import {
+  getModels, createModel, updateModel, deleteModel, updateModelStatus,
+  getModelGroups, createModelGroup, updateModelGroup, deleteModelGroup, updateModelGroupStatus,
+} from '../api'
+
+const { Text } = Typography
 
 const TYPE_META = {
   text: { color: 'default', label: '文本' },
@@ -10,15 +15,36 @@ const TYPE_META = {
   audio: { color: 'cyan', label: '音频' },
 }
 
+const STRATEGY_META = {
+  round_robin: '轮询',
+  priority: '优先级',
+  random: '随机',
+}
+
+const groupPriceSummary = (group) => {
+  if (group.type === 'text') return `输入 ${group.inputPrice ?? 0} / 输出 ${group.outputPrice ?? 0} / 缓存 ${group.cachedPrice ?? 0}`
+  if (group.type === 'image') return `1K ${group.price1k ?? 0} / 2K ${group.price2k ?? 0} / 4K ${group.price4k ?? 0}`
+  if (group.type === 'video') return `480P ${group.price480p ?? 0} / 720P ${group.price720p ?? 0} / 1080P ${group.price1080p ?? 0} / 4K ${group.videoPrice4k ?? 0}`
+  return `标准 ${group.priceStandard ?? 0} / 高清 ${group.priceHd ?? 0}`
+}
+
 export default function Models() {
   const [models, setModels] = useState([])
+  const [allModels, setAllModels] = useState([])
+  const [groups, setGroups] = useState([])
   const [loading, setLoading] = useState(false)
+  const [groupLoading, setGroupLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  const [groupModalOpen, setGroupModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [editingGroup, setEditingGroup] = useState(null)
+  const [groupMembers, setGroupMembers] = useState([])
   const [searchName, setSearchName] = useState('')
   const [searchType, setSearchType] = useState(undefined)
   const [form] = Form.useForm()
+  const [groupForm] = Form.useForm()
   const modelType = Form.useWatch('type', form) || 'text'
+  const groupType = Form.useWatch('type', groupForm) || 'text'
 
   const load = (filters) => {
     setLoading(true)
@@ -30,16 +56,45 @@ export default function Models() {
     }).finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
+  const loadAllModels = () => {
+    getModels().then(res => {
+      if (res.code === 200) setAllModels(res.data || [])
+    })
+  }
+
+  const loadGroups = () => {
+    setGroupLoading(true)
+    getModelGroups().then(res => {
+      if (res.code === 200) {
+        setGroups((res.data || []).map(item => ({ ...item.group, members: item.members || [] })))
+      }
+    }).catch(err => message.error(err?.message || '模型组加载失败'))
+      .finally(() => setGroupLoading(false))
+  }
+
+  useEffect(() => {
+    load()
+    loadAllModels()
+    loadGroups()
+  }, [])
+
+  const refreshModels = () => {
+    load({ name: searchName || undefined, type: searchType })
+    loadAllModels()
+  }
 
   const handleSave = async () => {
     const values = await form.validateFields()
+    const payload = {
+      ...values,
+      fallbackGroupId: values.fallbackGroupId || (editing ? 0 : null),
+    }
     try {
       if (editing) {
-        await updateModel(editing.id, values)
+        await updateModel(editing.id, payload)
         message.success('更新成功')
       } else {
-        await createModel(values)
+        await createModel(payload)
         message.success('创建成功')
       }
     } catch (err) {
@@ -49,19 +104,99 @@ export default function Models() {
     setModalOpen(false)
     form.resetFields()
     setEditing(null)
-    load({ name: searchName || undefined, type: searchType })
+    refreshModels()
   }
 
   const handleDelete = async (id) => {
-    await deleteModel(id)
-    message.success('删除成功')
-    load({ name: searchName || undefined, type: searchType })
+    try {
+      await deleteModel(id)
+      message.success('删除成功')
+      refreshModels()
+    } catch (err) {
+      message.error(err?.message || '删除失败')
+    }
   }
 
   const handleStatusChange = async (id, status) => {
-    await updateModelStatus(id, status ? 1 : 0)
-    message.success('状态已更新')
-    load({ name: searchName || undefined, type: searchType })
+    try {
+      await updateModelStatus(id, status ? 1 : 0)
+      message.success('状态已更新')
+      refreshModels()
+    } catch (err) {
+      message.error(err?.message || '状态更新失败')
+    }
+  }
+
+  const openCreateGroup = () => {
+    setEditingGroup(null)
+    setGroupMembers([])
+    groupForm.resetFields()
+    groupForm.setFieldsValue({ type: 'text', strategy: 'round_robin', maxAttempts: 5, enabled: true, adminOnly: false })
+    setGroupModalOpen(true)
+  }
+
+  const openEditGroup = (group) => {
+    setEditingGroup(group)
+    setGroupMembers((group.members || []).map(member => ({ modelConfigId: member.modelConfigId, weight: member.weight || 1 })))
+    groupForm.resetFields()
+    groupForm.setFieldsValue(group)
+    setGroupModalOpen(true)
+  }
+
+  const handleGroupMemberSelection = (ids) => {
+    setGroupMembers(current => ids.map(id => current.find(member => member.modelConfigId === id) || { modelConfigId: id, weight: 1 }))
+  }
+
+  const moveGroupMember = (index, offset) => {
+    setGroupMembers(current => {
+      const next = [...current]
+      const target = index + offset
+      if (target < 0 || target >= next.length) return current
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next
+    })
+  }
+
+  const handleGroupSave = async () => {
+    const values = await groupForm.validateFields()
+    const payload = { ...values, members: groupMembers }
+    try {
+      if (editingGroup) {
+        await updateModelGroup(editingGroup.id, payload)
+        message.success('模型组更新成功')
+      } else {
+        await createModelGroup(payload)
+        message.success('模型组创建成功')
+      }
+    } catch (err) {
+      message.error(err?.message || '模型组保存失败')
+      return
+    }
+    setGroupModalOpen(false)
+    setEditingGroup(null)
+    setGroupMembers([])
+    groupForm.resetFields()
+    loadGroups()
+  }
+
+  const handleGroupDelete = async (id) => {
+    try {
+      await deleteModelGroup(id)
+      message.success('模型组删除成功')
+      loadGroups()
+    } catch (err) {
+      Modal.error({ title: '无法删除模型组', content: err?.message || '删除失败' })
+    }
+  }
+
+  const handleGroupStatusChange = async (id, enabled) => {
+    try {
+      await updateModelGroupStatus(id, enabled)
+      message.success('模型组状态已更新')
+      loadGroups()
+    } catch (err) {
+      message.error(err?.message || '模型组状态更新失败')
+    }
   }
 
   const columns = [
@@ -75,48 +210,38 @@ export default function Models() {
         return <Tag color={meta.color}>{meta.label}</Tag>
       }
     },
-    { title: '输入比例（积分/百万token）', dataIndex: 'inputCreditRate', width: 130, render: (v, r) => (r.type === 'image' || r.type === 'video' || r.type === 'audio') ? '-' : (v || 0) },
-    { title: '输出比例（积分/百万token）', dataIndex: 'outputCreditRate', width: 130, render: (v, r) => (r.type === 'image' || r.type === 'video' || r.type === 'audio') ? '-' : (v || 0) },
-    { title: '缓存比例（积分/百万token）', dataIndex: 'cacheCreditRate', width: 130, render: (v, r) => (r.type === 'image' || r.type === 'video' || r.type === 'audio') ? '-' : (v != null ? v : '0') },
+    { title: '输入比例（积分/百万token）', dataIndex: 'inputCreditRate', width: 130, render: (v, r) => ['image', 'video', 'audio'].includes(r.type) ? '-' : (v || 0) },
+    { title: '输出比例（积分/百万token）', dataIndex: 'outputCreditRate', width: 130, render: (v, r) => ['image', 'video', 'audio'].includes(r.type) ? '-' : (v || 0) },
+    { title: '缓存比例（积分/百万token）', dataIndex: 'cacheCreditRate', width: 130, render: (v, r) => ['image', 'video', 'audio'].includes(r.type) ? '-' : (v ?? 0) },
     {
       title: '档位价格（积分）', width: 220,
       render: (_, r) => {
-        if (r.type === 'image') {
-          return `1K: ${r.imagePrice1k ?? 0} / 2K: ${r.imagePrice2k ?? 0} / 4K: ${r.imagePrice4k ?? 0}`
-        }
-        if (r.type === 'video') {
-          return `480P: ${r.videoPrice480p ?? 0} / 720P: ${r.videoPrice720p ?? 0} / 1080P: ${r.videoPrice1080p ?? 0} / 4K: ${r.videoPrice4k ?? 0}`
-        }
-        if (r.type === 'audio') {
-          return `标准: ${r.audioPriceStandard ?? 0} / 高清: ${r.audioPriceHd ?? 0}`
-        }
+        if (r.type === 'image') return `1K: ${r.imagePrice1k ?? 0} / 2K: ${r.imagePrice2k ?? 0} / 4K: ${r.imagePrice4k ?? 0}`
+        if (r.type === 'video') return `480P: ${r.videoPrice480p ?? 0} / 720P: ${r.videoPrice720p ?? 0} / 1080P: ${r.videoPrice1080p ?? 0} / 4K: ${r.videoPrice4k ?? 0}`
+        if (r.type === 'audio') return `标准: ${r.audioPriceStandard ?? 0} / 高清: ${r.audioPriceHd ?? 0}`
         return '-'
       }
     },
     { title: '描述', dataIndex: 'description', ellipsis: true, render: v => v || '-' },
     {
       title: '仅管理员', dataIndex: 'adminOnly', width: 100,
-      render: (v, r) => <Switch checked={!!v} onChange={(c) => {
-        updateModel(r.id, { adminOnly: c }).then(() => {
+      render: (v, r) => <Switch checked={!!v} onChange={(checked) => {
+        updateModel(r.id, { adminOnly: checked }).then(() => {
           message.success('已更新')
-          load()
-        })
+          refreshModels()
+        }).catch(err => message.error(err?.message || '更新失败'))
       }} />
     },
-    {
-      title: '状态', dataIndex: 'status', width: 80,
-      render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} />
-    },
-    {
-      title: '创建时间', dataIndex: 'createdAt', width: 180,
-      render: v => v ? new Date(v).toLocaleString('zh-CN') : '-'
-    },
+    { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={checked => handleStatusChange(r.id, checked)} /> },
+    { title: '创建时间', dataIndex: 'createdAt', width: 180, render: v => v ? new Date(v).toLocaleString('zh-CN') : '-' },
     {
       title: '操作', width: 160, fixed: 'right', render: (_, record) => (
         <Space size="small" wrap>
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
-            form.setFieldsValue(record)
+            form.resetFields()
+            const fallbackAvailable = groups.some(group => group.id === record.fallbackGroupId && group.enabled && group.type === (record.type || 'text'))
+            form.setFieldsValue({ ...record, fallbackGroupId: fallbackAvailable ? record.fallbackGroupId : 0 })
             setModalOpen(true)
           }}>编辑</Button>
           <Popconfirm title="确定删除该模型？" onConfirm={() => handleDelete(record.id)}>
@@ -127,124 +252,178 @@ export default function Models() {
     },
   ]
 
+  const groupColumns = [
+    { title: '名称', dataIndex: 'name', width: 160, render: value => <Tag color="geekblue">{value}</Tag> },
+    { title: '类型', dataIndex: 'type', width: 80, render: value => <Tag color={TYPE_META[value]?.color}>{TYPE_META[value]?.label || value}</Tag> },
+    { title: '策略', dataIndex: 'strategy', width: 100, render: value => STRATEGY_META[value] || value },
+    { title: '最多尝试', dataIndex: 'maxAttempts', width: 90 },
+    { title: '启用', dataIndex: 'enabled', width: 70, render: (value, record) => <Switch checked={!!value} onChange={checked => handleGroupStatusChange(record.id, checked)} /> },
+    { title: '仅管理员', dataIndex: 'adminOnly', width: 90, render: value => value ? <Tag color="gold">是</Tag> : '否' },
+    { title: '价格摘要', width: 300, render: (_, record) => groupPriceSummary(record) },
+    { title: '成员数', width: 80, render: (_, record) => record.members?.length || 0 },
+    {
+      title: '操作', width: 160, fixed: 'right', render: (_, record) => (
+        <Space size="small">
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEditGroup(record)}>编辑</Button>
+          <Popconfirm title="确定删除该模型组？" description="有成员的模型组需先在编辑窗口移除全部成员。" onConfirm={() => handleGroupDelete(record.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </Space>
+      )
+    },
+  ]
+
+  const eligibleMemberModels = allModels.filter(model => (model.type || 'text') === groupType)
+  const fallbackGroupOptions = groups
+    .filter(group => group.enabled && group.type === modelType)
+    .map(group => ({ value: group.id, label: group.name }))
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>模型管理</h2>
-        <Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true) }}>新增模型</Button>
-        </Space>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => {
+          setEditing(null)
+          form.resetFields()
+          form.setFieldsValue({ type: 'text', adminOnly: false, fallbackGroupId: 0 })
+          setModalOpen(true)
+        }}>新增模型</Button>
       </div>
 
       <Space style={{ marginBottom: 16 }} wrap>
-        <Input.Search
-          placeholder="按模型名称模糊搜索"
-          allowClear
-          onSearch={(value) => {
-            setSearchName(value)
-            load({ name: value || undefined, type: searchType })
-          }}
-          style={{ width: 240 }}
-          prefix={<SearchOutlined />}
-        />
-        <Select
-          placeholder="按模型类型搜索"
-          allowClear
-          value={searchType}
-          onChange={(value) => {
-            setSearchType(value)
-            load({ name: searchName || undefined, type: value })
-          }}
-          options={Object.entries(TYPE_META).map(([value, meta]) => ({ value, label: meta.label }))}
-          style={{ width: 180 }}
-        />
+        <Input.Search placeholder="按模型名称模糊搜索" allowClear onSearch={(value) => {
+          setSearchName(value)
+          load({ name: value || undefined, type: searchType })
+        }} style={{ width: 240 }} prefix={<SearchOutlined />} />
+        <Select placeholder="按模型类型搜索" allowClear value={searchType} onChange={(value) => {
+          setSearchType(value)
+          load({ name: searchName || undefined, type: value })
+        }} options={Object.entries(TYPE_META).map(([value, meta]) => ({ value, label: meta.label }))} style={{ width: 180 }} />
       </Space>
 
       <Table columns={columns} dataSource={models} rowKey="id" loading={loading} scroll={{ x: 1400 }} />
 
-      {/* 单个新增/编辑 */}
-      <Modal title={editing ? '编辑模型' : '新增模型'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={500}>
+      <Divider />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div>
+          <h2 style={{ marginBottom: 4 }}>模型组</h2>
+          <Text type="secondary">为客户端提供统一模型名，并按策略在同类型成员间切换。</Text>
+        </div>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateGroup}>新增模型组</Button>
+      </div>
+      <Table columns={groupColumns} dataSource={groups} rowKey="id" loading={groupLoading} scroll={{ x: 1200 }} />
+
+      <Modal title={editing ? '编辑模型' : '新增模型'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={520}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="模型名称（模型ID，发送给上游供应商，可重复）" rules={[{ required: true, message: '请输入模型名称' }]}>
             <Input placeholder="例如: gpt-4o" />
           </Form.Item>
-          <Form.Item
-            name="displayName"
-            label="显示名称（平台唯一标识，用于 Token 管理展示）"
-            rules={[
-              { required: true, message: '请输入显示名称' },
-              {
-                validator: (_, value) => {
-                  if (!value) return Promise.resolve()
-                  const conflict = models.some(m => m.displayName === value && m.id !== editing?.id)
-                  return conflict ? Promise.reject(new Error('显示名称已存在，请使用唯一的显示名称')) : Promise.resolve()
-                }
-              }
-            ]}
-          >
+          <Form.Item name="displayName" label="显示名称（平台唯一标识，用于 Token 管理展示）" rules={[
+            { required: true, message: '请输入显示名称' },
+            { validator: (_, value) => {
+              if (!value) return Promise.resolve()
+              const conflict = allModels.some(model => model.displayName === value && model.id !== editing?.id)
+              return conflict ? Promise.reject(new Error('显示名称已存在，请使用唯一的显示名称')) : Promise.resolve()
+            } }
+          ]}>
             <Input placeholder="例如: GPT-4o" />
           </Form.Item>
           <Form.Item name="type" label="模型类型" initialValue="text">
-            <Select options={[
+            <Select onChange={() => form.setFieldValue('fallbackGroupId', 0)} options={[
               { value: 'text', label: '文本（按 token 计费）' },
               { value: 'image', label: '图片（按分辨率档位计费）' },
               { value: 'video', label: '视频（按分辨率档位计费）' },
               { value: 'audio', label: '音频（按音质档位计费）' },
             ]} />
           </Form.Item>
+          <Form.Item name="fallbackGroupId" label="故障转移组" initialValue={0} tooltip="模型请求失败后，可转入同类型模型组继续尝试。">
+            <Select options={[{ value: 0, label: '不启用' }, ...fallbackGroupOptions]} />
+          </Form.Item>
           {modelType === 'text' && <>
-            <Form.Item name="inputCreditRate" label="输入积分比例（每百万token）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} placeholder="每 百万 输入 token 消耗的积分数" />
-            </Form.Item>
-            <Form.Item name="outputCreditRate" label="输出积分比例（每百万token）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} placeholder="每 百万 输出 token 消耗的积分数" />
-            </Form.Item>
-            <Form.Item name="cacheCreditRate" label="缓存比例（积分/百万token）" initialValue={0}>
-              <InputNumber min={0} step={100} style={{ width: '100%' }} placeholder="每 百万 缓存 token 消耗的积分数" />
-            </Form.Item>
+            <Form.Item name="inputCreditRate" label="输入积分比例（每百万token）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="outputCreditRate" label="输出积分比例（每百万token）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="cacheCreditRate" label="缓存比例（积分/百万token）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
           </>}
           {modelType === 'image' && <>
-            <Form.Item name="imagePrice1k" label="1K 档价格（积分/张，最长边 < 2048）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} placeholder="例如 1024x1024、1024x1536" />
-            </Form.Item>
-            <Form.Item name="imagePrice2k" label="2K 档价格（积分/张，最长边 < 4096）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} placeholder="例如 2048x2048" />
-            </Form.Item>
-            <Form.Item name="imagePrice4k" label="4K 档价格（积分/张，最长边 ≥ 4096）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} placeholder="例如 4096x4096" />
-            </Form.Item>
+            <Form.Item name="imagePrice1k" label="1K 档价格（积分/张）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="imagePrice2k" label="2K 档价格（积分/张）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="imagePrice4k" label="4K 档价格（积分/张）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
           </>}
           {modelType === 'video' && <>
-            <Form.Item name="videoPrice480p" label="480P 档价格（积分/秒）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item name="videoPrice720p" label="720P 档价格（积分/秒）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item name="videoPrice1080p" label="1080P 档价格（积分/秒）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item name="videoPrice4k" label="4K 档价格（积分/秒）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
+            <Form.Item name="videoPrice480p" label="480P 档价格（积分/秒）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="videoPrice720p" label="720P 档价格（积分/秒）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="videoPrice1080p" label="1080P 档价格（积分/秒）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="videoPrice4k" label="4K 档价格（积分/秒）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
           </>}
           {modelType === 'audio' && <>
-            <Form.Item name="audioPriceStandard" label="标准档价格（积分/秒）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item name="audioPriceHd" label="高清档价格（积分/秒）" initialValue={0}>
-              <InputNumber min={0} style={{ width: '100%' }} />
-            </Form.Item>
+            <Form.Item name="audioPriceStandard" label="标准档价格（积分/秒）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
+            <Form.Item name="audioPriceHd" label="高清档价格（积分/秒）" initialValue={0}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
           </>}
-          <Form.Item name="description" label="描述">
-            <Input placeholder="模型描述（可选）" />
-          </Form.Item>
-          <Form.Item name="adminOnly" label="仅管理员可选" valuePropName="checked" initialValue={false}>
-            <Switch />
-          </Form.Item>
+          <Form.Item name="description" label="描述"><Input placeholder="模型描述（可选）" /></Form.Item>
+          <Form.Item name="adminOnly" label="仅管理员可选" valuePropName="checked" initialValue={false}><Switch /></Form.Item>
         </Form>
       </Modal>
 
+      <Modal title={editingGroup ? '编辑模型组' : '新增模型组'} open={groupModalOpen} onOk={handleGroupSave} onCancel={() => setGroupModalOpen(false)} width={680}>
+        <Form form={groupForm} layout="vertical">
+          <Form.Item name="name" label="模型组名称" rules={[{ required: true, message: '请输入模型组名称' }]}><Input placeholder="客户端请求时使用的公开 model 值" /></Form.Item>
+          <Space style={{ display: 'flex' }} align="start">
+            <Form.Item name="type" label="类型" rules={[{ required: true }]} style={{ width: 180 }}>
+              <Select options={Object.entries(TYPE_META).map(([value, meta]) => ({ value, label: meta.label }))} onChange={() => setGroupMembers([])} />
+            </Form.Item>
+            <Form.Item name="strategy" label="成员策略" rules={[{ required: true }]} style={{ width: 180 }}>
+              <Select options={Object.entries(STRATEGY_META).map(([value, label]) => ({ value, label }))} />
+            </Form.Item>
+            <Form.Item name="maxAttempts" label="最多尝试次数" rules={[{ required: true }]} style={{ width: 180 }}>
+              <InputNumber min={1} max={8} style={{ width: '100%' }} />
+            </Form.Item>
+          </Space>
+          <Space size="large">
+            <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
+            <Form.Item name="adminOnly" label="仅管理员可用" valuePropName="checked"><Switch /></Form.Item>
+          </Space>
+
+          {groupType === 'text' && <Space style={{ display: 'flex' }} align="start">
+            <Form.Item name="inputPrice" label="输入价格（积分/1K token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
+            <Form.Item name="outputPrice" label="输出价格（积分/1K token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
+            <Form.Item name="cachedPrice" label="缓存价格（积分/1K token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
+          </Space>}
+          {groupType === 'image' && <Space style={{ display: 'flex' }} align="start">
+            <Form.Item name="price1k" label="1K（积分/张）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
+            <Form.Item name="price2k" label="2K（积分/张）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
+            <Form.Item name="price4k" label="4K（积分/张）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
+          </Space>}
+          {groupType === 'video' && <Space style={{ display: 'flex', flexWrap: 'wrap' }} align="start">
+            <Form.Item name="price480p" label="480P（积分/秒）"><InputNumber min={0} style={{ width: 140 }} /></Form.Item>
+            <Form.Item name="price720p" label="720P（积分/秒）"><InputNumber min={0} style={{ width: 140 }} /></Form.Item>
+            <Form.Item name="price1080p" label="1080P（积分/秒）"><InputNumber min={0} style={{ width: 140 }} /></Form.Item>
+            <Form.Item name="videoPrice4k" label="4K（积分/秒）"><InputNumber min={0} style={{ width: 140 }} /></Form.Item>
+          </Space>}
+          {groupType === 'audio' && <Space style={{ display: 'flex' }} align="start">
+            <Form.Item name="priceStandard" label="标准（积分/秒）"><InputNumber min={0} style={{ width: 220 }} /></Form.Item>
+            <Form.Item name="priceHd" label="高清（积分/秒）"><InputNumber min={0} style={{ width: 220 }} /></Form.Item>
+          </Space>}
+
+          <Form.Item label="成员模型">
+            <Select mode="multiple" value={groupMembers.map(member => member.modelConfigId)} onChange={handleGroupMemberSelection} placeholder="只显示与模型组相同类型的模型" optionFilterProp="label" options={eligibleMemberModels.map(model => ({
+              value: model.id,
+              label: `${model.displayName || model.name}（${model.name}）`,
+            }))} />
+          </Form.Item>
+          {groupMembers.map((member, index) => {
+            const model = allModels.find(item => item.id === member.modelConfigId)
+            return (
+              <div key={member.modelConfigId} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 8, background: '#fafafa', borderRadius: 6 }}>
+                <Text style={{ flex: 1 }}>{index + 1}. {model?.displayName || model?.name || `模型 #${member.modelConfigId}`}</Text>
+                <Text type="secondary">权重</Text>
+                <InputNumber min={1} value={member.weight} onChange={value => setGroupMembers(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, weight: value || 1 } : item))} style={{ width: 80 }} />
+                <Button aria-label="上移" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => moveGroupMember(index, -1)} />
+                <Button aria-label="下移" icon={<ArrowDownOutlined />} disabled={index === groupMembers.length - 1} onClick={() => moveGroupMember(index, 1)} />
+              </div>
+            )
+          })}
+        </Form>
+      </Modal>
     </div>
   )
 }
