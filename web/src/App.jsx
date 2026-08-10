@@ -8,6 +8,7 @@ import Tokens from './pages/Tokens'
 import Profile from './pages/Profile'
 import Users from './pages/Users'
 import Models from './pages/Models'
+import ModelGroups from './pages/ModelGroups'
 import Coupons from './pages/Coupons'
 import Announcements from './pages/Announcements'
 import NotFound from './pages/NotFound'
@@ -45,6 +46,7 @@ export default function App() {
           <Route path="profile" element={<Profile />} />
           <Route path="users" element={<Users />} />
           <Route path="models" element={<Models />} />
+          <Route path="model-groups" element={<ModelGroups />} />
           <Route path="coupons" element={<Coupons />} />
           <Route path="announcements" element={<Announcements />} />
           <Route path="*" element={<NotFound />} />

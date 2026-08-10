@@ -59,6 +59,7 @@ export default function AppLayout() {
     ...(isAdmin ? [
       { key: '/channels', icon: <ApiOutlined />, label: '渠道管理' },
       { key: '/models', icon: <RobotOutlined />, label: '模型管理' },
+      { key: '/model-groups', icon: <TeamOutlined />, label: '模型组' },
     ] : []),
     { key: '/tokens', icon: <KeyOutlined />, label: 'Token 管理' },
     ...(isAdmin ? [
