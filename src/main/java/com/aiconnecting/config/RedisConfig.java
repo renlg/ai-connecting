@@ -151,6 +151,28 @@ public class RedisConfig {
     }
 
     /**
+     * 分布式锁续约（watchdog）Lua 脚本：仅当 key 当前的值等于调用方持有的 token 时才续期，
+     * 避免续约到已被其他实例重新获取（本实例锁已过期被抢占）的锁上。
+     *
+     * KEYS[1] = 锁 key
+     * ARGV[1] = 持有令牌
+     * ARGV[2] = 新的过期时间（毫秒）
+     *
+     * 返回: 1=续约成功, 0=未续约（key 不存在或 token 不匹配，调用方应停止续约）
+     */
+    @Bean
+    public RedisScript<Long> renewLockScript() {
+        String luaScript = """
+                if redis.call('GET', KEYS[1]) == ARGV[1] then
+                    return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+                else
+                    return 0
+                end
+                """;
+        return new DefaultRedisScript<>(luaScript, Long.class);
+    }
+
+    /**
      * 限流 Lua 脚本
      * 基于滑动窗口算法实现精确的速率限制
      *

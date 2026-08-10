@@ -1,5 +1,6 @@
 package com.aiconnecting.common;
 
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -11,6 +12,10 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.UUID;
 
 /**
@@ -37,6 +42,7 @@ public class RedisDistributedLock {
 
     private final StringRedisTemplate redisTemplate;
     private final RedisScript<Long> unlockScript;
+    private final RedisScript<Long> renewScript;
 
     /** 锁 key 命名空间前缀，避免共享 Redis 的不同环境之间互相锁定 */
     private final String keyPrefix;
@@ -44,11 +50,29 @@ public class RedisDistributedLock {
     /** Redis disabled/unavailable fallback for single-instance coordination values. */
     private final ConcurrentHashMap<String, Long> localLongValues = new ConcurrentHashMap<>();
 
+    /**
+     * 锁续约（watchdog）调度器：任务运行期间每 TTL/3 秒对持有中的锁执行一次原子续约（Lua CAS PEXPIRE），
+     * 使得只要任务仍在运行、TTL 就不会到期，从而可以把各任务的 TTL 设置得远小于其“理论最坏耗时”，
+     * 只需覆盖到下一次续约之前的窗口即可；进程崩溃（无法再续约）时锁最迟在 TTL 内自然释放。
+     * 线程数 2：本进程内同时持有的分布式锁数量很少（各 job 各一把），无需更大的并发度；
+     * daemon 线程，不阻止 JVM 正常退出。
+     */
+    private final ScheduledExecutorService renewalScheduler = Executors.newScheduledThreadPool(2, r -> {
+        Thread t = new Thread(r, "redis-lock-renewal");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /** redisKey（含前缀）-> 续约任务，用于 unlock / 续约失败时取消，避免线程/任务泄漏 */
+    private final ConcurrentHashMap<String, ScheduledFuture<?>> activeRenewals = new ConcurrentHashMap<>();
+
     public RedisDistributedLock(ObjectProvider<StringRedisTemplate> redisTemplateProvider,
                                  @Qualifier("lockUnlockScript") ObjectProvider<RedisScript<Long>> lockUnlockScriptProvider,
+                                 @Qualifier("renewLockScript") ObjectProvider<RedisScript<Long>> renewLockScriptProvider,
                                  @Value("${APP_ENV:default}") String appEnvironment) {
         this.redisTemplate = redisTemplateProvider.getIfAvailable();
         this.unlockScript = lockUnlockScriptProvider.getIfAvailable();
+        this.renewScript = renewLockScriptProvider.getIfAvailable();
         // APP_ENV must be identical for every instance in one deployment and distinct between
         // environments sharing Redis. Unlike spring.profiles.active, it is stable across profile ordering.
         // Deployments upgrading from historical unprefixed job:* keys can overlap for one old-key lease;
@@ -69,11 +93,16 @@ public class RedisDistributedLock {
         if (redisTemplate == null) {
             return LOCAL_TOKEN;
         }
+        String redisKey = keyPrefix + key;
         String token = UUID.randomUUID().toString();
         try {
             Boolean acquired = redisTemplate.opsForValue()
-                    .setIfAbsent(keyPrefix + key, token, Duration.ofSeconds(ttlSeconds));
-            return Boolean.TRUE.equals(acquired) ? token : null;
+                    .setIfAbsent(redisKey, token, Duration.ofSeconds(ttlSeconds));
+            if (Boolean.TRUE.equals(acquired)) {
+                startRenewal(redisKey, token, ttlSeconds);
+                return token;
+            }
+            return null;
         } catch (Exception e) {
             // FAIL-CLOSED：Redis 短暂异常时不知道其他实例是否已持锁，宁可本轮跳过，
             // 也不能像 LOCAL_TOKEN 那样让所有实例同时误判"我获取到了锁"而并发执行。
@@ -87,14 +116,63 @@ public class RedisDistributedLock {
      * 避免误删已被其他实例重新获取的锁（例如本实例执行超时、锁已自然过期后又被抢占的情况）。
      */
     public void unlock(String key, String token) {
+        String redisKey = keyPrefix + key;
+        if (!LOCAL_TOKEN.equals(token)) {
+            cancelRenewal(redisKey);
+        }
         if (redisTemplate == null || unlockScript == null || LOCAL_TOKEN.equals(token)) {
             return;
         }
         try {
-            redisTemplate.execute(unlockScript, Collections.singletonList(keyPrefix + key), token);
+            redisTemplate.execute(unlockScript, Collections.singletonList(redisKey), token);
         } catch (Exception e) {
             log.warn("释放分布式锁异常: key={}, error={}", key, e.getMessage());
         }
+    }
+
+    /**
+     * 启动续约 watchdog：每 TTL/3 秒尝试续约一次（至少间隔 1 秒），使用 Lua CAS 保证只有仍持有该锁的
+     * 实例才能续约成功；LOCAL_TOKEN 降级模式不会走到这里（调用方在 redisTemplate == null 时已提前返回）。
+     */
+    private void startRenewal(String redisKey, String token, long ttlSeconds) {
+        if (renewScript == null) {
+            return;
+        }
+        long intervalSeconds = Math.max(1, ttlSeconds / 3);
+        long ttlMillis = ttlSeconds * 1000;
+        ScheduledFuture<?> future = renewalScheduler.scheduleAtFixedRate(() -> {
+            try {
+                Long renewed = redisTemplate.execute(renewScript, Collections.singletonList(redisKey),
+                        token, String.valueOf(ttlMillis));
+                if (renewed == null || renewed == 0L) {
+                    log.debug("锁续约未成功（锁已过期或被其他实例持有），停止续约: key={}", redisKey);
+                    cancelRenewal(redisKey);
+                }
+            } catch (Exception e) {
+                // 续约异常（Redis 短暂不可用）：不中断任务本身，仅记录告警；锁可能因此提前过期，
+                // 由 tryLock 的 FAIL-CLOSED 语义兜底（届时另一实例最多与本实例短暂并发）。
+                log.warn("锁续约异常: key={}, error={}", redisKey, e.getMessage());
+            }
+        }, intervalSeconds, intervalSeconds, TimeUnit.SECONDS);
+        ScheduledFuture<?> previous = activeRenewals.put(redisKey, future);
+        if (previous != null) {
+            previous.cancel(false);
+        }
+    }
+
+    private void cancelRenewal(String redisKey) {
+        ScheduledFuture<?> future = activeRenewals.remove(redisKey);
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
+    /** 优雅关闭时取消所有续约任务，避免线程泄漏。 */
+    @PreDestroy
+    public void shutdown() {
+        activeRenewals.values().forEach(f -> f.cancel(false));
+        activeRenewals.clear();
+        renewalScheduler.shutdownNow();
     }
 
     /**

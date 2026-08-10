@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
+import com.aiconnecting.common.RedisDistributedLock;
 import com.aiconnecting.dto.LoginRequest;
 import com.aiconnecting.dto.LoginResponse;
 import com.aiconnecting.dto.RegisterRequest;
@@ -40,12 +41,18 @@ public class UserService {
     private final JwtUtils jwtUtils;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final CacheInvalidationService cacheInvalidationService;
+    private final RedisDistributedLock distributedLock;
 
     @Autowired(required = false)
     private RedisTemplate<String, Long> redisTemplate;
 
     private static final int LOGIN_MAX_FAIL_ATTEMPTS = 5;
     private static final long LOGIN_FAIL_LOCK_SECONDS = 3600;
+
+    /** 启动时补齐邀请码任务的分布式锁 key */
+    private static final String INVITE_CODE_LOCK_KEY = "job:ensureInviteCode";
+    /** 锁 TTL：5 分钟，覆盖启动时全表扫描 + 逐个补齐邀请码的预期耗时 */
+    private static final long INVITE_CODE_LOCK_TTL_SECONDS = 5 * 60L;
 
     /** 用户缓存，转发请求验证时避免每次查库，缓存 30 秒 */
     private final ConcurrentHashMap<Long, CachedUser> userCache = new ConcurrentHashMap<>();
@@ -98,7 +105,8 @@ public class UserService {
      */
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
-        ensureAllUsersHaveInviteCode();
+        distributedLock.runIfLocked(INVITE_CODE_LOCK_KEY, INVITE_CODE_LOCK_TTL_SECONDS,
+                this::ensureAllUsersHaveInviteCode);
     }
 
     public LoginResponse login(LoginRequest request, String clientIp) {
@@ -396,7 +404,20 @@ public class UserService {
                 .toList();
         for (User u : usersWithoutCode) {
             u.setInviteCode(generateInviteCode());
-            userRepository.save(u);
+            try {
+                userRepository.save(u);
+            } catch (DataIntegrityViolationException e) {
+                // 分布式锁租约过期或跨实例竞态时，两边都可能给同一用户补生邀请码，后完成的一方
+                // 在 uk_users_invite_code 唯一约束上冲突：重新查一次该用户是否已有邀请码，
+                // 已有则说明是另一实例写入的良性竞态，跳过继续处理下一个用户；
+                // 否则说明是真实错误（如约束不匹配），继续抛出中止整个批次。
+                User reloaded = userRepository.findById(u.getId()).orElse(null);
+                if (reloaded != null && reloaded.getInviteCode() != null && !reloaded.getInviteCode().isBlank()) {
+                    log.info("用户 {} 的邀请码已被其他实例补齐，跳过: {}", u.getUsername(), e.getMessage());
+                    continue;
+                }
+                throw e;
+            }
             cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + u.getId());
             log.info("为用户 {} 生成邀请码: {}", u.getUsername(), u.getInviteCode());
         }

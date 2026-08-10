@@ -138,7 +138,7 @@ cd web && npm install && npm run dev
 | `CHANNEL_ENCRYPTION_KEY` | 渠道 API Key 加密密钥（base64 编码的 32 字节 AES-256-GCM 密钥） | 是 |
 | `SPRING_PROFILES_ACTIVE` | Spring profile：留空/不设置为默认 SQLite；设为 `mysql` 切换到 MySQL（可选，供多实例部署使用） | 否 |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | MySQL 连接参数（`SPRING_PROFILES_ACTIVE=mysql` 时必填，`DB_HOST` 默认 `127.0.0.1`，`DB_PORT` 默认 3306，`DB_NAME` 默认 `ai_connecting`） | 仅 MySQL 模式需要 |
-| `DB_POOL_SIZE` | 数据库连接池最大连接数（默认 4，SQLite/MySQL 通用） | 否 |
+| `DB_POOL_SIZE` | 数据库连接池最大连接数（默认按 profile 区分：SQLite 默认 4，MySQL 默认 15） | 否 |
 | `REDIS_HOST` | Redis 地址 | 限流 / 渠道健康分布式模式 / 登录失败锁定需要 |
 | `REDIS_PORT` | Redis 端口（默认 6379） | 否 |
 | `REDIS_PASSWORD` | Redis 密码 | 否 |
@@ -184,7 +184,8 @@ bash deploy/deploy.sh
 - **启动期迁移逻辑**：`ModelTypeMigrationRunner`、`DashboardIndexMigrationRunner`、`VideoTaskMigrationRunner`、`UsageStatsIndexMigrationRunner` 均通过 `DataSource` 元数据探测当前方言（SQLite 用 `PRAGMA table_info(...)`，MySQL 用 `information_schema`），且对 `ALTER TABLE ADD COLUMN` / `CREATE INDEX` 等 DDL 做了并发容错：多个节点同时在存量库上启动时，后完成的一方收到 MySQL 1060（列已存在）/1061（索引已存在）/1091（索引已删除）等幂等冲突错误会直接忽略并继续启动，不会因为竞态互相打断。
 - **`UserService.initAdmin`（admin 账号初始化）**：多个节点在全新数据库上同时启动时，只会有一个节点成功插入 `admin` 用户，另一个节点捕获 `username` 唯一约束冲突（`DataIntegrityViolationException`）后按"已被其他实例创建"处理，正常继续启动，不会导致容器崩溃。
 - **`usage_stats` 聚合窗口去重**：`(start_time, end_time)` 现有唯一索引 `uk_usage_stats_window`（`schema-mysql.sql` 建表语句 + `UsageStats` 实体 `@Table(indexes = ...)`，SQLite ddl-auto 同步生效），在应用层去重（分布式锁失效/竞态）之外再加一层数据库约束防重复聚合行。存量库可能已有历史重复窗口，`UsageStatsIndexMigrationRunner` 启动时会先探测重复：干净则建唯一索引，存在重复则只记录 WARN 并跳过建索引，保证启动不因历史脏数据崩溃。
-- **定时任务分布式锁**：`StatsAggregationService`（每 15 分钟聚合、每日清理旧数据）、`ChannelProbeTask`（每小时探测被封禁渠道）、`OpenAiRelayService` 的视频任务对账均已通过 `RedisDistributedLock`（基于 Redis `SETNX` + Lua 原子释放）保证多节点下同一时刻只有一个节点执行。锁获取失败（其他实例持有，或 Redis 短暂异常）时**FAIL-CLOSED**——本轮直接跳过、不在本地降级执行，避免 Redis 抖动时多个节点同时误判"抢到锁"而重复跑；等待下一轮调度（如 15 分钟后）重试即可，不需要人工干预。
+- **定时任务分布式锁**：`StatsAggregationService`（每 15 分钟聚合、每日清理旧数据）、`ChannelProbeTask`（每小时探测被封禁渠道）、`OpenAiRelayService` 的视频任务对账、`UserService` 启动时补齐邀请码（`ensureAllUsersHaveInviteCode`）均已通过 `RedisDistributedLock`（基于 Redis `SETNX` + Lua 原子释放）保证多节点下同一时刻只有一个节点执行。锁获取失败（其他实例持有，或 Redis 短暂异常）时**FAIL-CLOSED**——本轮直接跳过、不在本地降级执行，避免 Redis 抖动时多个节点同时误判"抢到锁"而重复跑；等待下一轮调度（如 15 分钟后）重试即可，不需要人工干预。
+- **锁续约（watchdog）**：持锁期间 `RedisDistributedLock` 会在后台每 TTL/3 秒对锁执行一次原子续约（Lua CAS + `PEXPIRE`，仅当锁仍属于本实例才续约），任务运行多久锁就续多久；进程崩溃后无法再续约，锁最迟在 TTL 内自然释放。这使得各任务的 TTL 不必再覆盖"理论最坏耗时"，可以设置得更短：视频任务对账锁 TTL 由原先 4 小时收窄为 15 分钟，聚合/清理/渠道探测等锁 TTL 也相应收窄至 3～10 分钟，大幅降低进程崩溃后重复执行/对账延迟的窗口。
 - **进程内缓存跨实例失效广播**：渠道列表、模型配置、用户信息、Token 校验结果等 `ConcurrentHashMap` 本地缓存，写操作后通过 `CacheInvalidationService` 基于 Redis pub/sub 广播失效消息，其他节点收到后立即清除本地缓存副本，不需要等待 TTL 过期。
 - **Redis 现在是独立可插拔的基础设施，不再与限流开关绑定**：`app.redis.enabled` / `REDIS_ENABLED`（默认 `false`）单独控制 `RedisConfig` 是否装配（连接、分布式锁 `StringRedisTemplate`、缓存失效发布订阅等全部 Bean），`app.rate-limit.enabled` / `RATE_LIMIT_ENABLED` 只控制限流逻辑本身是否生效，二者不再互相牵连（此前的问题：限流默认关闭会连带整个 Redis 配置都不装配，导致分布式锁/缓存失效广播在默认配置下静默失效）。
 - **集群模式显式声明 + 启动期 Fail Fast**：新增 `app.cluster.enabled` / `CLUSTER_ENABLED`（默认 `false`）声明"这是一次多实例部署"。开启集群模式时 `ClusterConfigValidator` 不仅检查 `StringRedisTemplate` bean 是否装配，还会实际获取一个 `RedisConnectionFactory` 连接并执行 PING——因为 Lettuce 连接是懒连接，仅有 bean 不代表 Redis 真正可达；PING 失败（host/port/密码配置错误等）时在启动期直接抛出异常拒绝启动，而不是让分布式锁/缓存失效静默退化为单机行为、把不一致问题留到运行时才被发现；未开启集群模式时也会打印明确的 WARN 提示当前处于降级的单机协调模式。

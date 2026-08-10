@@ -30,12 +30,15 @@ public class ChannelProbeTask {
 
     /** 分布式锁 key，防止多机重复执行 */
     private static final String LOCK_KEY = "job:channelProbe";
-    /** 锁过期时间 30 分钟：小于调度间隔 1 小时，且可证明覆盖下面按 MAX_CHANNELS_PER_RUN 限流后的探测批次 */
-    private static final long LOCK_TTL_SECONDS = 30 * 60L;
+    /**
+     * 锁过期时间 5 分钟：小于调度间隔 1 小时。RedisDistributedLock 续约 watchdog（每 TTL/3 续约一次）
+     * 在探测批次仍在运行时持续延长锁有效期，TTL 不必再证明覆盖 MAX_CHANNELS_PER_RUN 全部探测的
+     * 理论最坏耗时；进程崩溃时锁最迟 5 分钟后自然释放。
+     */
+    private static final long LOCK_TTL_SECONDS = 5 * 60L;
     /**
      * 单次运行最多探测的渠道数：单渠道最坏耗时 = 10s 连接超时 + 15s 读超时 = 25s（无 callTimeout，
-     * 顺序探测）。60 × 25s = 1500s（25 分钟）< LOCK_TTL_SECONDS（30 分钟），留有余量，可证明覆盖。
-     * 超出本次批次的渠道仍处于熔断 OPEN 状态，会在下一轮调度（1 小时后）被探测。
+     * 顺序探测）。超出本次批次的渠道仍处于熔断 OPEN 状态，会在下一轮调度（1 小时后）被探测。
      */
     private static final int MAX_CHANNELS_PER_RUN = 60;
     /**

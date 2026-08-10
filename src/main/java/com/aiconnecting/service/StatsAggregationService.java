@@ -61,13 +61,18 @@ public class StatsAggregationService {
 
     /** 聚合任务分布式锁 key */
     private static final String AGGREGATION_LOCK_KEY = "job:statsAggregation";
-    /** 聚合任务锁 TTL：10 分钟，远大于单窗口聚合的预期耗时，覆盖 usage_logs 表较大时的极端情况 */
-    private static final long AGGREGATION_LOCK_TTL_SECONDS = 10 * 60L;
     /**
-     * 历史补齐与定时聚合使用同一把锁，但大库全历史扫描需要更长的租约。
-     * 60 分钟避免原 10 分钟 TTL 过期后另一实例重复执行；超大数据库仍应通过监控评估此上限。
+     * 聚合任务锁 TTL：3 分钟。RedisDistributedLock 现在有续约 watchdog（每 TTL/3 = 1 分钟续约一次），
+     * 只要任务仍在运行锁就不会过期，因此 TTL 不必再覆盖 usage_logs 表很大时的极端耗时，
+     * 只需大于正常单窗口聚合耗时即可；进程崩溃时锁最迟 3 分钟后自然释放。
      */
-    private static final long HISTORICAL_INIT_LOCK_TTL_SECONDS = 60 * 60L;
+    private static final long AGGREGATION_LOCK_TTL_SECONDS = 3 * 60L;
+    /**
+     * 历史补齐与定时聚合使用同一把锁。全历史扫描可能耗时较久，但续约 watchdog 会在任务运行期间
+     * 持续延长锁的有效期，因此 TTL 只需覆盖两次续约之间的窗口，10 分钟足够宽松；
+     * 进程崩溃时锁最迟 10 分钟后自然释放（原 60 分钟）。
+     */
+    private static final long HISTORICAL_INIT_LOCK_TTL_SECONDS = 10 * 60L;
     private static final int MAX_HISTORICAL_INIT_ATTEMPTS = 10;
 
     private final AtomicBoolean historicalInitializationPending = new AtomicBoolean();
@@ -82,8 +87,8 @@ public class StatsAggregationService {
 
     /** 清理任务分布式锁 key */
     private static final String CLEAN_LOCK_KEY = "job:cleanOldData";
-    /** 清理任务锁 TTL：10 分钟，覆盖 usage_stats 大批量删除的预期耗时 */
-    private static final long CLEAN_LOCK_TTL_SECONDS = 10 * 60L;
+    /** 清理任务锁 TTL：5 分钟。续约 watchdog 覆盖 usage_stats 大批量删除超出该窗口的情况 */
+    private static final long CLEAN_LOCK_TTL_SECONDS = 5 * 60L;
 
     /**
      * 序列化窗口的 exists-check -> aggregate -> insert -> commit 临界区，防止定时任务与启动时的

@@ -484,12 +484,12 @@ public class OpenAiRelayService {
      */
     private static final String RECONCILE_LOCK_KEY = "job:videoReconcile";
     /**
-     * 锁 TTL：4 小时。批次最多 50 个任务、逐个顺序请求上游，单个任务的上游查询无 callTimeout，
-     * 仅受 30s 连接 / 120s 读超时约束，最坏情况下单任务耗时可达 150s；
-     * 50 × 150s = 7500s ≈ 125 分钟，14400s 为其留出近一倍余量，也容纳持续慢读。
-     * 异常退出时会主动释放；进程崩溃时最长延迟 4 小时再对账，对每小时任务可接受。
+     * 锁 TTL：15 分钟。RedisDistributedLock 内置续约 watchdog（每 TTL/3 ≈ 5 分钟续约一次），
+     * 只要任务仍在运行锁就不会过期，因此 TTL 不必再覆盖“批次最多 50 个任务、单任务最坏 150s”
+     * 这种理论最长耗时（原为 4 小时），只需大于两次续约之间的间隔即可。
+     * 进程崩溃（无法再续约）时锁最迟 15 分钟后自然释放，相比原先 4 小时的对账延迟大幅收窄。
      */
-    private static final long RECONCILE_LOCK_TTL_SECONDS = 4 * 60 * 60L;
+    private static final long RECONCILE_LOCK_TTL_SECONDS = 15 * 60L;
 
     /**
      * 后台对账：定期扫描长时间未结算的视频任务，主动向上游查询状态并结算，

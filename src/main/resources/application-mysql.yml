@@ -10,7 +10,7 @@ spring:
     username: ${DB_USER}
     password: ${DB_PASSWORD}
     hikari:
-      maximum-pool-size: ${DB_POOL_SIZE:4}
+      maximum-pool-size: ${DB_POOL_SIZE:15}
       connection-test-query: "SELECT 1"
   jpa:
     database-platform: org.hibernate.dialect.MySQLDialect
