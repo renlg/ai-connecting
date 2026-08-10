@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -104,6 +105,27 @@ public class ModelGroupService {
         return Math.min(maxAttempts, MAX_ATTEMPTS_HARD_CAP);
     }
 
+    private static void validatePrices(ModelGroup group) {
+        validatePrice("inputPrice", group.getInputPrice());
+        validatePrice("outputPrice", group.getOutputPrice());
+        validatePrice("cachedPrice", group.getCachedPrice());
+        validatePrice("price1k", group.getPrice1k());
+        validatePrice("price2k", group.getPrice2k());
+        validatePrice("price4k", group.getPrice4k());
+        validatePrice("price480p", group.getPrice480p());
+        validatePrice("price720p", group.getPrice720p());
+        validatePrice("price1080p", group.getPrice1080p());
+        validatePrice("price4k(video)", group.getVideoPrice4k());
+        validatePrice("priceStandard", group.getPriceStandard());
+        validatePrice("priceHd", group.getPriceHd());
+    }
+
+    private static void validatePrice(String field, BigDecimal value) {
+        if (value != null && value.compareTo(BigDecimal.ZERO) < 0) {
+            throw new BusinessException(400, field + " 不能为负数");
+        }
+    }
+
     public void validateNameUnique(String name, Long excludeId) {
         if (name == null || name.isBlank()) {
             throw new BusinessException("模型组名称不能为空");
@@ -120,6 +142,7 @@ public class ModelGroupService {
 
     @Transactional
     public ModelGroup create(ModelGroup group, List<MemberInput> memberInputs) {
+        validatePrices(group);
         validateNameUnique(group.getName(), null);
         group.setType(validateType(group.getType()));
         group.setStrategy(normalizeStrategy(group.getStrategy()));
@@ -132,6 +155,7 @@ public class ModelGroupService {
 
     @Transactional
     public ModelGroup update(Long id, ModelGroup patch, List<MemberInput> memberInputs) {
+        validatePrices(patch);
         ModelGroup existing = getById(id);
         if (patch.getName() != null) {
             validateNameUnique(patch.getName(), id);

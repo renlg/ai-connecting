@@ -9,13 +9,16 @@ import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.service.UserService;
 import com.aiconnecting.entity.ModelConfig;
+import com.aiconnecting.entity.ModelGroup;
 import com.aiconnecting.service.ModelConfigService;
+import com.aiconnecting.service.ModelGroupService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.UsageLogService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.MediaType;
@@ -42,6 +45,8 @@ public class TokenController {
     private final UserService userService;
     private final RelayService relayService;
     private final ModelConfigService modelConfigService;
+    @Autowired(required = false)
+    private ModelGroupService modelGroupService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 普通用户查看自己的 token */
@@ -76,6 +81,7 @@ public class TokenController {
     @PostMapping
     public ApiResponse<Token> create(@AuthenticationPrincipal User user,
                                      @RequestBody TokenRequest request) {
+        validateAllowedModelGroups(user, request.getAllowedModels());
         return ApiResponse.success(tokenService.create(user.getId(), request));
     }
 
@@ -84,6 +90,8 @@ public class TokenController {
                                      @PathVariable Long id, @RequestBody TokenRequest request) {
         Token token = tokenService.getById(id);
         checkTokenOwner(user, token);
+        User tokenOwner = token.getUserId().equals(user.getId()) ? user : userService.getById(token.getUserId());
+        validateAllowedModelGroups(tokenOwner, request.getAllowedModels());
         return ApiResponse.success(tokenService.update(id, request));
     }
 
@@ -376,7 +384,43 @@ public class TokenController {
             item.put("cacheCreditRate", model.getCacheCreditRate());
             result.add(item);
         }
+        if (modelGroupService != null) {
+            for (ModelGroup group : modelGroupService.listEnabled()) {
+                if (Boolean.TRUE.equals(group.getAdminOnly()) && !isAdmin) continue;
+                long availableMembers = modelGroupService.listMemberViews(group.getId()).stream()
+                        .map(ModelGroupService.MemberView::modelConfig)
+                        .filter(model -> model.getStatus() != null && model.getStatus() == 1)
+                        .filter(model -> isAdmin || !Boolean.TRUE.equals(model.getAdminOnly()))
+                        .count();
+                if (availableMembers == 0) continue;
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("id", "group:" + group.getId());
+                item.put("name", group.getName());
+                item.put("displayName", group.getName() + "（模型组）");
+                item.put("type", group.getType());
+                item.put("kind", "group");
+                item.put("isGroup", true);
+                item.put("memberCount", availableMembers);
+                result.add(item);
+            }
+        }
         return ApiResponse.success(result);
+    }
+
+    private void validateAllowedModelGroups(User user, String allowedModels) {
+        if (modelGroupService == null || "admin".equals(user.getRole())
+                || allowedModels == null || allowedModels.isBlank()) {
+            return;
+        }
+        for (String name : allowedModels.split(",")) {
+            String trimmed = name.trim();
+            if (trimmed.isEmpty()) continue;
+            modelGroupService.findByName(trimmed)
+                    .filter(group -> Boolean.TRUE.equals(group.getAdminOnly()))
+                    .ifPresent(group -> {
+                        throw new BusinessException(403, "普通用户的 Token 不能授权管理员专用模型组: " + group.getName());
+                    });
+        }
     }
 
     /**

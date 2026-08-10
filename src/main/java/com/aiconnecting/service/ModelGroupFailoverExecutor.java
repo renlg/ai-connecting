@@ -76,13 +76,15 @@ public class ModelGroupFailoverExecutor {
     }
 
     /** 按 id 解析故障转移组（fallback_group_id），类型不符或未启用时返回空，调用方应放弃转入组、直接抛出原错误 */
-    public Optional<ModelGroup> resolveFallbackGroup(Long groupId, String expectedType) {
+    public Optional<ModelGroup> resolveFallbackGroup(Long groupId, String expectedType, boolean isAdmin) {
         if (groupId == null) {
             return Optional.empty();
         }
-        return modelGroupService.findById(groupId)
+        Optional<ModelGroup> resolved = modelGroupService.findById(groupId)
                 .filter(g -> Boolean.TRUE.equals(g.getEnabled()))
                 .filter(g -> expectedType.equals(g.getType()));
+        resolved.ifPresent(group -> checkGroupAdminOnly(group, isAdmin));
+        return resolved;
     }
 
     private boolean isFastFail(BusinessException e) {
@@ -94,7 +96,7 @@ public class ModelGroupFailoverExecutor {
      * 远超 {@link #WALL_CLOCK_BUDGET_MS}，因此每次尝试的超时必须收窄到"不超过剩余预算"
      */
     private long remainingBudgetMs(long deadline) {
-        return Math.max(deadline - System.currentTimeMillis(), 1000L);
+        return Math.max(0L, deadline - System.currentTimeMillis());
     }
 
     private String rewriteModelField(String requestBody, String model) {
@@ -110,16 +112,33 @@ public class ModelGroupFailoverExecutor {
         return requestBody;
     }
 
-    private void recordModelFailure(Long channelId, Long modelConfigId, int code) {
-        ModelHealthTracker.FailureType type;
-        if (code == 429) {
-            type = ModelHealthTracker.FailureType.RATE_LIMIT;
-        } else if (code == 404) {
-            type = ModelHealthTracker.FailureType.MODEL_NOT_FOUND;
-        } else {
-            type = ModelHealthTracker.FailureType.RATE_LIMIT;
+    private void recordFailure(Channel channel, Long modelConfigId, BusinessException error) {
+        FailureClassifier.Classification classification = FailureClassifier.classify(error);
+        switch (classification.kind()) {
+            case RATE_LIMIT -> modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
+                    ModelHealthTracker.FailureType.RATE_LIMIT, classification.retryAfterSeconds());
+            case QUOTA -> modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
+                    ModelHealthTracker.FailureType.QUOTA, classification.retryAfterSeconds());
+            case MODEL_NOT_FOUND -> modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
+                    ModelHealthTracker.FailureType.MODEL_NOT_FOUND);
+            case CHANNEL -> support.channelHealthTracker.recordFailure(channel.getId(),
+                    ChannelHealthTracker.ErrorCategory.fromStatusCode(error.getCode()), error.getMessage());
+            case FAST_FAIL -> { }
         }
-        modelHealthTracker.recordFailure(channelId, modelConfigId, type);
+    }
+
+    private BusinessException upstreamFailure(int code, String body, Long retryAfterSeconds) {
+        return BusinessException.upstream(code, "上游 API 错误: " + body, body, retryAfterSeconds);
+    }
+
+    private Long retryAfterSeconds(HttpURLConnection conn) {
+        String value = conn.getHeaderField("Retry-After");
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Math.max(0L, Long.parseLong(value.trim()));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     // ==================== 文本（非流式） ====================
@@ -141,6 +160,7 @@ public class ModelGroupFailoverExecutor {
                                    String requestBody, HttpServletRequest httpRequest) {
         String groupName = group.getName();
         boolean isAdmin = "admin".equals(ctx.user().getRole());
+        checkGroupAdminOnly(group, isAdmin);
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
             throw new BusinessException(503, "模型组无可用成员: " + groupName);
@@ -183,6 +203,7 @@ public class ModelGroupFailoverExecutor {
             try {
                 String response;
                 long attemptTimeoutMs = remainingBudgetMs(deadline);
+                if (attemptTimeoutMs <= 0) break;
                 if (support.isGeminiTypeChannel(channel)) {
                     String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(upstreamBody);
                     response = support.forwardGeminiRequest(channel, geminiBody, attemptTimeoutMs);
@@ -202,9 +223,8 @@ public class ModelGroupFailoverExecutor {
                 if (isFastFail(e)) {
                     throw e;
                 }
-                support.channelHealthTracker.recordFailure(channel.getId(),
-                        ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage());
-                recordModelFailure(channel.getId(), modelConfigId, e.getCode());
+                recordFailure(channel, modelConfigId, e);
+                if (remainingBudgetMs(deadline) <= 0) break;
             }
         }
         throw new BusinessException(502, "模型组所有成员均不可用，最后错误: " + lastError);
@@ -264,6 +284,13 @@ public class ModelGroupFailoverExecutor {
                                    HttpServletRequest httpRequest, HttpServletResponse httpResponse) throws IOException {
         ModelGroup group = requireGroup(groupName, "text");
         RelaySupport.RelayContext ctx = support.prepareGroupContext(tokenKey, groupName);
+        relayStreamRequestWithContext(ctx, group, path, requestBody, httpRequest, httpResponse);
+    }
+
+    void relayStreamRequestWithContext(RelaySupport.RelayContext ctx, ModelGroup group, String path,
+                                       String requestBody, HttpServletRequest httpRequest,
+                                       HttpServletResponse httpResponse) throws IOException {
+        String groupName = group.getName();
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
@@ -306,6 +333,7 @@ public class ModelGroupFailoverExecutor {
 
             HttpURLConnection conn;
             long attemptTimeoutMs = remainingBudgetMs(deadline);
+            if (attemptTimeoutMs <= 0) break;
             try {
                 if (support.isGeminiTypeChannel(channel)) {
                     String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(modifiedBody);
@@ -315,8 +343,8 @@ public class ModelGroupFailoverExecutor {
                 }
             } catch (IOException e) {
                 lastError = e.getMessage();
-                support.channelHealthTracker.recordFailure(channel.getId(), ChannelHealthTracker.ErrorCategory.fromException(e), e.getMessage());
-                recordModelFailure(channel.getId(), modelConfigId, 502);
+                recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(), e));
+                if (remainingBudgetMs(deadline) <= 0) break;
                 continue;
             }
 
@@ -326,13 +354,14 @@ public class ModelGroupFailoverExecutor {
                     String errorBody = conn.getErrorStream() != null
                             ? new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8) : "";
                     lastError = "HTTP " + code + " - " + errorBody;
+                    BusinessException upstreamError = upstreamFailure(code, errorBody, retryAfterSeconds(conn));
                     conn.disconnect();
-                    support.channelHealthTracker.recordFailure(channel.getId(), ChannelHealthTracker.ErrorCategory.fromStatusCode(code), lastError);
-                    if (!FailureClassifier.isSwitchable(code, errorBody)) {
+                    if (!FailureClassifier.isSwitchable(upstreamError)) {
                         RelayServiceUtils.writeOpenAiError(httpResponse, code, "上游返回错误: " + errorBody);
                         return;
                     }
-                    recordModelFailure(channel.getId(), modelConfigId, code);
+                    recordFailure(channel, modelConfigId, upstreamError);
+                    if (remainingBudgetMs(deadline) <= 0) break;
                     continue; // 首字节尚未发出，可以安全切换成员
                 }
 
@@ -344,8 +373,9 @@ public class ModelGroupFailoverExecutor {
                 if (!streamResult.bytesWritten()) {
                     // 上游返回 200 但立即 EOF，客户端从未收到任何数据：视为失败，仍可安全切换成员
                     lastError = "上游返回空响应（HTTP 200 但无数据流）";
-                    support.channelHealthTracker.recordFailure(channel.getId(), ChannelHealthTracker.ErrorCategory.CONNECTION_ERROR, lastError);
-                    recordModelFailure(channel.getId(), modelConfigId, 502);
+                    recordFailure(channel, modelConfigId, new BusinessException(502, lastError,
+                            new IOException(lastError)));
+                    if (remainingBudgetMs(deadline) <= 0) break;
                     continue;
                 }
 
@@ -355,21 +385,46 @@ public class ModelGroupFailoverExecutor {
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 modelHealthTracker.recordSuccess(channel.getId(), modelConfigId);
                 return;
+            } catch (RelaySupport.SseStreamingException e) {
+                conn.disconnect();
+                lastError = e.getMessage();
+                log.error("模型组 {} 成员 {} (渠道 {}) 流式请求异常: {}", groupName, memberModel, channel.getId(), e.getMessage());
+                recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(), e));
+                if (e.partialResult().bytesWritten()) {
+                    finishBrokenSse(httpResponse, "模型组 " + groupName + " 流式响应中断: " + lastError);
+                    return;
+                }
+                if (remainingBudgetMs(deadline) <= 0) break;
             } catch (Exception e) {
                 conn.disconnect();
                 lastError = e.getMessage();
                 log.error("模型组 {} 成员 {} (渠道 {}) 流式请求异常: {}", groupName, memberModel, channel.getId(), e.getMessage());
-                support.channelHealthTracker.recordFailure(channel.getId(), ChannelHealthTracker.ErrorCategory.fromException(e), e.getMessage());
+                recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(), e));
                 if (httpResponse.isCommitted()) {
-                    // 已经开始向客户端写出数据：不能再切换成员，只能在协议层补写 SSE error 事件后结束
-                    SseUtils.writeSseErrorEvent(httpResponse, "模型组 " + groupName + " 流式响应中断: " + lastError);
+                    finishBrokenSse(httpResponse, "模型组 " + groupName + " 流式响应中断: " + lastError);
                     return;
                 }
-                recordModelFailure(channel.getId(), modelConfigId, 502);
+                if (remainingBudgetMs(deadline) <= 0) break;
             }
         }
         if (!httpResponse.isCommitted()) {
             RelayServiceUtils.writeOpenAiError(httpResponse, 502, "模型组所有成员均不可用: " + lastError);
+        }
+    }
+
+    private void finishBrokenSse(HttpServletResponse response, String message) {
+        try {
+            SseUtils.writeSseErrorEvent(response, message);
+            response.getWriter().flush();
+        } catch (Exception ignored) {
+        }
+        try {
+            response.flushBuffer();
+        } catch (Exception ignored) {
+        }
+        try {
+            response.getWriter().close();
+        } catch (Exception ignored) {
         }
     }
 
@@ -401,22 +456,15 @@ public class ModelGroupFailoverExecutor {
         checkGroupAdminOnly(group, "admin".equals(ctx.user().getRole()));
         RelaySupport.MediaParams params = support.parseMediaParams(requestBody);
         BigDecimal creditCost = billingService.calculateImageCreditCost(group, params.size(), params.n());
-        RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
 
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
-            support.refundMediaCharge(ctx, charge);
             throw new BusinessException(503, "模型组无可用成员: " + groupName);
         }
 
-        MediaAttemptResult result;
-        try {
-            result = attemptMedia(ctx, group, candidates, path, requestBody);
-        } catch (RuntimeException e) {
-            support.refundMediaCharge(ctx, charge);
-            throw e;
-        }
+        MediaAttemptResult result = attemptMedia(ctx, group, candidates, path, requestBody, creditCost);
+        RelaySupport.MediaCharge charge = result.charge();
 
         int actualCount = countReturnedImages(result.response());
         int requestedN = support.extractRequestedCount(requestBody);
@@ -447,8 +495,13 @@ public class ModelGroupFailoverExecutor {
                                  HttpServletRequest httpRequest, HttpServletResponse httpResponse) throws IOException {
         ModelGroup group = requireGroup(groupName, "audio");
         RelaySupport.RelayContext ctx = support.prepareGroupContext(tokenKey, groupName);
-        checkGroupAdminOnly(group, "admin".equals(ctx.user().getRole()));
+        relayAudioSpeechWithContext(ctx, group, requestBody, httpRequest, httpResponse);
+    }
 
+    void relayAudioSpeechWithContext(RelaySupport.RelayContext ctx, ModelGroup group, String requestBody,
+                                     HttpServletRequest httpRequest, HttpServletResponse httpResponse) throws IOException {
+        String groupName = group.getName();
+        checkGroupAdminOnly(group, "admin".equals(ctx.user().getRole()));
         JsonNode body = support.objectMapper.readTree(requestBody);
         if (!body.isObject()) {
             throw new BusinessException(400, "请求体必须是 JSON 对象");
@@ -465,7 +518,6 @@ public class ModelGroupFailoverExecutor {
         int estimatedSeconds = Math.max(1, (int) Math.ceil(
                 inputNode.asText().codePointCount(0, inputNode.asText().length()) / (14.0 * speed)));
         BigDecimal estimatedCost = billingService.calculateAudioCreditCost(group, quality, estimatedSeconds);
-        RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, estimatedCost);
 
         ObjectNode upstreamBody = ((ObjectNode) body).deepCopy();
         upstreamBody.remove("quality");
@@ -475,18 +527,13 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
-            support.refundMediaCharge(ctx, charge);
             throw new BusinessException(503, "模型组无可用成员: " + groupName);
         }
 
         String baseSpeechBody = support.objectMapper.writeValueAsString(upstreamBody);
-        MediaBinaryAttemptResult result;
-        try {
-            result = attemptBinaryMedia(ctx, group, candidates, "/v1/audio/speech", baseSpeechBody);
-        } catch (RuntimeException e) {
-            support.refundMediaCharge(ctx, charge);
-            throw e;
-        }
+        MediaBinaryAttemptResult result = attemptBinaryMedia(ctx, group, candidates,
+                "/v1/audio/speech", baseSpeechBody, estimatedCost);
+        RelaySupport.MediaCharge charge = result.charge();
 
         byte[] audio = result.binary().body();
         String responseFormat = body.hasNonNull("response_format") ? body.get("response_format").asText() : "mp3";
@@ -526,9 +573,10 @@ public class ModelGroupFailoverExecutor {
                                                                       String contentType, MultiValueMap<String, String> otherFormFields,
                                                                       boolean rawPassThrough, int seconds, String quality,
                                                                       HttpServletRequest httpRequest) {
+        boolean isAdmin = "admin".equals(ctx.user().getRole());
+        checkGroupAdminOnly(group, isAdmin);
         BigDecimal creditCost = billingService.calculateAudioCreditCost(group, quality, seconds);
         RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
-        boolean isAdmin = "admin".equals(ctx.user().getRole());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
             support.refundMediaCharge(ctx, charge);
@@ -575,7 +623,9 @@ public class ModelGroupFailoverExecutor {
                         mb.addFormDataPart(field.getKey(), value);
                     }
                 }
-                RelaySupport.BinaryResponse response = support.forwardMultipartRequest(channel, path, mb.build());
+                long timeoutMs = remainingBudgetMs(deadline);
+                if (timeoutMs <= 0) break;
+                RelaySupport.BinaryResponse response = support.forwardMultipartRequest(channel, path, mb.build(), timeoutMs);
                 if (!rawPassThrough && !isValidTranscriptionJson(response.body())) {
                     throw new BusinessException(502, "上游返回无法解析的转写结果");
                 }
@@ -593,9 +643,8 @@ public class ModelGroupFailoverExecutor {
                     support.refundMediaCharge(ctx, charge);
                     throw e;
                 }
-                support.channelHealthTracker.recordFailure(channel.getId(),
-                        ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage());
-                recordModelFailure(channel.getId(), modelConfigId, e.getCode());
+                recordFailure(channel, modelConfigId, e);
+                if (remainingBudgetMs(deadline) <= 0) break;
             }
         }
         support.refundMediaCharge(ctx, charge);
@@ -629,22 +678,15 @@ public class ModelGroupFailoverExecutor {
         RelaySupport.MediaParams params = support.parseMediaParams(requestBody);
         BigDecimal unitPrice = billingService.resolveVideoUnitPrice(group, params.size());
         BigDecimal creditCost = billingService.calculateVideoCreditCost(group, params.size(), params.durationSeconds());
-        RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
 
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
-            support.refundMediaCharge(ctx, charge);
             throw new BusinessException(503, "模型组无可用成员: " + groupName);
         }
 
-        MediaAttemptResult result;
-        try {
-            result = attemptMedia(ctx, group, candidates, path, requestBody);
-        } catch (RuntimeException e) {
-            support.refundMediaCharge(ctx, charge);
-            throw e;
-        }
+        MediaAttemptResult result = attemptMedia(ctx, group, candidates, path, requestBody, creditCost);
+        RelaySupport.MediaCharge charge = result.charge();
 
         JsonNode json;
         try {
@@ -725,10 +767,18 @@ public class ModelGroupFailoverExecutor {
         usageLogService.recordPrepaidUsage(usageLog);
     }
 
+    private void releaseAttemptCharge(RelaySupport.RelayContext ctx, RelaySupport.MediaCharge charge) {
+        if (!support.refundMediaCharge(ctx, charge)) {
+            throw new BusinessException(500, "本次失败成员的预扣积分退回失败，已记录待人工补偿，停止切换成员");
+        }
+    }
+
     // ==================== 媒体请求的通用成员切换骨架 ====================
 
-    private record MediaAttemptResult(String response, Channel channel, String actualModel, long startTime) {}
-    private record MediaBinaryAttemptResult(RelaySupport.BinaryResponse binary, Channel channel, String actualModel, long startTime) {}
+    private record MediaAttemptResult(String response, Channel channel, String actualModel, long startTime,
+                                      RelaySupport.MediaCharge charge) {}
+    private record MediaBinaryAttemptResult(RelaySupport.BinaryResponse binary, Channel channel, String actualModel,
+                                            long startTime, RelaySupport.MediaCharge charge) {}
 
     /**
      * 媒体（图片/视频）请求的成员切换骨架：预扣已在调用方完成，本方法只负责选成员+选渠道+转发，
@@ -736,7 +786,7 @@ public class ModelGroupFailoverExecutor {
      */
     private MediaAttemptResult attemptMedia(RelaySupport.RelayContext ctx, ModelGroup group,
                                             List<ModelGroupRoutingService.Candidate> candidates,
-                                            String path, String requestBody) {
+                                            String path, String requestBody, BigDecimal creditCost) {
         long startTime = System.currentTimeMillis();
         long deadline = startTime + WALL_CLOCK_BUDGET_MS;
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
@@ -764,24 +814,30 @@ public class ModelGroupFailoverExecutor {
             }
             String memberModel = candidate.modelConfig().getName();
             attempts++;
+            long timeoutMs = remainingBudgetMs(deadline);
+            if (timeoutMs <= 0) break;
+            RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
             try {
                 String upstreamBody = "image".equals(group.getType())
                         ? support.prepareImageRequestBody(channel, rewriteModelField(requestBody, memberModel))
                         : rewriteModelField(requestBody, memberModel);
-                String response = support.forwardRequest(channel, path, upstreamBody, remainingBudgetMs(deadline));
+                String response = support.forwardRequest(channel, path, upstreamBody, timeoutMs);
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 modelHealthTracker.recordSuccess(channel.getId(), modelConfigId);
-                return new MediaAttemptResult(response, channel, memberModel, startTime);
+                return new MediaAttemptResult(response, channel, memberModel, startTime, charge);
             } catch (BusinessException e) {
+                releaseAttemptCharge(ctx, charge);
                 lastError = e.getMessage();
                 log.error("模型组 {} 成员 {} (渠道 {}) 媒体请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 if (isFastFail(e)) {
                     throw e;
                 }
-                support.channelHealthTracker.recordFailure(channel.getId(),
-                        ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage());
-                recordModelFailure(channel.getId(), modelConfigId, e.getCode());
+                recordFailure(channel, modelConfigId, e);
+                if (remainingBudgetMs(deadline) <= 0) break;
+            } catch (RuntimeException e) {
+                releaseAttemptCharge(ctx, charge);
+                throw e;
             }
         }
         throw new BusinessException(502, "模型组所有成员均不可用，最后错误: " + lastError);
@@ -789,7 +845,7 @@ public class ModelGroupFailoverExecutor {
 
     private MediaBinaryAttemptResult attemptBinaryMedia(RelaySupport.RelayContext ctx, ModelGroup group,
                                                          List<ModelGroupRoutingService.Candidate> candidates,
-                                                         String path, String baseBodyJson) {
+                                                         String path, String baseBodyJson, BigDecimal creditCost) {
         long startTime = System.currentTimeMillis();
         long deadline = startTime + WALL_CLOCK_BUDGET_MS;
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
@@ -817,20 +873,26 @@ public class ModelGroupFailoverExecutor {
             }
             String memberModel = candidate.modelConfig().getName();
             attempts++;
+            long timeoutMs = remainingBudgetMs(deadline);
+            if (timeoutMs <= 0) break;
+            RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
             try {
                 String upstreamBody = rewriteModelField(baseBodyJson, memberModel);
-                RelaySupport.BinaryResponse response = support.forwardBinaryRequest(channel, path, upstreamBody, remainingBudgetMs(deadline));
+                RelaySupport.BinaryResponse response = support.forwardBinaryRequest(channel, path, upstreamBody, timeoutMs);
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 modelHealthTracker.recordSuccess(channel.getId(), modelConfigId);
-                return new MediaBinaryAttemptResult(response, channel, memberModel, startTime);
+                return new MediaBinaryAttemptResult(response, channel, memberModel, startTime, charge);
             } catch (BusinessException e) {
+                releaseAttemptCharge(ctx, charge);
                 lastError = e.getMessage();
                 if (isFastFail(e)) {
                     throw e;
                 }
-                support.channelHealthTracker.recordFailure(channel.getId(),
-                        ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage());
-                recordModelFailure(channel.getId(), modelConfigId, e.getCode());
+                recordFailure(channel, modelConfigId, e);
+                if (remainingBudgetMs(deadline) <= 0) break;
+            } catch (RuntimeException e) {
+                releaseAttemptCharge(ctx, charge);
+                throw e;
             }
         }
         throw new BusinessException(502, "模型组所有成员均不可用，最后错误: " + lastError);

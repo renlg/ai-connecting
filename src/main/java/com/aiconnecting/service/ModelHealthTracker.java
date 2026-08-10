@@ -37,7 +37,7 @@ public class ModelHealthTracker {
     }
 
     /**
-     * @param retryAfterSeconds 上游返回的 Retry-After（秒），仅对 RATE_LIMIT 有效；为 null 时使用默认冷却时长
+     * @param retryAfterSeconds 上游返回的 Retry-After/配额重置提示（秒）；为 null 时使用默认冷却时长
      */
     public void recordFailure(Long channelId, Long modelConfigId, FailureType type, Long retryAfterSeconds) {
         if (channelId == null || modelConfigId == null) {
@@ -46,7 +46,8 @@ public class ModelHealthTracker {
         long cooldownMs = switch (type) {
             case RATE_LIMIT -> (retryAfterSeconds != null && retryAfterSeconds > 0)
                     ? retryAfterSeconds * 1000L : RATE_LIMIT_COOLDOWN_MS;
-            case QUOTA -> QUOTA_COOLDOWN_MS;
+            case QUOTA -> (retryAfterSeconds != null && retryAfterSeconds > 0)
+                    ? retryAfterSeconds * 1000L : QUOTA_COOLDOWN_MS;
             case MODEL_NOT_FOUND -> MODEL_NOT_FOUND_COOLDOWN_MS;
         };
         long until = System.currentTimeMillis() + cooldownMs;

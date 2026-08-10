@@ -1,52 +1,179 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.util.Locale;
 import java.util.Set;
 
-/**
- * 语义化的上游/渠道失败分类：决定单模型 fallback_group_id 与模型组内成员切换时是否允许"换一个继续试"，
- * 还是应当立即向客户端报错（换了大概率仍会失败，或错误与上游/渠道本身无关）。
- * <p>
- * 分类依据 {@link BusinessException#getCode()}（各转发方法已将 HTTP 状态码或本地网络异常映射为
- * 对应的伪 HTTP 状态码，如 502/504）以及错误消息中携带的上游原始响应体（可能包含
- * error.code / error.type 等字段），不引入新的异常类型，避免改动 forwardRequest 等
- * 被单模型路径共用的方法对客户端可见的错误格式。
- */
+/** Classifies failures using structured upstream error metadata whenever it is available. */
 final class FailureClassifier {
 
-    private FailureClassifier() {
-    }
+    enum Kind { RATE_LIMIT, QUOTA, MODEL_NOT_FOUND, CHANNEL, FAST_FAIL }
 
-    /** 出现在上游错误消息中即视为"模型不存在/配额/限流"类错误，允许切换 */
-    private static final Set<String> SWITCH_KEYWORDS = Set.of(
-            "model_not_found", "model_decommissioned", "quota", "rate_limit", "insufficient");
+    record Classification(boolean switchable, Kind kind, Long retryAfterSeconds) {}
 
-    /**
-     * @return true = 允许切换（换渠道/换成员/转入故障转移组）；false = 快速失败，直接向客户端报错
-     */
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Set<String> MODEL_NOT_FOUND = Set.of("model_not_found", "model_decommissioned");
+    private static final Set<String> QUOTA = Set.of(
+            "quota", "insufficient_quota", "insufficient_user_quota");
+    private static final Set<String> RATE_LIMIT = Set.of(
+            "rate_limit", "rate_limit_exceeded", "overloaded");
+    private static final Set<String> UPSTREAM_AUTH = Set.of(
+            "authentication_error", "invalid_api_key", "unauthorized", "upstream_auth_error");
+    private static final Set<String> INVALID_REQUEST = Set.of(
+            "invalid_request_error", "invalid_request", "invalid_json");
+    private static final Set<String> POLICY = Set.of(
+            "moderation", "policy", "content_filter", "content_policy_violation");
+
+    private FailureClassifier() {}
+
     static boolean isSwitchable(BusinessException e) {
-        return isSwitchable(e.getCode(), e.getMessage());
+        return classify(e).switchable();
     }
 
-    /** 供直接持有 HTTP 状态码 + 上游原始响应体的调用方使用（如 SSE 路径读取 HttpURLConnection 状态） */
-    static boolean isSwitchable(int code, String errorBody) {
-        String lower = errorBody == null ? "" : errorBody.toLowerCase(Locale.ROOT);
-        // 429 限流、408/5xx 超时或上游/渠道故障、401/403 上游鉴权失败（渠道密钥可能已失效）均应切换
-        if (code == 429 || code == 408 || code >= 500 || code == 401 || code == 403) {
-            return true;
+    static Classification classify(BusinessException e) {
+        BusinessException upstream = findUpstreamResponse(e);
+        if (upstream != null) {
+            return classifyUpstream(upstream.getCode(), upstream.getUpstreamResponseBody(),
+                    upstream.getRetryAfterSeconds());
         }
-        // 400/404 本身通常是客户端请求问题，但 model_not_found / 配额 / 限流 类错误仍应切换
-        if (code == 400 || code == 404) {
-            for (String kw : SWITCH_KEYWORDS) {
-                if (lower.contains(kw)) {
-                    return true;
-                }
-            }
-            return false;
+
+        Throwable cause = rootCause(e);
+        if (cause instanceof SocketTimeoutException) {
+            return new Classification(true, Kind.CHANNEL, null);
         }
-        // 413（请求体过大）、422（参数校验失败）等：客户端请求本身有问题，换成员大概率仍会失败
-        return false;
+        if (cause instanceof IOException && !isCancellation(cause)) {
+            return new Classification(true, Kind.CHANNEL, null);
+        }
+        // A locally-created BusinessException is a balance/permission/validation failure, even if its
+        // pseudo status happens to be 429/502. It must never activate a fallback group.
+        return new Classification(false, Kind.FAST_FAIL, null);
     }
+
+    static boolean isSwitchable(int code, String errorBody) {
+        return classifyUpstream(code, errorBody, null).switchable();
+    }
+
+    static Classification classifyUpstream(int code, String errorBody, Long retryAfterSeconds) {
+        if (code == 408 || code >= 500) {
+            return new Classification(true, Kind.CHANNEL, retryAfterSeconds);
+        }
+        if (code == 429) {
+            return new Classification(true, Kind.RATE_LIMIT, retryAfterSeconds);
+        }
+        ParsedError parsed = parse(errorBody);
+        if (parsed != null) {
+            Set<String> values = new java.util.HashSet<>();
+            values.add(parsed.code());
+            values.add(parsed.type());
+            if (contains(values, "context_length_exceeded") || intersects(values, INVALID_REQUEST)
+                    || intersects(values, POLICY)) {
+                return new Classification(false, Kind.FAST_FAIL, retryAfterSeconds);
+            }
+            if (intersects(values, MODEL_NOT_FOUND)) {
+                return new Classification(true, Kind.MODEL_NOT_FOUND, retryAfterSeconds);
+            }
+            if (intersects(values, QUOTA)) {
+                return new Classification(true, Kind.QUOTA, retryAfterSeconds);
+            }
+            if (intersects(values, RATE_LIMIT)) {
+                return new Classification(true, Kind.RATE_LIMIT, retryAfterSeconds);
+            }
+            if (intersects(values, UPSTREAM_AUTH)) {
+                return new Classification(true, Kind.CHANNEL, retryAfterSeconds);
+            }
+            Kind messageKind = classifyStructuredMessage(parsed.message());
+            if (messageKind != null) {
+                return new Classification(messageKind != Kind.FAST_FAIL, messageKind, retryAfterSeconds);
+            }
+        } else {
+            // Last-resort compatibility for non-JSON upstreams only.
+            Kind fallback = classifyLegacyMessage(errorBody);
+            if (fallback != null) {
+                return new Classification(fallback != Kind.FAST_FAIL, fallback, retryAfterSeconds);
+            }
+        }
+
+        if (code == 413 || code == 400 || code == 422) {
+            return new Classification(false, Kind.FAST_FAIL, retryAfterSeconds);
+        }
+        if (code == 401 || code == 403) {
+            return new Classification(true, Kind.CHANNEL, retryAfterSeconds);
+        }
+        return new Classification(false, Kind.FAST_FAIL, retryAfterSeconds);
+    }
+
+    private static BusinessException findUpstreamResponse(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof BusinessException be && be.isUpstreamResponse()) return be;
+            current = current.getCause();
+        }
+        return null;
+    }
+
+    private static Throwable rootCause(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) current = current.getCause();
+        return current;
+    }
+
+    private static boolean isCancellation(Throwable error) {
+        String name = error.getClass().getName().toLowerCase(Locale.ROOT);
+        String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase(Locale.ROOT);
+        return name.contains("clientabort") || message.contains("cancelled") || message.contains("canceled");
+    }
+
+    private static ParsedError parse(String body) {
+        if (body == null || body.isBlank()) return null;
+        try {
+            JsonNode root = MAPPER.readTree(body);
+            JsonNode error = root.path("error");
+            JsonNode source = error.isObject() ? error : root;
+            return new ParsedError(normalize(source.path("code").asText(null)),
+                    normalize(source.path("type").asText(null)), source.path("message").asText(null));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static Kind classifyStructuredMessage(String message) {
+        if (message == null) return null;
+        String normalized = normalize(message);
+        if (normalized.contains("context_length_exceeded") || normalized.contains("content_filter")
+                || normalized.contains("moderation") || normalized.contains("policy_violation")) return Kind.FAST_FAIL;
+        if (normalized.contains("model_not_found") || normalized.contains("model_decommissioned")) return Kind.MODEL_NOT_FOUND;
+        if (normalized.contains("insufficient_quota") || normalized.contains("quota_exceeded")) return Kind.QUOTA;
+        if (normalized.contains("rate_limit_exceeded") || normalized.contains("rate_limit")) return Kind.RATE_LIMIT;
+        return null;
+    }
+
+    private static Kind classifyLegacyMessage(String message) {
+        if (message == null) return null;
+        String lower = message.toLowerCase(Locale.ROOT);
+        if (lower.contains("context_length_exceeded") || lower.contains("content_filter")
+                || lower.contains("moderation") || lower.contains("policy")) return Kind.FAST_FAIL;
+        if (lower.contains("model_not_found") || lower.contains("model_decommissioned")) return Kind.MODEL_NOT_FOUND;
+        if (lower.contains("insufficient_quota") || lower.contains("insufficient_user_quota") || lower.contains("quota")) return Kind.QUOTA;
+        if (lower.contains("rate_limit") || lower.contains("overloaded")) return Kind.RATE_LIMIT;
+        return null;
+    }
+
+    private static boolean intersects(Set<String> values, Set<String> expected) {
+        return values.stream().anyMatch(expected::contains);
+    }
+
+    private static boolean contains(Set<String> values, String expected) {
+        return values.contains(expected);
+    }
+
+    private static String normalize(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT).replace('-', '_').replace(' ', '_');
+    }
+
+    private record ParsedError(String code, String type, String message) {}
 }

@@ -425,14 +425,22 @@ public class RelaySupport {
         return url.replaceAll("([?&]key=)[^&]*", "$1***");
     }
 
-    /** 将 httpClient 的默认 120s 读超时按剩余总耗时预算收窄；为 null/非正数时返回默认客户端 */
+    /** 将连接、写入、读取及整个 call 都收窄到本次尝试的剩余总预算。 */
     private OkHttpClient boundedReadTimeoutClient(Long readTimeoutMs) {
         if (readTimeoutMs == null || readTimeoutMs <= 0) {
             return httpClient;
         }
+        long budget = Math.max(1L, readTimeoutMs);
         return httpClient.newBuilder()
-                .readTimeout(Math.min(readTimeoutMs, 120_000L), TimeUnit.MILLISECONDS)
+                .connectTimeout(boundedTimeout(budget, httpClient.connectTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .writeTimeout(boundedTimeout(budget, httpClient.writeTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .readTimeout(boundedTimeout(budget, httpClient.readTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .callTimeout(budget, TimeUnit.MILLISECONDS)
                 .build();
+    }
+
+    private long boundedTimeout(long budget, long configuredMs) {
+        return configuredMs > 0 ? Math.min(budget, configuredMs) : budget;
     }
 
     HttpURLConnection createSseConnection(Channel channel, String path, String requestBody) throws IOException {
@@ -447,7 +455,8 @@ public class RelaySupport {
         HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
         try {
             conn.setRequestMethod("POST");
-            conn.setConnectTimeout(15000);
+            long budget = readTimeoutMs != null && readTimeoutMs > 0 ? readTimeoutMs : 120_000L;
+            conn.setConnectTimeout((int) Math.max(1L, Math.min(budget, 15_000L)));
             conn.setReadTimeout(readTimeoutMs != null && readTimeoutMs > 0
                     ? (int) Math.min(readTimeoutMs, 120_000L) : 120000);
             conn.setDoOutput(true);
@@ -509,7 +518,8 @@ public class RelaySupport {
 
             if (!response.isSuccessful()) {
                 log.error("Upstream API error: {} - {}", response.code(), responseBody);
-                throw new BusinessException(response.code(), "上游 API 错误: " + responseBody);
+                throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
+                        responseBody, parseRetryAfterSeconds(response));
             }
 
             return responseBody;
@@ -537,7 +547,8 @@ public class RelaySupport {
             String responseBody = response.body() != null ? response.body().string() : "";
             if (!response.isSuccessful()) {
                 log.error("Upstream API error: {} - {}", response.code(), responseBody);
-                throw new BusinessException(response.code(), "上游 API 错误: " + responseBody);
+                throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
+                        responseBody, parseRetryAfterSeconds(response));
             }
             return responseBody;
         } catch (SocketTimeoutException e) {
@@ -576,12 +587,16 @@ public class RelaySupport {
      * （供 /v1/audio/transcriptions、/v1/audio/translations 文件上传端点使用）
      */
     BinaryResponse forwardMultipartRequest(Channel channel, String path, MultipartBody multipartBody) {
+        return forwardMultipartRequest(channel, path, multipartBody, null);
+    }
+
+    BinaryResponse forwardMultipartRequest(Channel channel, String path, MultipartBody multipartBody, Long timeoutMs) {
         String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
         Request.Builder requestBuilder = new Request.Builder()
                 .url(url)
                 .post(multipartBody);
         applyChannelAuth(requestBuilder, channel);
-        return executeBinary(channel, requestBuilder.build(), MAX_TRANSCRIPTION_RESPONSE_BYTES, null);
+        return executeBinary(channel, requestBuilder.build(), MAX_TRANSCRIPTION_RESPONSE_BYTES, timeoutMs);
     }
 
     /** TTS 二进制音频响应上限，避免与请求体等副本叠加造成单请求内存峰值过高 */
@@ -599,7 +614,8 @@ public class RelaySupport {
             if (!response.isSuccessful()) {
                 String error = new String(bytes, StandardCharsets.UTF_8);
                 log.error("Upstream API error: {} - {}", response.code(), error);
-                throw new BusinessException(response.code(), "上游 API 错误: " + error);
+                throw BusinessException.upstream(response.code(), "上游 API 错误: " + error,
+                        error, parseRetryAfterSeconds(response));
             }
             return new BinaryResponse(bytes, response.header("Content-Type"));
         } catch (SocketTimeoutException e) {
@@ -644,7 +660,8 @@ public class RelaySupport {
             String responseBody = response.body() != null ? response.body().string() : "";
             if (!response.isSuccessful()) {
                 log.error("Claude upstream API error: {} - {}", response.code(), responseBody);
-                throw new BusinessException(response.code(), "上游 API 错误: " + responseBody);
+                throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
+                        responseBody, parseRetryAfterSeconds(response));
             }
             return responseBody;
         } catch (SocketTimeoutException e) {
@@ -686,7 +703,8 @@ public class RelaySupport {
             String responseBody = response.body() != null ? response.body().string() : "";
             if (!response.isSuccessful()) {
                 log.error("Gemini upstream API error: {} - {}", response.code(), responseBody);
-                throw new BusinessException(response.code(), "上游 API 错误: " + responseBody);
+                throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
+                        responseBody, parseRetryAfterSeconds(response));
             }
             return responseBody;
         } catch (SocketTimeoutException e) {
@@ -698,8 +716,37 @@ public class RelaySupport {
 
     // ==================== 流式读取与请求体处理 ====================
 
+    private Long parseRetryAfterSeconds(okhttp3.Response response) {
+        String value = response.header("Retry-After");
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Math.max(0L, Long.parseLong(value.trim()));
+        } catch (NumberFormatException ignored) {
+            try {
+                java.time.ZonedDateTime at = java.time.ZonedDateTime.parse(value,
+                        java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME);
+                return Math.max(0L, java.time.Duration.between(java.time.ZonedDateTime.now(at.getZone()), at).getSeconds());
+            } catch (Exception ignoredDate) {
+                return null;
+            }
+        }
+    }
+
     /** SSE 透传结果：lastUsageData=最后一条包含 usage 的数据行；bytesWritten=是否确有任何数据写出过 */
     record SseStreamResult(String lastUsageData, boolean bytesWritten) {}
+
+    static final class SseStreamingException extends IOException {
+        private final SseStreamResult partialResult;
+
+        SseStreamingException(IOException cause, SseStreamResult partialResult) {
+            super(cause.getMessage(), cause);
+            this.partialResult = partialResult;
+        }
+
+        SseStreamResult partialResult() {
+            return partialResult;
+        }
+    }
 
     String streamSseResponse(HttpURLConnection conn, HttpServletResponse httpResponse,
                               Predicate<String> usageFilter) throws IOException {
@@ -735,6 +782,8 @@ public class RelaySupport {
                     }
                 }
             }
+        } catch (IOException e) {
+            throw new SseStreamingException(e, new SseStreamResult(lastUsageData, bytesWritten));
         }
         return new SseStreamResult(lastUsageData, bytesWritten);
     }

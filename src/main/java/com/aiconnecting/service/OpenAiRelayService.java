@@ -73,7 +73,7 @@ public class OpenAiRelayService {
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
                     && FailureClassifier.isSwitchable(e)) {
                 var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(
-                        ctx.modelConfig().getFallbackGroupId(), "text");
+                        ctx.modelConfig().getFallbackGroupId(), "text", "admin".equals(ctx.user().getRole()));
                 if (fallbackGroup.isPresent()) {
                     log.warn("模型 {} 请求失败，转入故障转移组 {} 继续尝试: {}", model, fallbackGroup.get().getName(), e.getMessage());
                     return modelGroupFailoverExecutor.relayRequestWithContext(ctx, fallbackGroup.get(), path, requestBody, httpRequest);
@@ -88,6 +88,7 @@ public class OpenAiRelayService {
         Set<Long> triedChannels = new HashSet<>();
         long startTime = System.currentTimeMillis();
         String lastError = null;
+        BusinessException lastFailure = null;
         int attempt = 0;
 
         while (attempt < RelaySupport.MAX_RETRIES) {
@@ -96,7 +97,9 @@ public class OpenAiRelayService {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
             } catch (BusinessException e) {
                 if (lastError != null) {
-                    throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+                    throw lastFailure != null
+                            ? wrapFailure(lastFailure, "所有渠道均不可用，最后错误: " + lastError)
+                            : new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
                 }
                 throw e;
             }
@@ -123,13 +126,13 @@ public class OpenAiRelayService {
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 return response;
             } catch (BusinessException e) {
+                lastFailure = e;
                 lastError = e.getMessage();
                 log.error("渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.channelHealthTracker.recordFailure(channel.getId(),
                         ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage());
                 if (attempt == RelaySupport.MAX_RETRIES) {
-                    throw new BusinessException(e.getCode(),
-                            "所有渠道均不可用，最后错误: " + lastError);
+                    throw wrapFailure(e, "所有渠道均不可用，最后错误: " + lastError);
                 }
             }
         }
@@ -167,7 +170,8 @@ public class OpenAiRelayService {
             // 本地校验错误或非预期的运行时异常直接向上抛出，不掩盖真实错误
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
                     && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
-                var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(), mediaType);
+                var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
+                        mediaType, "admin".equals(ctx.user().getRole()));
                 if (fallbackGroup.isPresent()) {
                     log.warn("模型 {} 媒体请求失败，转入故障转移组 {} 继续尝试", model, fallbackGroup.get().getName());
                     return isVideo
@@ -249,6 +253,7 @@ public class OpenAiRelayService {
                                                   java.util.function.Function<Channel, T> call) {
         Set<Long> triedChannels = new HashSet<>();
         String lastError = null;
+        BusinessException lastFailure = null;
         int attempt = 0;
 
         while (attempt < RelaySupport.MAX_RETRIES) {
@@ -257,7 +262,9 @@ public class OpenAiRelayService {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
             } catch (BusinessException e) {
                 if (lastError != null) {
-                    throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+                    throw lastFailure != null
+                            ? wrapFailure(lastFailure, "所有渠道均不可用，最后错误: " + lastError)
+                            : new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
                 }
                 throw e;
             }
@@ -275,17 +282,22 @@ public class OpenAiRelayService {
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 return new ChannelResult<>(value, channel);
             } catch (BusinessException e) {
+                lastFailure = e;
                 lastError = e.getMessage();
                 log.error("渠道 {} 媒体请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.channelHealthTracker.recordFailure(channel.getId(),
                         ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage());
                 if (attempt == RelaySupport.MAX_RETRIES) {
-                    throw new BusinessException(e.getCode(),
-                            "所有渠道均不可用，最后错误: " + lastError);
+                    throw wrapFailure(e, "所有渠道均不可用，最后错误: " + lastError);
                 }
             }
         }
         throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+    }
+
+    private BusinessException wrapFailure(BusinessException cause, String message) {
+        return new BusinessException(cause.getCode(), message, cause, cause.getUpstreamResponseBody(),
+                cause.getRetryAfterSeconds(), cause.isUpstreamResponse());
     }
 
     /**
@@ -656,6 +668,17 @@ public class OpenAiRelayService {
             result = forwardWithRetry(ctx, channel -> support.forwardBinaryRequest(channel, "/v1/audio/speech", upstreamJson));
         } catch (RuntimeException e) {
             support.refundMediaCharge(ctx, charge);
+            if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null
+                    && ctx.modelConfig().getFallbackGroupId() != null
+                    && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
+                var fallback = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
+                        "audio", "admin".equals(ctx.user().getRole()));
+                if (fallback.isPresent()) {
+                    modelGroupFailoverExecutor.relayAudioSpeechWithContext(ctx, fallback.get(), requestBody,
+                            httpRequest, httpResponse);
+                    return;
+                }
+            }
             throw e;
         }
         byte[] audio = result.value().body();
@@ -765,6 +788,17 @@ public class OpenAiRelayService {
             result = forwardWithRetry(ctx, channel -> support.forwardMultipartRequest(channel, path, multipartBody));
         } catch (RuntimeException e) {
             support.refundMediaCharge(ctx, charge);
+            if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null
+                    && ctx.modelConfig().getFallbackGroupId() != null
+                    && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
+                var fallback = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
+                        "audio", "admin".equals(ctx.user().getRole()));
+                if (fallback.isPresent()) {
+                    return modelGroupFailoverExecutor.relayAudioTranscriptionWithContext(ctx, fallback.get(), path,
+                            fileBytes, fileName, file.getContentType(), formFields, rawPassThrough,
+                            seconds, quality, httpRequest);
+                }
+            }
             throw e;
         }
 
@@ -850,6 +884,7 @@ public class OpenAiRelayService {
         Set<Long> triedChannels = new HashSet<>();
         long startTime = System.currentTimeMillis();
         String lastError = null;
+        BusinessException lastFailure = null;
         int attempt = 0;
 
         while (attempt < RelaySupport.MAX_RETRIES) {
@@ -857,6 +892,7 @@ public class OpenAiRelayService {
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
             } catch (BusinessException e) {
+                if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
                     RelayServiceUtils.writeOpenAiError(httpResponse, 502, "所有渠道均不可用: " + lastError);
                 }
@@ -886,10 +922,12 @@ public class OpenAiRelayService {
                 }
             } catch (IOException e) {
                 lastError = e.getMessage();
+                lastFailure = new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
                 log.error("渠道 {} 流式连接失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.channelHealthTracker.recordFailure(channel.getId(),
                         ChannelHealthTracker.ErrorCategory.fromException(e), e.getMessage());
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
+                if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
                     RelayServiceUtils.writeOpenAiError(httpResponse, 502, "渠道请求失败: " + e.getMessage());
                 }
@@ -903,11 +941,14 @@ public class OpenAiRelayService {
                     String errorBody = conn.getErrorStream() != null
                             ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
                     lastError = "HTTP " + code + " - " + errorBody;
+                    lastFailure = BusinessException.upstream(code, "上游 API 错误: " + errorBody,
+                            errorBody, parseRetryAfterSeconds(conn.getHeaderField("Retry-After")));
                     log.warn("渠道 {} 流式请求失败: {}", channel.getId(), lastError);
                     support.channelHealthTracker.recordFailure(channel.getId(),
                             ChannelHealthTracker.ErrorCategory.fromStatusCode(code), lastError);
                     conn.disconnect();
                     if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
+                    if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                     httpResponse.setStatus(code);
                     httpResponse.getWriter().write(errorBody.isEmpty()
                             ? "{\"error\":{\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
@@ -933,15 +974,42 @@ public class OpenAiRelayService {
             } catch (Exception e) {
                 conn.disconnect();
                 lastError = e.getMessage();
+                lastFailure = new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
                 log.error("渠道 {} 流式请求异常 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.channelHealthTracker.recordFailure(channel.getId(),
                         ChannelHealthTracker.ErrorCategory.fromException(e), e.getMessage());
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
+                if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
                     RelayServiceUtils.writeOpenAiError(httpResponse, 502, "渠道请求失败: " + e.getMessage());
                 }
                 return;
             }
+        }
+    }
+
+    private boolean tryFallbackStream(RelaySupport.RelayContext ctx, String path, String requestBody,
+                                      HttpServletRequest httpRequest, HttpServletResponse httpResponse,
+                                      BusinessException failure) throws IOException {
+        if (failure == null || httpResponse.isCommitted() || modelGroupFailoverExecutor == null
+                || ctx.modelConfig() == null || ctx.modelConfig().getFallbackGroupId() == null
+                || !FailureClassifier.isSwitchable(failure)) {
+            return false;
+        }
+        var fallback = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
+                "text", "admin".equals(ctx.user().getRole()));
+        if (fallback.isEmpty()) return false;
+        modelGroupFailoverExecutor.relayStreamRequestWithContext(ctx, fallback.get(), path, requestBody,
+                httpRequest, httpResponse);
+        return true;
+    }
+
+    private Long parseRetryAfterSeconds(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Math.max(0L, Long.parseLong(value.trim()));
+        } catch (NumberFormatException ignored) {
+            return null;
         }
     }
 
