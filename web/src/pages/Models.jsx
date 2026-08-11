@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch } from 'antd'
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, Tooltip, message, Popconfirm, Switch } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, SearchOutlined } from '@ant-design/icons'
 import {
   getModels, createModel, updateModel, deleteModel, updateModelStatus,
@@ -106,7 +106,18 @@ export default function Models() {
 
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 60 },
-    { title: '模型名称', dataIndex: 'name', width: 180, render: v => <Tag color="blue">{v}</Tag> },
+    {
+      title: '模型名称',
+      dataIndex: 'name',
+      width: 180,
+      render: v => (
+        <Tooltip title={v}>
+          <Tag color="blue" style={{ maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>
+            {v}
+          </Tag>
+        </Tooltip>
+      ),
+    },
     { title: '显示名称', dataIndex: 'displayName', width: 150, render: v => v || '-' },
     {
       title: '类型', dataIndex: 'type', width: 80,
