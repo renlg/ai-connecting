@@ -321,7 +321,7 @@ export default function Tokens() {
             {modelOptions.map(m => {
               const tooltipContent = (
                 <div style={{ fontSize: 13, lineHeight: '28px' }}>
-                  {m.kind === 'group' && <div>模型组，可用成员 {m.memberCount} 个</div>}
+                  {m.kind === 'group' && <div>模型组{m.memberCount != null ? `，可用成员 ${m.memberCount} 个` : ''}</div>}
                   {m.modelType === 'image' && <>
                     <div>1K：{m.imagePrice1k ?? 0} 积分/张</div>
                     <div>2K：{m.imagePrice2k ?? 0} 积分/张</div>
