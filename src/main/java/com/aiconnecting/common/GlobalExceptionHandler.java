@@ -23,9 +23,10 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e, HttpServletRequest request) {
         HttpStatus httpStatus = mapToHttpStatus(e.getCode());
-        // 终端用户中转接口（/v1/**）隐藏上游细节，仅返回通用错误 + traceId；
+        // 终端用户中转接口（/v1/**）：真实上游错误隐藏细节，仅返回通用错误 + traceId；
+        // 本地业务错误（模型不存在、Token 无效、余额不足等）返回具体错误信息；
         // 管理后台/自测接口（/api/**，如渠道测试）继续返回详细错误
-        if (request.getRequestURI() != null && request.getRequestURI().startsWith("/v1/")) {
+        if (request.getRequestURI() != null && request.getRequestURI().startsWith("/v1/") && e.isUpstreamResponse()) {
             String traceId = SseUtils.currentTraceId();
             return ResponseEntity
                     .status(httpStatus)

@@ -44,13 +44,16 @@ public class GeminiRelayService {
         String lastError = null;
         int attempt = 0;
 
+        BusinessException lastFailure = null;
         while (attempt < RelaySupport.MAX_RETRIES) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
             } catch (BusinessException e) {
                 if (lastError != null) {
-                    throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+                    throw lastFailure != null
+                            ? wrapFailure(lastFailure, "所有渠道均不可用，最后错误: " + lastError)
+                            : new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
                 }
                 throw e;
             }
@@ -86,18 +89,24 @@ public class GeminiRelayService {
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 return response;
             } catch (BusinessException e) {
+                lastFailure = e;
                 lastError = e.getMessage();
                 log.error("Gemini 渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.dispatchRelayFailure(channel.getId(), modelConfigId, e, () ->
                         support.channelHealthTracker.recordFailure(channel.getId(),
                                 ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage()));
                 if (attempt == RelaySupport.MAX_RETRIES) {
-                    throw new BusinessException(e.getCode(),
-                            "所有渠道均不可用，最后错误: " + lastError);
+                    throw wrapFailure(e, "所有渠道均不可用，最后错误: " + lastError);
                 }
             }
         }
         throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+    }
+
+    /** 包裹重试耗尽后的汇总错误，保留原始异常的 upstreamResponse 标记，避免真实上游错误被误判为本地错误而向终端用户泄露细节 */
+    private BusinessException wrapFailure(BusinessException cause, String message) {
+        return new BusinessException(cause.getCode(), message, cause, cause.getUpstreamResponseBody(),
+                cause.getRetryAfterSeconds(), cause.isUpstreamResponse());
     }
 
     /**
@@ -120,7 +129,8 @@ public class GeminiRelayService {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
             } catch (BusinessException e) {
                 if (!httpResponse.isCommitted()) {
-                    RelayServiceUtils.writeGeminiError(httpResponse, 502, "所有渠道均不可用");
+                    RelayServiceUtils.writeGeminiError(httpResponse, e.getCode(),
+                            SseUtils.clientErrorMessage(e.getMessage(), e.isUpstreamResponse()));
                 }
                 return;
             }
@@ -162,7 +172,9 @@ public class GeminiRelayService {
                     continue;
                 }
                 if (!httpResponse.isCommitted()) {
-                    RelayServiceUtils.writeGeminiError(httpResponse, 502, "渠道请求失败");
+                    boolean upstream = !(e instanceof BusinessException) || classifyError.isUpstreamResponse();
+                    RelayServiceUtils.writeGeminiError(httpResponse, classifyError.getCode(),
+                            SseUtils.clientErrorMessage(classifyError.getMessage(), upstream));
                 }
                 return;
             }
@@ -208,7 +220,7 @@ public class GeminiRelayService {
                 String errorBody = conn.getErrorStream() != null
                         ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
                 if (SseUtils.isEndUserRelayPath()) {
-                    RelayServiceUtils.writeGeminiError(httpResponse, code, "上游返回 HTTP " + code);
+                    RelayServiceUtils.writeGeminiError(httpResponse, code, SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE);
                 } else {
                     httpResponse.setStatus(code);
                     httpResponse.setCharacterEncoding("UTF-8");

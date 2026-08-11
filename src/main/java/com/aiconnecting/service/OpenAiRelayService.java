@@ -897,7 +897,9 @@ public class OpenAiRelayService {
             } catch (BusinessException e) {
                 if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
-                    RelayServiceUtils.writeOpenAiError(httpResponse, 502, "所有渠道均不可用: " + lastError);
+                    boolean upstream = lastFailure != null && lastFailure.isUpstreamResponse();
+                    RelayServiceUtils.writeOpenAiError(httpResponse, 502,
+                            SseUtils.clientErrorMessage("所有渠道均不可用: " + lastError, upstream));
                 }
                 return;
             }
@@ -933,7 +935,8 @@ public class OpenAiRelayService {
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                 if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
-                    RelayServiceUtils.writeOpenAiError(httpResponse, 502, "渠道请求失败: " + e.getMessage());
+                    RelayServiceUtils.writeOpenAiError(httpResponse, 502,
+                            SseUtils.clientErrorMessage("渠道请求失败: " + e.getMessage(), true));
                 }
                 return;
             }
@@ -957,7 +960,7 @@ public class OpenAiRelayService {
                     if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                     if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                     if (SseUtils.isEndUserRelayPath()) {
-                        RelayServiceUtils.writeOpenAiError(httpResponse, code, "上游返回 HTTP " + code);
+                        RelayServiceUtils.writeOpenAiError(httpResponse, code, SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE);
                     } else {
                         httpResponse.setStatus(code);
                         httpResponse.setCharacterEncoding("UTF-8");
@@ -994,7 +997,8 @@ public class OpenAiRelayService {
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                 if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
-                    RelayServiceUtils.writeOpenAiError(httpResponse, 502, "渠道请求失败: " + e.getMessage());
+                    RelayServiceUtils.writeOpenAiError(httpResponse, 502,
+                            SseUtils.clientErrorMessage("渠道请求失败: " + e.getMessage(), true));
                 }
                 return;
             }

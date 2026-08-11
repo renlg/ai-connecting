@@ -139,8 +139,8 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.message").value("上游服务暂时不可用，请稍后重试"))
-                .andExpect(jsonPath("$.traceId").isNotEmpty());
+                .andExpect(jsonPath("$.message").value("缺少 Authorization header 或格式不正确"))
+                .andExpect(jsonPath("$.traceId").doesNotExist());
     }
 
     @Test
@@ -187,8 +187,8 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isTooManyRequests())
-                .andExpect(jsonPath("$.message").value("上游服务暂时不可用，请稍后重试"))
-                .andExpect(jsonPath("$.traceId").isNotEmpty());
+                .andExpect(jsonPath("$.message").value("Token 额度已用完"))
+                .andExpect(jsonPath("$.traceId").doesNotExist());
     }
 
     // ==================== Completions ====================
@@ -319,8 +319,8 @@ class RelayControllerTest {
         mockMvc.perform(get("/v1/models")
                         .header("Authorization", "Bearer sk-invalid"))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.message").value("上游服务暂时不可用，请稍后重试"))
-                .andExpect(jsonPath("$.traceId").isNotEmpty());
+                .andExpect(jsonPath("$.message").value("无效的 Token"))
+                .andExpect(jsonPath("$.traceId").doesNotExist());
     }
 
     @Test

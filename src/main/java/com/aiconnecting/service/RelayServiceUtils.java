@@ -197,17 +197,17 @@ public final class RelayServiceUtils {
     // ==================== 错误响应写入 ====================
 
     /**
-     * 写入 OpenAI 格式的错误响应。面向终端用户的中转接口（/v1/**）会隐藏上游细节并附带 traceId，
-     * 管理后台/自测接口保留原始详细信息
+     * 写入 OpenAI 格式的错误响应。message 必须由调用方提前按 e.isUpstreamResponse() 决定好
+     * （本地业务错误传具体消息，真实上游错误传 {@link SseUtils#GENERIC_UPSTREAM_ERROR_MESSAGE}），
+     * 本方法不再自行改写；面向终端用户的中转接口（/v1/**）会附带 traceId
      */
     public static void writeOpenAiError(HttpServletResponse response, int status, String message)
             throws IOException {
         response.setStatus(status);
         response.setCharacterEncoding("UTF-8");
         response.setContentType("application/json;charset=UTF-8");
-        String clientMessage = SseUtils.sanitizeForClient(message);
         StringBuilder body = new StringBuilder("{\"error\":{\"message\":\"")
-                .append(SseUtils.escapeJson(clientMessage)).append("\"");
+                .append(SseUtils.escapeJson(message)).append("\"");
         if (SseUtils.isEndUserRelayPath()) {
             body.append(",\"traceId\":\"").append(SseUtils.currentTraceId()).append("\"");
         }
@@ -216,16 +216,15 @@ public final class RelayServiceUtils {
     }
 
     /**
-     * 写入 Claude 格式的错误响应
+     * 写入 Claude 格式的错误响应，message 的分类要求同 {@link #writeOpenAiError}
      */
     public static void writeClaudeError(HttpServletResponse response, int status, String message)
             throws IOException {
         response.setStatus(status);
         response.setCharacterEncoding("UTF-8");
-        String clientMessage = SseUtils.sanitizeForClient(message);
         StringBuilder body = new StringBuilder(
                         "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"")
-                .append(SseUtils.escapeJson(clientMessage)).append("\"");
+                .append(SseUtils.escapeJson(message)).append("\"");
         if (SseUtils.isEndUserRelayPath()) {
             body.append(",\"traceId\":\"").append(SseUtils.currentTraceId()).append("\"");
         }
@@ -234,15 +233,14 @@ public final class RelayServiceUtils {
     }
 
     /**
-     * 写入 Gemini 格式的错误响应
+     * 写入 Gemini 格式的错误响应，message 的分类要求同 {@link #writeOpenAiError}
      */
     public static void writeGeminiError(HttpServletResponse response, int status, String message)
             throws IOException {
         response.setStatus(status);
         response.setCharacterEncoding("UTF-8");
-        String clientMessage = SseUtils.sanitizeForClient(message);
         StringBuilder body = new StringBuilder("{\"error\":{\"message\":\"")
-                .append(SseUtils.escapeJson(clientMessage)).append("\"");
+                .append(SseUtils.escapeJson(message)).append("\"");
         if (SseUtils.isEndUserRelayPath()) {
             body.append(",\"traceId\":\"").append(SseUtils.currentTraceId()).append("\"");
         }

@@ -72,6 +72,16 @@ public final class SseUtils {
     }
 
     /**
+     * 按错误来源分类决定最终展示给调用方的错误信息：
+     * 管理后台/自测接口（/api/**）始终保留详细信息；
+     * 终端用户中转接口（/v1/**）真实上游错误隐藏细节（返回通用错误），本地业务错误返回具体信息
+     */
+    public static String clientErrorMessage(String detailedMessage, boolean isUpstreamError) {
+        if (!isEndUserRelayPath()) return detailedMessage;
+        return isUpstreamError ? GENERIC_UPSTREAM_ERROR_MESSAGE : detailedMessage;
+    }
+
+    /**
      * 读取当前请求的链路追踪 id（与日志中 %X{traceId} 一致），缺失时生成一个随机 id 兜底
      */
     public static String currentTraceId() {
