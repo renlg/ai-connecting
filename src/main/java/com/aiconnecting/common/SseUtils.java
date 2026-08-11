@@ -19,7 +19,7 @@ public final class SseUtils {
      * 面向终端用户展示的通用错误信息：不包含任何上游细节（模型名、配额、机构 id 等），
      * 详细信息只落地到服务端日志，通过 traceId 关联排查
      */
-    public static final String GENERIC_UPSTREAM_ERROR_MESSAGE = "上游服务暂时不可用，请稍后重试";
+    public static final String GENERIC_UPSTREAM_ERROR_MESSAGE = "Upstream service temporarily unavailable, please try again later";
 
     /**
      * 设置 SSE 标准响应头
@@ -35,9 +35,10 @@ public final class SseUtils {
      * 已经开始向客户端写出数据（响应已提交）后发生上游失败时，按 SSE 协议补写一个 error 事件并结束流，
      * 不能再拼接另一个渠道/成员的输出，也不能静默断开——客户端需要一个明确的终止信号
      */
-    public static void writeSseErrorEvent(HttpServletResponse response, String message) throws IOException {
+    public static void writeSseErrorEvent(HttpServletResponse response, String zhMessage, String enMessage,
+                                          boolean isUpstreamError) throws IOException {
         response.setCharacterEncoding("UTF-8");
-        String clientMessage = sanitizeForClient(message);
+        String clientMessage = clientErrorMessage(zhMessage, enMessage, isUpstreamError);
         StringBuilder data = new StringBuilder("data: {\"error\":{\"message\":\"")
                 .append(escapeJson(clientMessage)).append("\"");
         if (isEndUserRelayPath()) {
@@ -65,20 +66,13 @@ public final class SseUtils {
     }
 
     /**
-     * 面向终端用户的中转接口隐藏上游细节，管理后台/自测接口保留原始详细信息
-     */
-    public static String sanitizeForClient(String upstreamMessage) {
-        return isEndUserRelayPath() ? GENERIC_UPSTREAM_ERROR_MESSAGE : upstreamMessage;
-    }
-
-    /**
      * 按错误来源分类决定最终展示给调用方的错误信息：
      * 管理后台/自测接口（/api/**）始终保留详细信息；
      * 终端用户中转接口（/v1/**）真实上游错误隐藏细节（返回通用错误），本地业务错误返回具体信息
      */
-    public static String clientErrorMessage(String detailedMessage, boolean isUpstreamError) {
-        if (!isEndUserRelayPath()) return detailedMessage;
-        return isUpstreamError ? GENERIC_UPSTREAM_ERROR_MESSAGE : detailedMessage;
+    public static String clientErrorMessage(String zhMessage, String enMessage, boolean isUpstreamError) {
+        if (!isEndUserRelayPath()) return zhMessage;
+        return isUpstreamError || enMessage == null ? GENERIC_UPSTREAM_ERROR_MESSAGE : enMessage;
     }
 
     /**

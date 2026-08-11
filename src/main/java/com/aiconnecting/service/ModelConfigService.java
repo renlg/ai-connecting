@@ -103,7 +103,7 @@ public class ModelConfigService {
 
     public ModelConfig getById(Long id) {
         return modelConfigRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("模型不存在"));
+                .orElseThrow(() -> new BusinessException("模型不存在", "Model not found"));
     }
 
     public ModelConfig save(ModelConfig config) {
@@ -121,13 +121,14 @@ public class ModelConfigService {
             return;
         }
         if (modelConfigRepository.existsByDisplayNameExcludingId(displayName, excludeId)) {
-            throw new BusinessException("显示名称 \"" + displayName + "\" 已存在，请使用唯一的显示名称");
+            throw new BusinessException("显示名称 \"" + displayName + "\" 已存在，请使用唯一的显示名称",
+                    "Display name \"" + displayName + "\" already exists; use a unique display name");
         }
     }
 
     public void delete(Long id) {
         if (!modelConfigRepository.existsById(id)) {
-            throw new BusinessException("模型不存在");
+            throw new BusinessException("模型不存在", "Model not found");
         }
         modelConfigRepository.deleteById(id);
         cacheInvalidationService.publish(CacheInvalidationService.MODEL_CONFIG);

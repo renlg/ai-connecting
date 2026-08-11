@@ -100,7 +100,8 @@ public class OpenAiRelayService {
                 if (lastError != null) {
                     throw lastFailure != null
                             ? wrapFailure(lastFailure, "所有渠道均不可用，最后错误: " + lastError)
-                            : new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+                            : new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError,
+                                    "All channels are unavailable, please try again later");
                 }
                 throw e;
             }
@@ -138,7 +139,8 @@ public class OpenAiRelayService {
                 }
             }
         }
-        throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+        throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError,
+                "All channels are unavailable, please try again later");
     }
 
     /**
@@ -210,7 +212,10 @@ public class OpenAiRelayService {
                 boolean refunded = support.refundMediaCharge(ctx, charge);
                 String suffix = refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿";
                 if (e instanceof BusinessException be) {
-                    throw new BusinessException(be.getCode(), be.getMessage() + suffix);
+                    String englishSuffix = refunded ? ", prepaid credits were refunded"
+                            : ", failed to refund prepaid credits; manual compensation is pending";
+                    throw new BusinessException(be.getCode(), be.getMessage() + suffix,
+                            be.getEnglishMessage() != null ? be.getEnglishMessage() + englishSuffix : null);
                 }
                 throw e;
             }
@@ -265,7 +270,8 @@ public class OpenAiRelayService {
                 if (lastError != null) {
                     throw lastFailure != null
                             ? wrapFailure(lastFailure, "所有渠道均不可用，最后错误: " + lastError)
-                            : new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+                            : new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError,
+                                    "All channels are unavailable, please try again later");
                 }
                 throw e;
             }
@@ -294,11 +300,13 @@ public class OpenAiRelayService {
                 }
             }
         }
-        throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+        throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError,
+                "All channels are unavailable, please try again later");
     }
 
     private BusinessException wrapFailure(BusinessException cause, String message) {
-        return new BusinessException(cause.getCode(), message, cause, cause.getUpstreamResponseBody(),
+        return new BusinessException(cause.getCode(), message,
+                "All channels are unavailable, please try again later", cause, cause.getUpstreamResponseBody(),
                 cause.getRetryAfterSeconds(), cause.isUpstreamResponse());
     }
 
@@ -338,19 +346,19 @@ public class OpenAiRelayService {
             json = support.objectMapper.readTree(response);
         } catch (Exception e) {
             log.error("视频上游响应不是合法 JSON，无法建立任务轮询映射");
-            throw new BusinessException(502, "上游视频响应无效（非 JSON）");
+            throw new BusinessException(502, "上游视频响应无效（非 JSON）", "Invalid upstream video response (not JSON)");
         }
         // readTree 对空白/空字符串输入不抛异常而是直接返回 null，必须显式判空，
         // 否则下一行 json.isObject() 将抛 NPE，被外层当作普通 RuntimeException 处理，
         // 丢失"上游响应无效"这一明确的业务错误信息
         if (json == null) {
             log.error("视频上游响应为空，无法建立任务轮询映射");
-            throw new BusinessException(502, "上游视频响应无效（空响应）");
+            throw new BusinessException(502, "上游视频响应无效（空响应）", "Invalid upstream video response (empty response)");
         }
         String upstreamVideoId = json.isObject() ? firstText(json.get("video_id"), json.get("id")) : null;
         if (upstreamVideoId == null) {
             log.error("视频上游响应缺少有效的 video_id/id 字段，无法建立任务轮询映射");
-            throw new BusinessException(502, "上游视频响应缺少有效的任务 id");
+            throw new BusinessException(502, "上游视频响应缺少有效的任务 id", "Upstream video response is missing a valid task ID");
         }
         Long taskId;
         VideoTask saved;
@@ -371,7 +379,7 @@ public class OpenAiRelayService {
             taskId = saved.getId();
         } catch (Exception e) {
             log.error("视频任务映射保存失败: upstreamId={}", upstreamVideoId, e);
-            throw new BusinessException(500, "视频任务保存失败，请重试");
+            throw new BusinessException(500, "视频任务保存失败，请重试", "Failed to save video task, please try again");
         }
         com.fasterxml.jackson.databind.node.ObjectNode responseObject =
                 (com.fasterxml.jackson.databind.node.ObjectNode) json;
@@ -420,15 +428,16 @@ public class OpenAiRelayService {
     public String relayVideoStatusRequest(String tokenKey, String videoId) {
         Token token = support.validateToken(tokenKey);
         if (videoId == null || videoId.isBlank() || !videoId.matches("[A-Za-z0-9_\\-.:+/=]+")) {
-            throw new BusinessException(400, "无效的视频任务 id");
+            throw new BusinessException(400, "无效的视频任务 id", "Invalid video task ID");
         }
         VideoTask task = videoTaskRepository
                 .findFirstByUpstreamIdAndUserIdOrderByCreatedAtDesc(videoId, token.getUserId())
-                .orElseThrow(() -> new BusinessException(404, "视频任务不存在: " + videoId));
+                .orElseThrow(() -> new BusinessException(404, "视频任务不存在: " + videoId,
+                        "Video task not found: " + videoId));
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime leaseUntil = now.plusMinutes(VIDEO_TASK_LEASE_MINUTES);
         if (videoTaskRepository.claimForPolling(task.getId(), now, leaseUntil) != 1) {
-            throw new BusinessException(409, "视频任务正在处理中，请稍后重试");
+            throw new BusinessException(409, "视频任务正在处理中，请稍后重试", "Video task is still processing, please try again later");
         }
         try {
             videoTaskUsageLogService.ensureLinked(task.getId());
@@ -636,17 +645,18 @@ public class OpenAiRelayService {
 
         JsonNode body = support.objectMapper.readTree(requestBody);
         if (!body.isObject()) {
-            throw new BusinessException(400, "请求体必须是 JSON 对象");
+            throw new BusinessException(400, "请求体必须是 JSON 对象", "Request body must be a JSON object");
         }
         JsonNode inputNode = body.get("input");
         if (inputNode == null || !inputNode.isTextual() || inputNode.asText().isEmpty()) {
-            throw new BusinessException(400, "语音合成请求缺少有效的 input 文本参数");
+            throw new BusinessException(400, "语音合成请求缺少有效的 input 文本参数", "Text-to-speech request is missing a valid input text parameter");
         }
         double speed = 1.0;
         if (body.hasNonNull("speed")) {
             JsonNode s = body.get("speed");
             if (!s.isNumber() || s.asDouble() < 0.25 || s.asDouble() > 4.0) {
-                throw new BusinessException(400, "speed 参数必须是 0.25~4.0 之间的数字");
+                throw new BusinessException(400, "speed 参数必须是 0.25~4.0 之间的数字",
+                        "speed must be a number between 0.25 and 4.0");
             }
             speed = s.asDouble();
         }
@@ -695,7 +705,10 @@ public class OpenAiRelayService {
             boolean refunded = support.refundMediaCharge(ctx, charge);
             log.error("无法测量生成音频的实际时长 (format={})，拒绝计费并退回预扣积分", responseFormat);
             throw new BusinessException(400, "生成的音频无法测量有效时长，上游返回可能已损坏或格式不受支持"
-                    + (refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿"));
+                    + (refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿"),
+                    "Unable to measure a valid duration for the generated audio; the upstream response may be corrupt or unsupported"
+                            + (refunded ? ", prepaid credits were refunded"
+                            : ", failed to refund prepaid credits; manual compensation is pending"));
         }
         int actualSeconds = Math.max(1, (int) Math.ceil(measured));
         BigDecimal actualCost = usageLogService.calculateAudioCreditCost(ctx.modelConfig(), quality, actualSeconds);
@@ -736,19 +749,23 @@ public class OpenAiRelayService {
 
         String quality = formFields.getFirst("quality");
         if (quality != null && UsageLogService.resolveAudioTier(quality) == null) {
-            throw new BusinessException(400, "不支持的音频音质参数 (quality): " + quality + "，支持 standard/hd");
+            throw new BusinessException(400, "不支持的音频音质参数 (quality): " + quality + "，支持 standard/hd",
+                    "Unsupported audio quality parameter (quality): " + quality + "; supported values are standard/hd");
         }
         if (file == null || file.isEmpty()) {
-            throw new BusinessException(400, "请求缺少音频文件 (file)");
+            throw new BusinessException(400, "请求缺少音频文件 (file)", "Request is missing an audio file (file)");
         }
         if (file.getSize() > MAX_AUDIO_UPLOAD_BYTES) {
-            throw new BusinessException(413, "上传音频超过大小限制 (" + MAX_AUDIO_UPLOAD_BYTES / (1024 * 1024) + "MB)");
+            throw new BusinessException(413, "上传音频超过大小限制 (" + MAX_AUDIO_UPLOAD_BYTES / (1024 * 1024) + "MB)",
+                    "Uploaded audio exceeds the size limit (" + MAX_AUDIO_UPLOAD_BYTES / (1024 * 1024) + "MB)");
         }
         byte[] fileBytes = file.getBytes();
         double measured = AudioDurationUtil.measure(fileBytes);
         if (measured <= 0) {
             throw new BusinessException(400, "无法可靠测量上传音频的时长（按秒计费所需），"
-                    + "支持 wav/mp3/flac/ogg/opus/m4a/mp4/aac/webm 格式；裸 PCM 不支持，请封装为 WAV 后上传");
+                    + "支持 wav/mp3/flac/ogg/opus/m4a/mp4/aac/webm 格式；裸 PCM 不支持，请封装为 WAV 后上传",
+                    "Unable to reliably measure uploaded audio duration for per-second billing; supported formats are "
+                            + "wav/mp3/flac/ogg/opus/m4a/mp4/aac/webm; raw PCM is unsupported, wrap it as WAV before uploading");
         }
         int seconds = Math.max(1, (int) Math.ceil(measured));
         BigDecimal cost = usageLogService.calculateAudioCreditCost(ctx.modelConfig(), quality, seconds);
@@ -808,7 +825,10 @@ public class OpenAiRelayService {
         if (!rawPassThrough && !isValidTranscriptionJson(result.value().body())) {
             boolean refunded = support.refundMediaCharge(ctx, charge);
             throw new BusinessException(502, "上游返回无法解析的转写结果"
-                    + (refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿"));
+                    + (refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿"),
+                    "Upstream returned an unparseable transcription result"
+                            + (refunded ? ", prepaid credits were refunded"
+                            : ", failed to refund prepaid credits; manual compensation is pending"));
         }
 
         long duration = System.currentTimeMillis() - startTime;
@@ -833,7 +853,8 @@ public class OpenAiRelayService {
             }
             java.util.List<String> values = field.getValue();
             if (values.size() > 1 && new HashSet<>(values).size() > 1) {
-                throw new BusinessException(400, "参数 " + key + " 重复传值且取值不一致，请只传一个值");
+                throw new BusinessException(400, "参数 " + key + " 重复传值且取值不一致，请只传一个值",
+                        "Parameter " + key + " was provided multiple times with conflicting values; provide only one value");
             }
         }
     }
@@ -860,7 +881,8 @@ public class OpenAiRelayService {
         }
         JsonNode q = body.get("quality");
         if (!q.isTextual() || UsageLogService.resolveAudioTier(q.asText()) == null) {
-            throw new BusinessException(400, "不支持的音频音质参数 (quality): " + q + "，支持 standard/hd");
+            throw new BusinessException(400, "不支持的音频音质参数 (quality): " + q + "，支持 standard/hd",
+                    "Unsupported audio quality parameter (quality): " + q + "; supported values are standard/hd");
         }
         return q.asText();
     }
@@ -871,7 +893,7 @@ public class OpenAiRelayService {
     private int estimateSpeechSeconds(String input, double speed) {
         int chars = input.codePointCount(0, input.length());
         if (chars > MAX_SPEECH_INPUT_CHARACTERS) {
-            throw new BusinessException(413, "语音合成 input 超过字符数限制 (4096)");
+            throw new BusinessException(413, "语音合成 input 超过字符数限制 (4096)", "Text-to-speech input exceeds the character limit (4096)");
         }
         return Math.max(1, (int) Math.ceil(chars / (14.0 * speed)));
     }
@@ -899,7 +921,8 @@ public class OpenAiRelayService {
                 if (!httpResponse.isCommitted()) {
                     boolean upstream = lastFailure != null && lastFailure.isUpstreamResponse();
                     RelayServiceUtils.writeOpenAiError(httpResponse, 502,
-                            SseUtils.clientErrorMessage("所有渠道均不可用: " + lastError, upstream));
+                            SseUtils.clientErrorMessage("所有渠道均不可用: " + lastError,
+                                    "All channels are unavailable, please try again later", upstream));
                 }
                 return;
             }
@@ -927,7 +950,8 @@ public class OpenAiRelayService {
                 }
             } catch (IOException e) {
                 lastError = e.getMessage();
-                lastFailure = new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
+                lastFailure = new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                        "Channel request failed: " + e.getMessage(), e);
                 log.error("渠道 {} 流式连接失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.dispatchRelayFailure(channel.getId(), modelConfigId, lastFailure, () ->
                         support.channelHealthTracker.recordFailure(channel.getId(),
@@ -936,7 +960,8 @@ public class OpenAiRelayService {
                 if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
                     RelayServiceUtils.writeOpenAiError(httpResponse, 502,
-                            SseUtils.clientErrorMessage("渠道请求失败: " + e.getMessage(), true));
+                            SseUtils.clientErrorMessage("渠道请求失败: " + e.getMessage(),
+                                    "Channel request failed: " + e.getMessage(), true));
                 }
                 return;
             }
@@ -949,7 +974,8 @@ public class OpenAiRelayService {
                             ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
                     lastError = "HTTP " + code + " - " + errorBody;
                     lastFailure = BusinessException.upstream(code, "上游 API 错误: " + errorBody,
-                            errorBody, RelaySupport.resolveCooldownSeconds(conn, errorBody));
+                            "Upstream API error: " + errorBody, errorBody,
+                            RelaySupport.resolveCooldownSeconds(conn, errorBody));
                     log.warn("渠道 {} 流式请求失败: {}", channel.getId(), lastError);
                     String streamError = lastError;
                     BusinessException streamFailure = lastFailure;
@@ -989,7 +1015,8 @@ public class OpenAiRelayService {
             } catch (Exception e) {
                 conn.disconnect();
                 lastError = e.getMessage();
-                lastFailure = new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
+                lastFailure = new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                        "Channel request failed: " + e.getMessage(), e);
                 log.error("渠道 {} 流式请求异常 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.dispatchRelayFailure(channel.getId(), modelConfigId, lastFailure, () ->
                         support.channelHealthTracker.recordFailure(channel.getId(),
@@ -998,7 +1025,8 @@ public class OpenAiRelayService {
                 if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
                     RelayServiceUtils.writeOpenAiError(httpResponse, 502,
-                            SseUtils.clientErrorMessage("渠道请求失败: " + e.getMessage(), true));
+                            SseUtils.clientErrorMessage("渠道请求失败: " + e.getMessage(),
+                                    "Channel request failed: " + e.getMessage(), true));
                 }
                 return;
             }
@@ -1025,7 +1053,8 @@ public class OpenAiRelayService {
     private void requireMediaRefundBeforeFallback(RelaySupport.RelayContext ctx, RelaySupport.MediaCharge charge) {
         if (!support.refundMediaCharge(ctx, charge)) {
             throw new BusinessException(500,
-                    "原模型预扣积分退回失败，已记录待人工补偿，停止进入故障转移组");
+                    "原模型预扣积分退回失败，已记录待人工补偿，停止进入故障转移组",
+                    "Failed to refund prepaid credits for the original model; manual compensation is pending, so failover was stopped");
         }
     }
 

@@ -64,7 +64,7 @@ public class ModelGroupController {
     public ApiResponse<Void> updateStatus(@PathVariable Long id, @RequestBody Map<String, Boolean> body) {
         Boolean enabled = body.get("enabled");
         if (enabled == null) {
-            throw new BusinessException("enabled 不能为空");
+            throw new BusinessException("enabled 不能为空", "enabled cannot be null");
         }
         ModelGroup patch = new ModelGroup();
         patch.setEnabled(enabled);

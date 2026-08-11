@@ -115,18 +115,18 @@ public class UserService {
         if (redisTemplate != null) {
             Long failCount = redisTemplate.<String, Long>opsForHash().get(loginFailKey, clientIp);
             if (failCount != null && failCount >= LOGIN_MAX_FAIL_ATTEMPTS) {
-                throw new BusinessException("该账号因登录失败次数过多已被锁定，请1小时后再试");
+                throw new BusinessException("该账号因登录失败次数过多已被锁定，请1小时后再试", "This account is locked due to too many failed login attempts; try again in one hour");
             }
         }
 
         User user = userRepository.findByUsername(request.getUsername()).orElse(null);
         if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             recordLoginFailure(loginFailKey, clientIp);
-            throw new BusinessException("用户名或密码错误");
+            throw new BusinessException("用户名或密码错误", "Incorrect username or password");
         }
 
         if (user.getStatus() != 1) {
-            throw new BusinessException("账号已被禁用");
+            throw new BusinessException("账号已被禁用", "Account disabled");
         }
 
         if (redisTemplate != null) {
@@ -166,15 +166,15 @@ public class UserService {
 
     public User register(RegisterRequest request) {
         if (userRepository.existsByUsername(request.getUsername())) {
-            throw new BusinessException("用户名已存在");
+            throw new BusinessException("用户名已存在", "Username already exists");
         }
 
         // 验证邀请码
         if (request.getInviteCode() == null || request.getInviteCode().isBlank()) {
-            throw new BusinessException("邀请码不能为空");
+            throw new BusinessException("邀请码不能为空", "Invitation code cannot be empty");
         }
         if (!userRepository.existsByInviteCode(request.getInviteCode().trim())) {
-            throw new BusinessException("邀请码无效");
+            throw new BusinessException("邀请码无效", "Invalid invitation code");
         }
 
         User user = User.builder()
@@ -196,7 +196,7 @@ public class UserService {
 
     public User getById(Long id) {
         return userRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("用户不存在"));
+                .orElseThrow(() -> new BusinessException("用户不存在", "User not found"));
     }
 
     /**
@@ -210,7 +210,7 @@ public class UserService {
         }
         long generation = cacheInvalidationService.generation(CacheInvalidationService.USER_PREFIX);
         User user = userRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("用户不存在"));
+                .orElseThrow(() -> new BusinessException("用户不存在", "User not found"));
         if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.USER_PREFIX, generation)) {
             CachedUser fresh = new CachedUser(user, System.currentTimeMillis());
             userCache.put(id, fresh);
@@ -252,7 +252,7 @@ public class UserService {
     public void changePassword(Long userId, String oldPassword, String newPassword) {
         User user = getById(userId);
         if (!passwordEncoder.matches(oldPassword, user.getPassword())) {
-            throw new BusinessException("原密码错误");
+            throw new BusinessException("原密码错误", "Incorrect current password");
         }
         user.setPassword(passwordEncoder.encode(newPassword));
         userRepository.save(user);

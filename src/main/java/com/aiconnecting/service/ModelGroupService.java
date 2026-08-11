@@ -50,7 +50,7 @@ public class ModelGroupService {
 
     public ModelGroup getById(Long id) {
         return modelGroupRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("模型组不存在"));
+                .orElseThrow(() -> new BusinessException("模型组不存在", "Model group not found"));
     }
 
     public java.util.Optional<ModelGroup> findByName(String name) {
@@ -82,7 +82,7 @@ public class ModelGroupService {
 
     static String validateType(String type) {
         if (type == null || type.isBlank() || !VALID_TYPES.contains(type)) {
-            throw new BusinessException("模型组类型无效，仅支持 text/image/video/audio");
+            throw new BusinessException("模型组类型无效，仅支持 text/image/video/audio", "Invalid model group type; only text/image/video/audio are supported");
         }
         return type;
     }
@@ -92,7 +92,7 @@ public class ModelGroupService {
             return "round_robin";
         }
         if (!VALID_STRATEGIES.contains(strategy)) {
-            throw new BusinessException("策略无效，仅支持 round_robin/priority/random");
+            throw new BusinessException("策略无效，仅支持 round_robin/priority/random", "Invalid strategy; only round_robin/priority/random are supported");
         }
         return strategy;
     }
@@ -100,7 +100,7 @@ public class ModelGroupService {
     static int normalizeMaxAttempts(Integer maxAttempts) {
         if (maxAttempts == null) return 5;
         if (maxAttempts < 1) {
-            throw new BusinessException("max_attempts 必须为正整数");
+            throw new BusinessException("max_attempts 必须为正整数", "max_attempts must be a positive integer");
         }
         return Math.min(maxAttempts, MAX_ATTEMPTS_HARD_CAP);
     }
@@ -122,21 +122,23 @@ public class ModelGroupService {
 
     private static void validatePrice(String field, BigDecimal value) {
         if (value != null && value.compareTo(BigDecimal.ZERO) < 0) {
-            throw new BusinessException(400, field + " 不能为负数");
+            throw new BusinessException(400, field + " 不能为负数", field + " cannot be negative");
         }
     }
 
     public void validateNameUnique(String name, Long excludeId) {
         if (name == null || name.isBlank()) {
-            throw new BusinessException("模型组名称不能为空");
+            throw new BusinessException("模型组名称不能为空", "Model group name cannot be empty");
         }
         if (modelGroupRepository.existsByNameExcludingId(name, excludeId)) {
-            throw new BusinessException("模型组名称 \"" + name + "\" 已存在");
+            throw new BusinessException("模型组名称 \"" + name + "\" 已存在",
+                    "Model group name \"" + name + "\" already exists");
         }
         // 组名不得与任何单模型名称冲突：单模型请求按名称精确匹配路由，冲突会使原本走单模型路径的
         // 请求被劫持进组路径（不同的计费/权限逻辑），详见 RelayService#isGroupModel 的路由优先级约定
         if (!modelConfigRepository.findByName(name).isEmpty()) {
-            throw new BusinessException(409, "模型组名称 \"" + name + "\" 与已存在的模型名称冲突");
+            throw new BusinessException(409, "模型组名称 \"" + name + "\" 与已存在的模型名称冲突",
+                    "Model group name \"" + name + "\" conflicts with an existing model name");
         }
     }
 
@@ -181,8 +183,10 @@ public class ModelGroupService {
                         .map(ModelConfig::getName)
                         .toList();
                 if (!mismatched.isEmpty()) {
-                    throw new BusinessException(400, "模型组类型变更后，以下现有成员类型与新类型 (" + existing.getType()
-                            + ") 不一致，请一并重新提交成员列表: " + String.join(", ", mismatched));
+                throw new BusinessException(400, "模型组类型变更后，部分现有成员类型与新类型 (" + existing.getType()
+                            + ") 不一致，请一并重新提交成员列表",
+                        "After changing the model group type, some existing members do not match the new type ("
+                                + existing.getType() + "); resubmit the member list");
                 }
             }
         }
@@ -230,14 +234,15 @@ public class ModelGroupService {
         int order = 0;
         for (MemberInput input : memberInputs) {
             if (input.modelConfigId() == null) {
-                throw new BusinessException("成员模型 id 不能为空");
+                throw new BusinessException("成员模型 id 不能为空", "Member model ID cannot be null");
             }
             ModelConfig config = modelConfigRepository.findById(input.modelConfigId())
-                    .orElseThrow(() -> new BusinessException("成员模型不存在: " + input.modelConfigId()));
+                    .orElseThrow(() -> new BusinessException("成员模型不存在: " + input.modelConfigId(),
+                            "Member model not found: " + input.modelConfigId()));
             String configType = config.getType() == null || config.getType().isBlank() ? "text" : config.getType();
             if (!configType.equals(groupType)) {
-                throw new BusinessException("成员模型 \"" + config.getName() + "\" 类型 (" + configType
-                        + ") 与模型组类型 (" + groupType + ") 不一致");
+                throw new BusinessException("成员模型类型 (" + configType + ") 与模型组类型 (" + groupType + ") 不一致",
+                        "Member model type (" + configType + ") does not match model group type (" + groupType + ")");
             }
             modelGroupMemberRepository.save(ModelGroupMember.builder()
                     .groupId(groupId)
@@ -253,7 +258,8 @@ public class ModelGroupService {
         ModelGroup group = getById(id);
         long memberCount = modelGroupMemberRepository.countByGroupId(id);
         if (memberCount > 0) {
-            throw new BusinessException(409, "模型组仍有 " + memberCount + " 个成员，请先移除成员后再删除");
+            throw new BusinessException(409, "模型组仍有 " + memberCount + " 个成员，请先移除成员后再删除",
+                    "The model group still has " + memberCount + " members; remove them before deleting the group");
         }
         modelGroupRepository.delete(group);
         publishInvalidation();

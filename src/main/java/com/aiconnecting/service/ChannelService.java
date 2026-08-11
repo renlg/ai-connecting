@@ -89,15 +89,15 @@ public class ChannelService {
         try {
             uri = new URI(baseUrl);
         } catch (Exception e) {
-            throw new BusinessException("无效的 URL: " + e.getMessage());
+            throw new BusinessException("无效的 URL: " + e.getMessage(), "Invalid URL: " + e.getMessage());
         }
         String scheme = uri.getScheme();
         if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
-            throw new BusinessException("仅允许 http/https 协议");
+            throw new BusinessException("仅允许 http/https 协议", "Only http/https protocols are allowed");
         }
         String host = uri.getHost();
         if (host == null || host.isBlank()) {
-            throw new BusinessException("无效的 URL: 缺少主机名");
+            throw new BusinessException("无效的 URL: 缺少主机名", "Invalid URL: missing host");
         }
         if (allowedUpstreamHosts != null && !allowedUpstreamHosts.isBlank()) {
             boolean matched = false;
@@ -108,18 +108,18 @@ public class ChannelService {
                 }
             }
             if (!matched) {
-                throw new BusinessException("主机不在白名单中: " + host);
+                throw new BusinessException("主机不在白名单中: " + host, "Host is not allowlisted: " + host);
             }
         }
         InetAddress[] addresses;
         try {
             addresses = InetAddress.getAllByName(host);
         } catch (Exception e) {
-            throw new BusinessException("无法解析主机地址: " + host);
+            throw new BusinessException("无法解析主机地址: " + host, "Unable to resolve host address: " + host);
         }
         for (InetAddress addr : addresses) {
             if (isInternalAddress(addr)) {
-                throw new BusinessException("禁止访问内网地址: " + host);
+                throw new BusinessException("禁止访问内网地址: " + host, "Access to private network addresses is forbidden: " + host);
             }
         }
     }
@@ -195,7 +195,7 @@ public class ChannelService {
 
     public Channel getById(Long id) {
         return channelRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("渠道不存在"));
+                .orElseThrow(() -> new BusinessException("渠道不存在", "Channel not found"));
     }
 
     private static final Pattern SUPPORTED_LEVELS_PATTERN = Pattern.compile("^[1-5](,[1-5])*$");
@@ -205,7 +205,7 @@ public class ChannelService {
             return;
         }
         if (!SUPPORTED_LEVELS_PATTERN.matcher(supportedLevels.trim()).matches()) {
-            throw new BusinessException("支持等级格式非法，应为 1-5 的逗号分隔数字，例如: 1,2,3");
+            throw new BusinessException("支持等级格式非法，应为 1-5 的逗号分隔数字，例如: 1,2,3", "Invalid supported-level format; use comma-separated numbers from 1 to 5, for example: 1,2,3");
         }
     }
 
@@ -250,7 +250,7 @@ public class ChannelService {
 
     public void delete(Long id) {
         if (!channelRepository.existsById(id)) {
-            throw new BusinessException("渠道不存在");
+            throw new BusinessException("渠道不存在", "Channel not found");
         }
         channelRepository.deleteById(id);
         channelHealthPersistenceService.deleteByChannelIdAsync(id);
@@ -333,10 +333,10 @@ public class ChannelService {
      */
     public Map<String, Object> testChat(String baseUrl, String apiKey, String type, String model, String message) {
         if (baseUrl == null || baseUrl.isBlank() || apiKey == null || apiKey.isBlank()) {
-            throw new BusinessException("请先填写 Base URL 和 API Key");
+            throw new BusinessException("请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         }
         if (model == null || model.isBlank()) {
-            throw new BusinessException("请选择模型");
+            throw new BusinessException("请选择模型", "Please select a model");
         }
         model = resolveTestModelName(model);
 
@@ -347,7 +347,7 @@ public class ChannelService {
             return doTestChat(baseUrl, apiKey, model, message, startTime, isClaude);
         } catch (IOException e) {
             log.error("渠道测试请求失败: {}", e.getMessage());
-            throw new BusinessException("连接上游失败: " + e.getMessage());
+            throw new BusinessException("连接上游失败: " + e.getMessage(), "Failed to connect to upstream: " + e.getMessage());
         }
     }
 
@@ -356,16 +356,17 @@ public class ChannelService {
      * 图片、视频保持上游 JSON 结构；音频二进制编码为 data URL，方便管理页直接播放。
      */
     public Map<String, Object> testMedia(Map<String, String> request) {
-        String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key");
-        String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key");
+        String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
+        String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         String channelType = request.get("type");
-        String modelType = requireTestValue(request, "modelType", "缺少模型类型").toLowerCase();
-        String model = resolveTestModelName(requireTestValue(request, "model", "请选择模型"));
+        String modelType = requireTestValue(request, "modelType", "缺少模型类型", "Missing model type").toLowerCase();
+        String model = resolveTestModelName(requireTestValue(request, "model", "请选择模型", "Please select a model"));
         String prompt = request.getOrDefault("message", "hi");
         validateBaseUrlForSsrf(baseUrl);
 
         if (!Set.of("image", "video", "audio").contains(modelType)) {
-            throw new BusinessException("不支持的媒体模型类型: " + modelType);
+            throw new BusinessException("不支持的媒体模型类型: " + modelType,
+                    "Unsupported media model type: " + modelType);
         }
 
         String path;
@@ -424,14 +425,14 @@ public class ChannelService {
             }
         } catch (IOException e) {
             log.error("渠道媒体测试请求失败: {}", e.getMessage());
-            throw new BusinessException("连接上游失败: " + e.getMessage());
+            throw new BusinessException("连接上游失败: " + e.getMessage(), "Failed to connect to upstream: " + e.getMessage());
         }
     }
 
     /** 使用同一渠道配置轮询视频任务；Agnes 必须通过 video_id 查询 /agnesapi。 */
     public Map<String, Object> testVideoStatus(Map<String, String> request) {
-        String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key");
-        String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key");
+        String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
+        String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         String channelType = request.get("type");
         String videoId = requireVideoId(request);
         validateBaseUrlForSsrf(baseUrl);
@@ -460,7 +461,7 @@ public class ChannelService {
             }
         } catch (IOException e) {
             log.error("渠道视频测试轮询失败 videoId={}: {}", videoId, e.getMessage());
-            throw new BusinessException("连接上游失败: " + e.getMessage());
+            throw new BusinessException("连接上游失败: " + e.getMessage(), "Failed to connect to upstream: " + e.getMessage());
         }
     }
 
@@ -482,8 +483,8 @@ public class ChannelService {
      * 回退到旧的 GET /v1/videos/{id}/content 端点。
      */
     public TestMediaContent testVideoContent(Map<String, String> request) {
-        String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key");
-        String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key");
+        String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
+        String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         String channelType = request.get("type");
         String videoId = requireVideoId(request);
         validateBaseUrlForSsrf(baseUrl);
@@ -502,16 +503,16 @@ public class ChannelService {
                     try {
                         json = objectMapper.readTree(body);
                     } catch (IOException parseError) {
-                        throw new BusinessException(502, "上游返回了无法解析的状态响应");
+                        throw new BusinessException(502, "上游返回了无法解析的状态响应", "Upstream returned an unparseable status response");
                     }
                     if (json == null || !json.isObject()) {
-                        throw new BusinessException(502, "上游返回了无法解析的状态响应");
+                        throw new BusinessException(502, "上游返回了无法解析的状态响应", "Upstream returned an unparseable status response");
                     }
                     String status = findVideoStatus(json);
                     String terminalFailure = terminalVideoFailureMessage(json);
                     if (terminalFailure != null) {
                         log.warn("video content videoId={} terminal failure status={}", videoId, status);
-                        throw new BusinessException(502, terminalFailure);
+                        throw new BusinessException(502, terminalFailure, "Upstream video task failed");
                     }
                     videoUrl = findVideoUrl(json);
                 } else {
@@ -531,6 +532,8 @@ public class ChannelService {
                                 attempt, videoId, statusPath, response.code(), abbreviateTestError(body, VIDEO_ERROR_SUMMARY_MAX_CHARS));
                         throw new BusinessException(response.code(),
                                 "上游视频状态查询失败 (HTTP " + response.code() + "): "
+                                        + abbreviateTestError(body, VIDEO_ERROR_SUMMARY_MAX_CHARS),
+                                "Upstream video status query failed (HTTP " + response.code() + "): "
                                         + abbreviateTestError(body, VIDEO_ERROR_SUMMARY_MAX_CHARS));
                     }
                 }
@@ -560,7 +563,7 @@ public class ChannelService {
             }
             log.warn("video content videoId={} exhausted {} attempts without video URL",
                     videoId, VIDEO_CONTENT_MAX_ATTEMPTS);
-            throw new BusinessException(504, "上游视频文件尚未就绪，请稍后重试");
+            throw new BusinessException(504, "上游视频文件尚未就绪，请稍后重试", "Upstream video file is not ready, please try again later");
         }
 
         return downloadVideoUrl(baseUrl, apiKey, channelType, videoId, videoUrl);
@@ -572,26 +575,27 @@ public class ChannelService {
                 "/v1/videos/" + videoId + "/content", null, true);
         VideoDownloadTarget target = validateVideoDownloadTarget(baseUrl, contentRequest.url().toString());
         if (!target.attachChannelCredentials()) {
-            throw new BusinessException(400, "旧版视频内容地址与渠道不同源");
+            throw new BusinessException(400, "旧版视频内容地址与渠道不同源", "Legacy video content URL does not share the channel origin");
         }
         try (Response response = downloadClientFor(target).newCall(contentRequest).execute()) {
             if (response.isRedirect()) {
-                throw new BusinessException(502, "上游视频内容地址返回了重定向，已拒绝跟随");
+                throw new BusinessException(502, "上游视频内容地址返回了重定向，已拒绝跟随", "Upstream video content URL returned a redirect, which was rejected");
             }
             if (!response.isSuccessful()) {
                 String body = readCappedResponseString(response, VIDEO_RESPONSE_MAX_BYTES);
                 throw new BusinessException(response.code(),
-                        "上游视频内容下载失败: " + abbreviateTestError(body, VIDEO_ERROR_SUMMARY_MAX_CHARS));
+                        "上游视频内容下载失败: " + abbreviateTestError(body, VIDEO_ERROR_SUMMARY_MAX_CHARS),
+                        "Upstream video content download failed: " + abbreviateTestError(body, VIDEO_ERROR_SUMMARY_MAX_CHARS));
             }
             byte[] bytes = readCappedResponseBody(response, VIDEO_DOWNLOAD_MAX_BYTES);
             if (bytes.length == 0) {
-                throw new BusinessException(502, "上游返回了空的视频内容");
+                throw new BusinessException(502, "上游返回了空的视频内容", "Upstream returned empty video content");
             }
             String contentType = response.header("Content-Type", "video/mp4").split(";", 2)[0];
             return new TestMediaContent(bytes, contentType);
         } catch (IOException e) {
             log.error("渠道视频测试内容下载失败(legacy) videoId={}: {}", videoId, e.getMessage());
-            throw new BusinessException("连接上游失败: " + e.getMessage());
+            throw new BusinessException("连接上游失败: " + e.getMessage(), "Failed to connect to upstream: " + e.getMessage());
         }
     }
 
@@ -608,26 +612,27 @@ public class ChannelService {
             try (Response response = downloadClientFor(target).newCall(downloadBuilder.build()).execute()) {
                 log.info("video content download videoId={} host={} httpStatus={}", videoId, target.host(), response.code());
                 if (response.isRedirect()) {
-                    throw new BusinessException(502, "上游视频下载地址返回了重定向，已拒绝跟随");
+                    throw new BusinessException(502, "上游视频下载地址返回了重定向，已拒绝跟随", "Upstream video download URL returned a redirect, which was rejected");
                 }
                 if (!response.isSuccessful()) {
                     String body = readCappedResponseString(response, VIDEO_RESPONSE_MAX_BYTES);
                     throw new BusinessException(response.code(),
-                            "上游视频内容下载失败: " + abbreviateTestError(body, VIDEO_ERROR_SUMMARY_MAX_CHARS));
+                            "上游视频内容下载失败: " + abbreviateTestError(body, VIDEO_ERROR_SUMMARY_MAX_CHARS),
+                            "Upstream video content download failed: " + abbreviateTestError(body, VIDEO_ERROR_SUMMARY_MAX_CHARS));
                 }
                 byte[] bytes = readCappedResponseBody(response, VIDEO_DOWNLOAD_MAX_BYTES);
                 log.info("video content download videoId={} bytes={}", videoId, bytes.length);
                 if (bytes.length == 0) {
-                    throw new BusinessException(502, "上游返回了空的视频内容");
+                    throw new BusinessException(502, "上游返回了空的视频内容", "Upstream returned empty video content");
                 }
                 String contentType = response.header("Content-Type", "video/mp4").split(";", 2)[0];
                 return new TestMediaContent(bytes, contentType);
             }
         } catch (IllegalArgumentException e) {
-            throw new BusinessException(400, "上游返回了非法的视频下载地址");
+            throw new BusinessException(400, "上游返回了非法的视频下载地址", "Upstream returned an invalid video download URL");
         } catch (IOException e) {
             log.error("渠道视频测试内容下载失败 videoId={}: {}", videoId, e.getMessage());
-            throw new BusinessException("连接上游失败: " + e.getMessage());
+            throw new BusinessException("连接上游失败: " + e.getMessage(), "Failed to connect to upstream: " + e.getMessage());
         }
     }
 
@@ -665,7 +670,7 @@ public class ChannelService {
             boolean attachChannelCredentials = sameOriginAsChannel;
             return new VideoDownloadTarget(host, attachChannelCredentials, resolvedAddresses);
         } catch (Exception e) {
-            throw new BusinessException(400, "上游返回了非法的视频下载地址");
+            throw new BusinessException(400, "上游返回了非法的视频下载地址", "Upstream returned an invalid video download URL");
         }
     }
 
@@ -741,7 +746,8 @@ public class ChannelService {
 
     private static BusinessException responseTooLarge(long maxBytes) {
         return new BusinessException(502,
-                "上游响应超出大小限制 (" + maxBytes / (1024 * 1024) + "MB)");
+                "上游响应超出大小限制 (" + maxBytes / (1024 * 1024) + "MB)",
+                "Upstream response exceeds the size limit (" + maxBytes / (1024 * 1024) + "MB)");
     }
 
     private boolean isAgnesTypeChannel(String baseUrl, String channelType) {
@@ -761,7 +767,7 @@ public class ChannelService {
             return "/v1/videos/" + videoId;
         }
         if (model == null || model.isBlank()) {
-            throw new BusinessException("Agnes 视频状态查询缺少模型名称");
+            throw new BusinessException("Agnes 视频状态查询缺少模型名称", "Agnes video status query is missing the model name");
         }
         return "/agnesapi?video_id=" + URLEncoder.encode(videoId, StandardCharsets.UTF_8)
                 + "&model_name=" + URLEncoder.encode(model, StandardCharsets.UTF_8);
@@ -770,9 +776,9 @@ public class ChannelService {
     public record TestMediaContent(byte[] bytes, String contentType) {}
 
     private String requireVideoId(Map<String, String> request) {
-        String videoId = requireTestValue(request, "videoId", "缺少视频任务 id");
+        String videoId = requireTestValue(request, "videoId", "缺少视频任务 id", "Missing video task ID");
         if (!videoId.matches("[A-Za-z0-9_\\-.:+/=]+")) {
-            throw new BusinessException("无效的视频任务 id");
+            throw new BusinessException("无效的视频任务 id", "Invalid video task ID");
         }
         return videoId;
     }
@@ -869,9 +875,9 @@ public class ChannelService {
         return null;
     }
 
-    private String requireTestValue(Map<String, String> request, String key, String error) {
+    private String requireTestValue(Map<String, String> request, String key, String error, String englishError) {
         String value = request.get(key);
-        if (value == null || value.isBlank()) throw new BusinessException(error);
+        if (value == null || value.isBlank()) throw new BusinessException(error, englishError);
         return value;
     }
 
@@ -961,10 +967,10 @@ public class ChannelService {
         String message = request.get("message");
 
         if (baseUrl == null || baseUrl.isBlank() || apiKey == null || apiKey.isBlank()) {
-            throw new BusinessException("请先填写 Base URL 和 API Key");
+            throw new BusinessException("请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         }
         if (model == null || model.isBlank()) {
-            throw new BusinessException("请选择模型");
+            throw new BusinessException("请选择模型", "Please select a model");
         }
         model = resolveTestModelName(model);
 
@@ -1087,7 +1093,7 @@ public class ChannelService {
      */
     public List<String> fetchUpstreamModels(String baseUrl, String apiKey, String type) {
         if (baseUrl == null || baseUrl.isBlank() || apiKey == null || apiKey.isBlank()) {
-            throw new BusinessException("请先填写 Base URL 和 API Key");
+            throw new BusinessException("请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         }
         validateBaseUrlForSsrf(baseUrl);
 
@@ -1097,7 +1103,8 @@ public class ChannelService {
             try (Response response = httpClient.newCall(reqBuilder.build()).execute()) {
                 if (!response.isSuccessful()) {
                     String body = response.body() != null ? response.body().string() : "";
-                    throw new BusinessException("上游接口返回 " + response.code() + ": " + body);
+                    throw new BusinessException("上游接口返回 " + response.code() + ": " + body,
+                            "Upstream endpoint returned " + response.code() + ": " + body);
                 }
                 String body = response.body() != null ? response.body().string() : "";
                 JsonNode root = objectMapper.readTree(body);
@@ -1117,7 +1124,8 @@ public class ChannelService {
                 return models;
             } catch (IOException e) {
                 log.error("获取 Gemini 上游模型列表失败: {}", e.getMessage());
-                throw new BusinessException("连接上游失败: " + e.getMessage());
+                throw new BusinessException("连接上游失败: " + e.getMessage(),
+                        "Failed to connect to upstream: " + e.getMessage());
             }
         }
 
@@ -1139,7 +1147,8 @@ public class ChannelService {
                     return new ArrayList<>();
                 }
                 String body = response.body() != null ? response.body().string() : "";
-                throw new BusinessException("上游接口返回 " + response.code() + ": " + body);
+                throw new BusinessException("上游接口返回 " + response.code() + ": " + body,
+                        "Upstream endpoint returned " + response.code() + ": " + body);
             }
             String body = response.body() != null ? response.body().string() : "";
             JsonNode root = objectMapper.readTree(body);
@@ -1156,7 +1165,8 @@ public class ChannelService {
             return models;
         } catch (IOException e) {
             log.error("获取上游模型列表失败: {}", e.getMessage());
-            throw new BusinessException("连接上游失败: " + e.getMessage());
+            throw new BusinessException("连接上游失败: " + e.getMessage(),
+                    "Failed to connect to upstream: " + e.getMessage());
         }
     }
 }

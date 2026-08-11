@@ -117,7 +117,7 @@ public class TokenController {
                                                                  @PathVariable Long id) {
         Token token = tokenService.getById(id);
         if (!"admin".equals(user.getRole()) && !token.getUserId().equals(user.getId())) {
-            throw new BusinessException(403, "无权查看该 Token 的消耗记录");
+            throw new BusinessException(403, "无权查看该 Token 的消耗记录", "Not authorized to view usage records for this token");
         }
         LocalDateTime since = LocalDateTime.now().minusDays(90);
         List<Object[]> rows = usageLogService.getDailyCreditCost(id, since);
@@ -139,7 +139,7 @@ public class TokenController {
                                                                        @PathVariable String date) {
         Token token = tokenService.getById(id);
         if (!"admin".equals(user.getRole()) && !token.getUserId().equals(user.getId())) {
-            throw new BusinessException(403, "无权查看该 Token 的消耗记录");
+            throw new BusinessException(403, "无权查看该 Token 的消耗记录", "Not authorized to view usage records for this token");
         }
         List<Object[]> rows = usageLogService.getLogDetails(id, date);
         Map<String, ModelConfigService.ModelInfo> modelInfoMap = modelConfigService.getModelInfoMap();
@@ -197,10 +197,10 @@ public class TokenController {
         String message = request.get("message");
 
         if (tokenKey == null || tokenKey.isBlank()) {
-            throw new BusinessException("缺少 Token Key");
+            throw new BusinessException("缺少 Token Key", "Missing token key");
         }
         if (model == null || model.isBlank()) {
-            throw new BusinessException("请选择模型");
+            throw new BusinessException("请选择模型", "Please select a model");
         }
 
         // 校验当前用户对该 Token 的所有权
@@ -295,10 +295,10 @@ public class TokenController {
         String message = request.get("message");
 
         if (tokenKey == null || tokenKey.isBlank()) {
-            throw new BusinessException("缺少 Token Key");
+            throw new BusinessException("缺少 Token Key", "Missing token key");
         }
         if (model == null || model.isBlank()) {
-            throw new BusinessException("请选择模型");
+            throw new BusinessException("请选择模型", "Please select a model");
         }
 
         SseUtils.setSseHeaders(response);
@@ -421,7 +421,8 @@ public class TokenController {
             modelGroupService.findByName(trimmed)
                     .filter(group -> Boolean.TRUE.equals(group.getAdminOnly()))
                     .ifPresent(group -> {
-                        throw new BusinessException(403, "普通用户的 Token 不能授权管理员专用模型组: " + group.getName());
+                        throw new BusinessException(403, "普通用户的 Token 不能授权管理员专用模型组: " + group.getName(),
+                                "A regular user's token cannot be authorized for an admin-only model group: " + group.getName());
                     });
         }
     }
@@ -431,7 +432,7 @@ public class TokenController {
      */
     private void checkTokenOwner(User user, Token token) {
         if (!"admin".equals(user.getRole()) && !token.getUserId().equals(user.getId())) {
-            throw new BusinessException(403, "无权操作该 Token");
+            throw new BusinessException(403, "无权操作该 Token", "Not authorized to operate this token");
         }
     }
 }

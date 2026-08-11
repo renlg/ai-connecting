@@ -56,7 +56,7 @@ public class TokenService {
 
     public Token getById(Long id) {
         return tokenRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("Token 不存在"));
+                .orElseThrow(() -> new BusinessException("Token 不存在", "Token not found"));
     }
 
     public Token create(Long userId, TokenRequest request) {
@@ -95,7 +95,7 @@ public class TokenService {
 
     public void delete(Long id) {
         Token token = tokenRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("Token 不存在"));
+                .orElseThrow(() -> new BusinessException("Token 不存在", "Token not found"));
         tokenRepository.deleteById(id);
         evictTokenCache(id, token.getTokenKey());
     }
@@ -118,7 +118,7 @@ public class TokenService {
         } else {
             long generation = cacheInvalidationService.generation(CacheInvalidationService.TOKEN_ID_PREFIX);
             token = tokenRepository.findByTokenKey(tokenKey)
-                    .orElseThrow(() -> new BusinessException(401, "无效的 Token"));
+                    .orElseThrow(() -> new BusinessException(401, "无效的 Token", "Invalid token"));
             if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.TOKEN_ID_PREFIX, generation)) {
                 CachedToken fresh = new CachedToken(token, System.currentTimeMillis());
                 tokenCache.put(tokenKey, fresh);
@@ -131,11 +131,11 @@ public class TokenService {
         }
 
         if (token.getStatus() != 1) {
-            throw new BusinessException(403, "Token 已被禁用");
+            throw new BusinessException(403, "Token 已被禁用", "Token disabled");
         }
 
         if (token.getExpiredAt() != null && token.getExpiredAt().isBefore(java.time.LocalDateTime.now())) {
-            throw new BusinessException(403, "Token 已过期");
+            throw new BusinessException(403, "Token 已过期", "Token expired");
         }
 
         return token;

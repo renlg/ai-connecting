@@ -161,28 +161,29 @@ public class RelaySupport {
     RelayContext validateAndPrepare(String tokenKey, String permissionModel, String routingModel, String endpointType) {
         Token token = tokenService.validateTokenKey(tokenKey);
         if (token.getQuota() != -1 && token.getUsedQuota() >= token.getQuota()) {
-            throw new BusinessException(429, "Token 额度已用完");
+            throw new BusinessException(429, "Token 额度已用完", "Token quota exhausted");
         }
         User tokenUser = userService.getByIdCached(token.getUserId());
         if (tokenUser.getStatus() == null || tokenUser.getStatus() != 1) {
-            throw new BusinessException(403, "账号已被禁用");
+            throw new BusinessException(403, "账号已被禁用", "Account disabled");
         }
         boolean isAdmin = "admin".equals(tokenUser.getRole());
         if (!isAdmin && tokenUser.getCredits() != null && tokenUser.getCredits().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new BusinessException(402, "用户积分不足，请先充值");
+            throw new BusinessException(402, "用户积分不足，请先充值", "Insufficient credits, please recharge");
         }
         checkModelPermission(token, permissionModel);
 
         ModelConfig config = findModelConfigCached(routingModel);
         if (config != null) {
             if (config.getStatus() == null || config.getStatus() != 1) {
-                throw new BusinessException(403, "模型已禁用: " + routingModel);
+                throw new BusinessException(403, "模型已禁用: " + routingModel, "Model disabled: " + routingModel);
             }
             if (Boolean.TRUE.equals(config.getAdminOnly()) && !isAdmin) {
-                throw new BusinessException(403, "该模型仅限管理员使用: " + routingModel);
+                throw new BusinessException(403, "该模型仅限管理员使用: " + routingModel,
+                        "This model is admin-only: " + routingModel);
             }
         } else if (modelGroupService.findByName(routingModel).filter(g -> Boolean.TRUE.equals(g.getEnabled())).isEmpty()) {
-            throw new BusinessException(404, "模型不存在: " + routingModel);
+            throw new BusinessException(404, "模型不存在: " + routingModel, "Model not found: " + routingModel);
         }
         checkEndpointTypeMatch(routingModel, config, endpointType);
 
@@ -201,15 +202,15 @@ public class RelaySupport {
     RelayContext prepareGroupContext(String tokenKey, String groupName) {
         Token token = tokenService.validateTokenKey(tokenKey);
         if (token.getQuota() != -1 && token.getUsedQuota() >= token.getQuota()) {
-            throw new BusinessException(429, "Token 额度已用完");
+            throw new BusinessException(429, "Token 额度已用完", "Token quota exhausted");
         }
         User tokenUser = userService.getByIdCached(token.getUserId());
         if (tokenUser.getStatus() == null || tokenUser.getStatus() != 1) {
-            throw new BusinessException(403, "账号已被禁用");
+            throw new BusinessException(403, "账号已被禁用", "Account disabled");
         }
         boolean isAdmin = "admin".equals(tokenUser.getRole());
         if (!isAdmin && tokenUser.getCredits() != null && tokenUser.getCredits().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new BusinessException(402, "用户积分不足，请先充值");
+            throw new BusinessException(402, "用户积分不足，请先充值", "Insufficient credits, please recharge");
         }
         checkModelPermission(token, groupName);
         if (rateLimitService != null) {
@@ -228,14 +229,18 @@ public class RelaySupport {
         String modelType = config != null ? config.getType() : null;
         if (MEDIA_ENDPOINT_TYPES.contains(endpointType)) {
             if (config == null) {
-                throw new BusinessException(400, "模型未配置，无法用于媒体请求: " + model);
+                throw new BusinessException(400, "模型未配置，无法用于媒体请求: " + model,
+                        "Model not configured for media requests: " + model);
             }
             if (!endpointType.equals(modelType)) {
                 throw new BusinessException(400, "模型 " + model + " 类型为 " + (modelType != null ? modelType : "text")
-                        + "，不能用于 " + endpointType + " 端点");
+                        + "，不能用于 " + endpointType + " 端点",
+                        "Model " + model + " of type " + (modelType != null ? modelType : "text")
+                                + " cannot be used on the " + endpointType + " endpoint");
             }
         } else if (modelType != null && MEDIA_ENDPOINT_TYPES.contains(modelType)) {
-            throw new BusinessException(400, "模型 " + model + " 类型为 " + modelType + "，不能用于文本类端点");
+            throw new BusinessException(400, "模型 " + model + " 类型为 " + modelType + "，不能用于文本类端点",
+                    "Model " + model + " of type " + modelType + " cannot be used on a text endpoint");
         }
     }
 
@@ -247,7 +252,7 @@ public class RelaySupport {
         Token token = tokenService.validateTokenKey(tokenKey);
         User tokenUser = userService.getByIdCached(token.getUserId());
         if (tokenUser.getStatus() == null || tokenUser.getStatus() != 1) {
-            throw new BusinessException(403, "账号已被禁用");
+            throw new BusinessException(403, "账号已被禁用", "Account disabled");
         }
         if (rateLimitService != null) {
             rateLimitService.checkTokenRateLimit(token.getId(), token.getRateLimit());
@@ -268,7 +273,8 @@ public class RelaySupport {
                         new CachedAllowedModels(allowed, System.currentTimeMillis()));
             }
             if (!allowed.contains(model)) {
-                throw new BusinessException(403, "该 Token 无权使用模型: " + model);
+                throw new BusinessException(403, "该 Token 无权使用模型: " + model,
+                        "This token is not allowed to use this model");
             }
         }
     }
@@ -448,7 +454,7 @@ public class RelaySupport {
             return "/v1/videos/" + videoId;
         }
         if (model == null || model.isBlank()) {
-            throw new BusinessException(500, "Agnes 视频任务缺少模型名称");
+            throw new BusinessException(500, "Agnes 视频任务缺少模型名称", "Agnes video task is missing the model name");
         }
         return "/agnesapi?video_id=" + URLEncoder.encode(videoId, StandardCharsets.UTF_8)
                 + "&model_name=" + URLEncoder.encode(model, StandardCharsets.UTF_8);
@@ -466,7 +472,7 @@ public class RelaySupport {
             objectBody.remove("response_format");
             return objectMapper.writeValueAsString(objectBody);
         } catch (IOException e) {
-            throw new BusinessException(400, "图片请求 JSON 格式无效", e);
+            throw new BusinessException(400, "图片请求 JSON 格式无效", "Invalid image request JSON", e);
         }
     }
 
@@ -611,16 +617,19 @@ public class RelaySupport {
             if (!response.isSuccessful()) {
                 log.error("Upstream API error: {} - {}", response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
-                        responseBody, parseRetryAfterSeconds(response, responseBody));
+                        "Upstream API error: " + responseBody, responseBody,
+                        parseRetryAfterSeconds(response, responseBody));
             }
 
             return responseBody;
         } catch (SocketTimeoutException e) {
             log.error("Timed out forwarding request to channel {}: {}", channel.getId(), e.getMessage());
-            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(), e);
+            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
+                    "Channel request timed out: " + e.getMessage(), e);
         } catch (IOException e) {
             log.error("Failed to forward request to channel {}: {}", channel.getId(), e.getMessage());
-            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                    "Channel request failed: " + e.getMessage(), e);
         }
     }
 
@@ -640,15 +649,18 @@ public class RelaySupport {
             if (!response.isSuccessful()) {
                 log.error("Upstream API error: {} - {}", response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
-                        responseBody, parseRetryAfterSeconds(response, responseBody));
+                        "Upstream API error: " + responseBody, responseBody,
+                        parseRetryAfterSeconds(response, responseBody));
             }
             return responseBody;
         } catch (SocketTimeoutException e) {
             log.error("Timed out forwarding GET request to channel {}: {}", channel.getId(), e.getMessage());
-            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(), e);
+            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
+                    "Channel request timed out: " + e.getMessage(), e);
         } catch (IOException e) {
             log.error("Failed to forward GET request to channel {}: {}", channel.getId(), e.getMessage());
-            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                    "Channel request failed: " + e.getMessage(), e);
         }
     }
 
@@ -707,15 +719,17 @@ public class RelaySupport {
                 String error = new String(bytes, StandardCharsets.UTF_8);
                 log.error("Upstream API error: {} - {}", response.code(), error);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + error,
-                        error, parseRetryAfterSeconds(response, error));
+                        "Upstream API error: " + error, error, parseRetryAfterSeconds(response, error));
             }
             return new BinaryResponse(bytes, response.header("Content-Type"));
         } catch (SocketTimeoutException e) {
             log.error("Timed out forwarding request to channel {}: {}", channel.getId(), e.getMessage());
-            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(), e);
+            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
+                    "Channel request timed out: " + e.getMessage(), e);
         } catch (IOException e) {
             log.error("Failed to forward request to channel {}: {}", channel.getId(), e.getMessage());
-            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                    "Channel request failed: " + e.getMessage(), e);
         }
     }
 
@@ -728,7 +742,8 @@ public class RelaySupport {
         while ((read = in.read(buf)) != -1) {
             total += read;
             if (total > maxBytes) {
-                throw new BusinessException(502, "上游响应超出大小限制 (" + maxBytes / (1024 * 1024) + "MB)");
+                throw new BusinessException(502, "上游响应超出大小限制 (" + maxBytes / (1024 * 1024) + "MB)",
+                        "Upstream response exceeds the size limit (" + maxBytes / (1024 * 1024) + "MB)");
             }
             out.write(buf, 0, read);
         }
@@ -737,7 +752,7 @@ public class RelaySupport {
 
     String forwardClaudeRequest(Channel channel, String requestBody) {
         if (isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "请求过于频繁，请稍后重试");
+            throw new BusinessException(429, "请求过于频繁，请稍后重试", "Too many requests, please try again later");
         }
 
         String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1/messages";
@@ -753,13 +768,16 @@ public class RelaySupport {
             if (!response.isSuccessful()) {
                 log.error("Claude upstream API error: {} - {}", response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
-                        responseBody, parseRetryAfterSeconds(response, responseBody));
+                        "Upstream API error: " + responseBody, responseBody,
+                        parseRetryAfterSeconds(response, responseBody));
             }
             return responseBody;
         } catch (SocketTimeoutException e) {
-            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(), e);
+            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
+                    "Channel request timed out: " + e.getMessage(), e);
         } catch (IOException e) {
-            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                    "Channel request failed: " + e.getMessage(), e);
         }
     }
 
@@ -770,7 +788,7 @@ public class RelaySupport {
     /** @param readTimeoutMs 覆盖默认读超时（毫秒），语义同 {@link #forwardRequest(Channel, String, String, Long)} */
     String forwardGeminiRequest(Channel channel, String requestBody, Long readTimeoutMs) {
         if (isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "请求过于频繁，请稍后重试");
+            throw new BusinessException(429, "请求过于频繁，请稍后重试", "Too many requests, please try again later");
         }
 
         String model = "default";
@@ -796,13 +814,16 @@ public class RelaySupport {
             if (!response.isSuccessful()) {
                 log.error("Gemini upstream API error: {} - {}", response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
-                        responseBody, parseRetryAfterSeconds(response, responseBody));
+                        "Upstream API error: " + responseBody, responseBody,
+                        parseRetryAfterSeconds(response, responseBody));
             }
             return responseBody;
         } catch (SocketTimeoutException e) {
-            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(), e);
+            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
+                    "Channel request timed out: " + e.getMessage(), e);
         } catch (IOException e) {
-            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(), e);
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                    "Channel request failed: " + e.getMessage(), e);
         }
     }
 
@@ -1004,7 +1025,8 @@ public class RelaySupport {
             Integer durationField = readPositiveIntSeconds(body, "duration");
             Integer secondsField = readPositiveIntSeconds(body, "seconds");
             if (durationField != null && secondsField != null && !durationField.equals(secondsField)) {
-                throw new BusinessException(400, "duration 与 seconds 参数值不一致，请只传其一或保持相等");
+                throw new BusinessException(400, "duration 与 seconds 参数值不一致，请只传其一或保持相等",
+                        "duration and seconds differ; provide only one or make them equal");
             }
             if (durationField != null) {
                 durationSeconds = durationField;
@@ -1014,7 +1036,8 @@ public class RelaySupport {
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
-            throw new BusinessException(400, "无法解析媒体请求参数: " + e.getMessage());
+            throw new BusinessException(400, "无法解析媒体请求参数: " + e.getMessage(),
+                    "Unable to parse media request parameters: " + e.getMessage());
         }
         return new MediaParams(size, n, durationSeconds);
     }
@@ -1054,11 +1077,13 @@ public class RelaySupport {
         }
         JsonNode node = body.get(field);
         if (!node.isIntegralNumber() || !node.canConvertToInt() || node.asInt() <= 0) {
-            throw new BusinessException(400, field + " 参数必须是正整数秒数");
+            throw new BusinessException(400, field + " 参数必须是正整数秒数",
+                    field + " must be a positive integer number of seconds");
         }
         if (node.asInt() > MediaDurationLimits.MAX_VIDEO_DURATION_SECONDS) {
             throw new BusinessException(400, field + " 参数不能超过 "
-                    + MediaDurationLimits.MAX_VIDEO_DURATION_SECONDS + " 秒");
+                    + MediaDurationLimits.MAX_VIDEO_DURATION_SECONDS + " 秒",
+                    field + " cannot exceed " + MediaDurationLimits.MAX_VIDEO_DURATION_SECONDS + " seconds");
         }
         return node.asInt();
     }
@@ -1080,7 +1105,10 @@ public class RelaySupport {
         if (creditCost.compareTo(BigDecimal.ZERO) > 0) {
             deducted = userService.tryDeductCredits(ctx.token().getUserId(), creditCost);
             if (!deducted && !"admin".equals(ctx.user().getRole())) {
-                throw new BusinessException(402, "用户积分不足，本次请求需要 " + creditCost.stripTrailingZeros().toPlainString() + " 积分，请先充值");
+            throw new BusinessException(402,
+                    "用户积分不足，本次请求需要 " + creditCost.stripTrailingZeros().toPlainString() + " 积分，请先充值",
+                    "Insufficient credits, this request requires " + creditCost.stripTrailingZeros().toPlainString()
+                            + " credits, please recharge");
             }
         }
         return new MediaCharge(creditCost, deducted);

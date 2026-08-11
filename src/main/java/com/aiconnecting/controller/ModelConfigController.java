@@ -37,14 +37,16 @@ public class ModelConfigController {
         ModelGroup group = modelGroupService.getById(fallbackGroupId);
         String effectiveType = modelType != null ? modelType : "text";
         if (!effectiveType.equals(group.getType())) {
-            throw new BusinessException("故障转移组类型 (" + group.getType() + ") 与模型类型 (" + effectiveType + ") 不一致");
+            throw new BusinessException("故障转移组类型 (" + group.getType() + ") 与模型类型 (" + effectiveType + ") 不一致",
+                    "Failover group type (" + group.getType() + ") does not match model type (" + effectiveType + ")");
         }
     }
 
     /** 模型名称/显示名不得与已存在的模型组名称冲突，理由同 {@link ModelGroupService#validateNameUnique} */
     private void validateNotGroupName(String name) {
         if (name != null && !name.isBlank() && modelGroupService.findByName(name).isPresent()) {
-            throw new BusinessException(409, "模型名称 \"" + name + "\" 与已存在的模型组名称冲突");
+            throw new BusinessException(409, "模型名称 \"" + name + "\" 与已存在的模型组名称冲突",
+                    "Model name \"" + name + "\" conflicts with an existing model group name");
         }
     }
 
@@ -55,7 +57,7 @@ public class ModelConfigController {
             return null;
         }
         if (!VALID_TYPES.contains(type)) {
-            throw new BusinessException("模型类型无效，仅支持 text/image/video/audio");
+            throw new BusinessException("模型类型无效，仅支持 text/image/video/audio", "Invalid model type; only text/image/video/audio are supported");
         }
         return type;
     }
@@ -80,13 +82,13 @@ public class ModelConfigController {
 
     private static void checkNonNegative(String label, Integer value) {
         if (value != null && value < 0) {
-            throw new BusinessException(label + "不能为负数");
+            throw new BusinessException(label + "不能为负数", label + " cannot be negative");
         }
     }
 
     private static void checkNonNegative(String label, BigDecimal value) {
         if (value != null && value.compareTo(BigDecimal.ZERO) < 0) {
-            throw new BusinessException(label + "不能为负数");
+            throw new BusinessException(label + "不能为负数", label + " cannot be negative");
         }
     }
 
@@ -129,7 +131,7 @@ public class ModelConfigController {
     @PostMapping
     public ApiResponse<ModelConfig> create(@RequestBody ModelConfigRequest request) {
         if (request.getName() == null || request.getName().isBlank()) {
-            throw new BusinessException("模型名称不能为空");
+            throw new BusinessException("模型名称不能为空", "Model name cannot be empty");
         }
         modelConfigService.validateDisplayNameUnique(request.getDisplayName(), null);
         validateNotGroupName(request.getName());
@@ -240,7 +242,7 @@ public class ModelConfigController {
     @DeleteMapping("/{id}")
     public ApiResponse<Void> delete(@PathVariable Long id) {
         if (!modelConfigService.existsById(id)) {
-            throw new BusinessException("模型不存在");
+            throw new BusinessException("模型不存在", "Model not found");
         }
         modelConfigService.delete(id);
         relayService.clearModelNameCache();
@@ -266,7 +268,7 @@ public class ModelConfigController {
     public ApiResponse<List<ModelConfig>> batchCreate(@RequestBody Map<String, List<String>> body) {
         List<String> names = body.get("names");
         if (names == null || names.isEmpty()) {
-            throw new BusinessException("模型名称列表不能为空");
+            throw new BusinessException("模型名称列表不能为空", "Model name list cannot be empty");
         }
         List<ModelConfig> created = modelConfigService.batchCreate(names);
         relayService.clearModelNameCache();

@@ -122,7 +122,8 @@ class RelayControllerTest {
         mockMvc.perform(post("/v1/chat/completions")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().is5xxServerError());
+                .andExpect(status().is5xxServerError())
+                .andExpect(jsonPath("$.message").value("Internal server error, please try again later"));
     }
 
     @Test
@@ -139,7 +140,7 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.message").value("缺少 Authorization header 或格式不正确"))
+                .andExpect(jsonPath("$.message").value("Missing or malformed Authorization header"))
                 .andExpect(jsonPath("$.traceId").doesNotExist());
     }
 
@@ -178,7 +179,7 @@ class RelayControllerTest {
         when(relayService.resolveModelName("gpt-4")).thenReturn("gpt-4");
         when(relayService.relayRequest(eq("sk-test"), eq("/v1/chat/completions"),
                 anyString(), eq("gpt-4"), any()))
-                .thenThrow(new BusinessException(429, "Token 额度已用完"));
+                .thenThrow(new BusinessException(429, "Token 额度已用完", "Token quota exhausted"));
 
         String body = "{\"model\":\"gpt-4\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}";
 
@@ -187,7 +188,7 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isTooManyRequests())
-                .andExpect(jsonPath("$.message").value("Token 额度已用完"))
+                .andExpect(jsonPath("$.message").value("Token quota exhausted"))
                 .andExpect(jsonPath("$.traceId").doesNotExist());
     }
 
@@ -314,12 +315,12 @@ class RelayControllerTest {
     @Test
     void listModels_invalidToken() throws Exception {
         when(tokenService.validateTokenKey("sk-invalid"))
-                .thenThrow(new BusinessException(401, "无效的 Token"));
+                .thenThrow(new BusinessException(401, "无效的 Token", "Invalid token"));
 
         mockMvc.perform(get("/v1/models")
                         .header("Authorization", "Bearer sk-invalid"))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.message").value("无效的 Token"))
+                .andExpect(jsonPath("$.message").value("Invalid token"))
                 .andExpect(jsonPath("$.traceId").doesNotExist());
     }
 

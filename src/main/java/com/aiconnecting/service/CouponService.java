@@ -36,7 +36,7 @@ public class CouponService {
 
     public Coupon generateCoupon(User admin, BigDecimal credits, Integer maxUses, LocalDateTime expiryDate) {
         if (!"admin".equalsIgnoreCase(admin.getRole())) {
-            throw new BusinessException("无权限创建积分券");
+            throw new BusinessException("无权限创建积分券", "Not authorized to create credit coupons");
         }
 
         String code = generateCode();
@@ -58,18 +58,18 @@ public class CouponService {
     @Transactional
     public Coupon redeemCoupon(User user, String code) {
         Coupon coupon = couponRepository.findByCode(code.trim().toUpperCase())
-                .orElseThrow(() -> new BusinessException("兑换码不存在"));
+                .orElseThrow(() -> new BusinessException("兑换码不存在", "Redemption code not found"));
 
         if (coupon.getStatus() != 1) {
-            throw new BusinessException("该兑换码已被禁用");
+            throw new BusinessException("该兑换码已被禁用", "This redemption code is disabled");
         }
 
         if (coupon.getUsedCount() >= coupon.getMaxUses()) {
-            throw new BusinessException("该兑换码已达到使用次数上限");
+            throw new BusinessException("该兑换码已达到使用次数上限", "This redemption code has reached its usage limit");
         }
 
         if (coupon.getExpiryDate() != null && coupon.getExpiryDate().isBefore(LocalDateTime.now())) {
-            throw new BusinessException("该兑换码已过期");
+            throw new BusinessException("该兑换码已过期", "This redemption code has expired");
         }
 
         // 检查今日兑换次数上限（每人每天最多 100 次）
@@ -77,17 +77,17 @@ public class CouponService {
         LocalDateTime todayEnd = LocalDateTime.of(LocalDate.now(), LocalTime.MAX);
         long todayCount = redemptionLogRepository.countByUserIdAndRedeemedAtBetween(user.getId(), todayStart, todayEnd);
         if (todayCount >= 100) {
-            throw new BusinessException("今日兑换次数已达上限");
+            throw new BusinessException("今日兑换次数已达上限", "Today’s redemption limit has been reached");
         }
 
         // 原子递增使用次数（WHERE 条件保证不超限，返回 0 表示已达上限）
         int affected = couponRepository.incrementUsedCount(coupon.getId());
         if (affected == 0) {
-            throw new BusinessException("该兑换码已达到使用次数上限");
+            throw new BusinessException("该兑换码已达到使用次数上限", "This redemption code has reached its usage limit");
         }
 
         Coupon updated = couponRepository.findById(coupon.getId())
-                .orElseThrow(() -> new BusinessException("积分券不存在"));
+                .orElseThrow(() -> new BusinessException("积分券不存在", "Credit coupon not found"));
 
         userRepository.addCredits(user.getId(), coupon.getCredits());
         cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + user.getId());
@@ -134,7 +134,7 @@ public class CouponService {
     @Transactional
     public Coupon toggleStatus(Long id, Integer status) {
         Coupon coupon = couponRepository.findById(id)
-                .orElseThrow(() -> new BusinessException("积分券不存在"));
+                .orElseThrow(() -> new BusinessException("积分券不存在", "Credit coupon not found"));
         coupon.setStatus(status);
         return couponRepository.save(coupon);
     }

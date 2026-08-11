@@ -77,13 +77,19 @@ public class SecurityConfig {
                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     response.setContentType(MediaType.APPLICATION_JSON_VALUE);
                     response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-                    response.getWriter().write("{\"code\":401,\"message\":\"未登录或登录已过期，请重新登录\"}");
+                    String message = request.getRequestURI().startsWith("/v1/")
+                            ? "Not logged in or session expired, please log in again"
+                            : "未登录或登录已过期，请重新登录";
+                    response.getWriter().write("{\"code\":401,\"message\":\"" + message + "\"}");
                 })
                 .accessDeniedHandler((request, response, accessDeniedException) -> {
                     response.setStatus(HttpServletResponse.SC_FORBIDDEN);
                     response.setContentType(MediaType.APPLICATION_JSON_VALUE);
                     response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-                    response.getWriter().write("{\"code\":403,\"message\":\"权限不足\"}");
+                    String message = request.getRequestURI().startsWith("/v1/")
+                            ? "Insufficient permissions"
+                            : "权限不足";
+                    response.getWriter().write("{\"code\":403,\"message\":\"" + message + "\"}");
                 })
             )
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

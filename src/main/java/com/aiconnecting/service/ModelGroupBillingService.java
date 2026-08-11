@@ -39,7 +39,8 @@ public class ModelGroupBillingService {
         String tier = UsageLogService.resolveImageTier(
                 size == null || size.isBlank() ? UsageLogService.DEFAULT_IMAGE_SIZE : size);
         if (tier == null) {
-            throw new BusinessException(400, "不支持的图片分辨率: " + size + "，请使用如 1024x1024 的宽x高格式");
+            throw new BusinessException(400, "不支持的图片分辨率: " + size + "，请使用如 1024x1024 的宽x高格式",
+                    "Unsupported image resolution: " + size + "; use a width-by-height format such as 1024x1024");
         }
         BigDecimal price = switch (tier) {
             case "2K" -> group.getPrice2k();
@@ -57,7 +58,9 @@ public class ModelGroupBillingService {
         String tier = UsageLogService.resolveVideoTier(size);
         if (tier == null) {
             throw new BusinessException(400, "视频请求缺少或包含不支持的分辨率参数 (size/resolution): " + size
-                    + "，支持 480p/720p/1080p/4k 或宽x高格式");
+                    + "，支持 480p/720p/1080p/4k 或宽x高格式",
+                    "Video request has a missing or unsupported resolution (size/resolution): " + size
+                            + "; supported values are 480p/720p/1080p/4k or width-by-height");
         }
         BigDecimal price = switch (tier) {
             case "720P" -> group.getPrice720p();
@@ -70,7 +73,8 @@ public class ModelGroupBillingService {
 
     public BigDecimal calculateVideoCreditCost(ModelGroup group, String size, int durationSeconds) {
         if (durationSeconds <= 0) {
-            throw new BusinessException(400, "视频请求缺少有效的时长参数 (duration/seconds)，需为正整数秒数");
+            throw new BusinessException(400, "视频请求缺少有效的时长参数 (duration/seconds)，需为正整数秒数",
+                    "Video request is missing a valid duration (duration/seconds), which must be a positive integer number of seconds");
         }
         return resolveVideoUnitPrice(group, size).multiply(BigDecimal.valueOf(durationSeconds));
     }
@@ -78,10 +82,12 @@ public class ModelGroupBillingService {
     public BigDecimal calculateAudioCreditCost(ModelGroup group, String quality, int durationSeconds) {
         String tier = UsageLogService.resolveAudioTier(quality);
         if (tier == null) {
-            throw new BusinessException(400, "不支持的音频音质参数 (quality): " + quality + "，支持 standard/hd");
+            throw new BusinessException(400, "不支持的音频音质参数 (quality): " + quality + "，支持 standard/hd",
+                    "Unsupported audio quality parameter (quality): " + quality + "; supported values are standard/hd");
         }
         if (durationSeconds <= 0) {
-            throw new BusinessException(400, "音频请求缺少有效的时长参数 (duration/seconds)，需为正整数秒数");
+            throw new BusinessException(400, "音频请求缺少有效的时长参数 (duration/seconds)，需为正整数秒数",
+                    "Audio request is missing a valid duration (duration/seconds), which must be a positive integer number of seconds");
         }
         BigDecimal price = "HD".equals(tier) ? group.getPriceHd() : group.getPriceStandard();
         return nz(price).multiply(BigDecimal.valueOf(durationSeconds));

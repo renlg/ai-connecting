@@ -97,7 +97,7 @@ public class AdminController {
     @PutMapping("/users/{id}/reset-password")
     public ApiResponse<Void> resetPassword(@AuthenticationPrincipal User currentUser, @PathVariable Long id) {
         if (resetPassword == null || resetPassword.isBlank()) {
-            throw new BusinessException("重置密码未配置，请设置环境变量 ADMIN_RESET_PASSWORD");
+            throw new BusinessException("重置密码未配置，请设置环境变量 ADMIN_RESET_PASSWORD", "Reset password is not configured; set ADMIN_RESET_PASSWORD");
         }
         userService.resetPassword(id, resetPassword);
         operationLogService.record(currentUser.getId(), "RESET_PASSWORD", "user:" + id, null);
@@ -250,7 +250,7 @@ public class AdminController {
                                                         @PathVariable Long id,
                                                         @Valid @RequestBody AnnouncementRequest request) {
         Announcement announcement = announcementRepository.findById(id)
-                .orElseThrow(() -> new BusinessException(404, "公告不存在"));
+                .orElseThrow(() -> new BusinessException(404, "公告不存在", "Announcement not found"));
         announcement.setTitle(request.getTitle());
         announcement.setContent(request.getContent());
         if (request.getStatus() != null) {

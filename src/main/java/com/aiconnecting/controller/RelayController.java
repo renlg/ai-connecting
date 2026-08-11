@@ -67,7 +67,7 @@ public class RelayController {
         } else if (apiKey != null && !apiKey.isBlank()) {
             tokenKey = apiKey;
         } else {
-            throw new BusinessException(401, "缺少认证信息，请使用 Authorization: Bearer <token> 或 x-api-key: <token>");
+            throw new BusinessException(401, "缺少认证信息，请使用 Authorization: Bearer <token> 或 x-api-key: <token>", "Missing authentication; use Authorization: Bearer <token> or x-api-key: <token>");
         }
 
         JsonNode jsonBody = objectMapper.readTree(requestBody);
@@ -144,7 +144,7 @@ public class RelayController {
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "";
         if (model.isEmpty()) {
-            throw new BusinessException(400, "请求缺少 model 参数");
+            throw new BusinessException(400, "请求缺少 model 参数", "Missing model parameter");
         }
         String resolvedModel = relayService.resolveModelName(model);
         if (!resolvedModel.equals(model)) {
@@ -181,7 +181,7 @@ public class RelayController {
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "";
         if (model.isEmpty()) {
-            throw new BusinessException(400, "请求缺少 model 参数");
+            throw new BusinessException(400, "请求缺少 model 参数", "Missing model parameter");
         }
         String resolvedModel = relayService.resolveModelName(model);
         if (!resolvedModel.equals(model)) {
@@ -205,7 +205,7 @@ public class RelayController {
         String tokenKey = extractTokenKey(authHeader);
         String model = formFields.getFirst("model");
         if (model == null || model.isBlank()) {
-            throw new BusinessException(400, "请求缺少 model 参数");
+            throw new BusinessException(400, "请求缺少 model 参数", "Missing model parameter");
         }
         String resolvedModel = relayService.resolveModelName(model);
         // MultiValueMap 保留同名表单字段的全部值（如 timestamp_granularities[]）
@@ -225,7 +225,7 @@ public class RelayController {
 
         User tokenUser = userService.getByIdCached(token.getUserId());
         if (tokenUser.getStatus() == null || tokenUser.getStatus() != 1) {
-            throw new BusinessException(403, "账号已被禁用");
+            throw new BusinessException(403, "账号已被禁用", "Account disabled");
         }
 
         boolean isAdmin = userService.isAdmin(token.getUserId());
@@ -324,7 +324,7 @@ public class RelayController {
 
     private String extractTokenKey(String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            throw new BusinessException(401, "缺少 Authorization header 或格式不正确");
+            throw new BusinessException(401, "缺少 Authorization header 或格式不正确", "Missing or malformed Authorization header");
         }
         return authHeader.substring(7);
     }

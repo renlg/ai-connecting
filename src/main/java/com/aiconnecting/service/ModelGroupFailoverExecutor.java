@@ -55,10 +55,13 @@ public class ModelGroupFailoverExecutor {
 
     private ModelGroup requireGroup(String groupName, String expectedType) {
         ModelGroup group = findEnabledGroup(groupName)
-                .orElseThrow(() -> new BusinessException(404, "模型组不存在或未启用: " + groupName));
+                .orElseThrow(() -> new BusinessException(404, "模型组不存在或未启用: " + groupName,
+                        "Model group not found or disabled: " + groupName));
         if (!expectedType.equals(group.getType())) {
             throw new BusinessException(400, "模型组 " + groupName + " 类型为 " + group.getType()
-                    + "，不能用于 " + expectedType + " 端点");
+                    + "，不能用于 " + expectedType + " 端点",
+                    "Model group " + groupName + " of type " + group.getType()
+                            + " cannot be used on the " + expectedType + " endpoint");
         }
         return group;
     }
@@ -71,7 +74,8 @@ public class ModelGroupFailoverExecutor {
      */
     private void checkGroupAdminOnly(ModelGroup group, boolean isAdmin) {
         if (Boolean.TRUE.equals(group.getAdminOnly()) && !isAdmin) {
-            throw new BusinessException(403, "该模型组仅限管理员使用: " + group.getName());
+            throw new BusinessException(403, "该模型组仅限管理员使用: " + group.getName(),
+                    "This model group is admin-only: " + group.getName());
         }
     }
 
@@ -128,12 +132,15 @@ public class ModelGroupFailoverExecutor {
     }
 
     private BusinessException upstreamFailure(int code, String body, Long retryAfterSeconds) {
-        return BusinessException.upstream(code, "上游 API 错误: " + body, body, retryAfterSeconds);
+        return BusinessException.upstream(code, "上游 API 错误: " + body,
+                "Upstream API error: " + body, body, retryAfterSeconds);
     }
 
     /** 包裹重试耗尽后的汇总错误，保留原始异常的 upstreamResponse 标记，避免真实上游错误被误判为本地错误而向终端用户泄露细节 */
     private BusinessException wrapFailure(BusinessException cause, String message) {
-        return new BusinessException(cause.getCode(), message, cause, cause.getUpstreamResponseBody(),
+        return new BusinessException(cause.getCode(), message,
+                "All members of the model group are unavailable, please try again later",
+                cause, cause.getUpstreamResponseBody(),
                 cause.getRetryAfterSeconds(), cause.isUpstreamResponse());
     }
 
@@ -144,6 +151,10 @@ public class ModelGroupFailoverExecutor {
      */
     private String exhaustedGroupMessage(String groupName) {
         return "模型组 " + groupName + " 所有成员均不可用，请稍后重试";
+    }
+
+    private String exhaustedGroupEnglishMessage(String groupName) {
+        return "All members of model group " + groupName + " are unavailable, please try again later";
     }
 
     // ==================== 文本（非流式） ====================
@@ -168,7 +179,8 @@ public class ModelGroupFailoverExecutor {
         checkGroupAdminOnly(group, isAdmin);
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
-            throw new BusinessException(503, "模型组无可用成员: " + groupName);
+            throw new BusinessException(503, "模型组无可用成员: " + groupName,
+                    "No available members in model group: " + groupName);
         }
 
         long startTime = System.currentTimeMillis();
@@ -236,7 +248,7 @@ public class ModelGroupFailoverExecutor {
         }
         throw lastFailure != null
                 ? wrapFailure(lastFailure, exhaustedGroupMessage(groupName))
-                : new BusinessException(502, exhaustedGroupMessage(groupName));
+                : new BusinessException(502, exhaustedGroupMessage(groupName), exhaustedGroupEnglishMessage(groupName));
     }
 
     private void recordGroupTextUsage(Token token, Channel channel, ModelGroup group, String actualModel,
@@ -304,7 +316,9 @@ public class ModelGroupFailoverExecutor {
         checkGroupAdminOnly(group, isAdmin);
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
-            RelayServiceUtils.writeOpenAiError(httpResponse, 503, "模型组无可用成员: " + groupName);
+            RelayServiceUtils.writeOpenAiError(httpResponse, 503,
+                    SseUtils.clientErrorMessage("模型组无可用成员: " + groupName,
+                            "No available members in model group: " + groupName, false));
             return;
         }
 
@@ -357,7 +371,8 @@ public class ModelGroupFailoverExecutor {
             } catch (IOException e) {
                 lastError = e.getMessage();
                 lastErrorUpstream = true;
-                recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(), e));
+                recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                        "Channel request failed: " + e.getMessage(), e));
                 if (remainingBudgetMs(deadline) <= 0) break;
                 continue;
             }
@@ -374,7 +389,8 @@ public class ModelGroupFailoverExecutor {
                     conn.disconnect();
                     if (!FailureClassifier.isSwitchable(upstreamError)) {
                         RelayServiceUtils.writeOpenAiError(httpResponse, code,
-                                SseUtils.clientErrorMessage("上游返回错误: " + errorBody, true));
+                                SseUtils.clientErrorMessage("上游返回错误: " + errorBody,
+                                        "Upstream returned an error: " + errorBody, true));
                         return;
                     }
                     recordFailure(channel, modelConfigId, upstreamError);
@@ -392,6 +408,7 @@ public class ModelGroupFailoverExecutor {
                     lastError = "上游返回空响应（HTTP 200 但无数据流）";
                     lastErrorUpstream = true;
                     recordFailure(channel, modelConfigId, new BusinessException(502, lastError,
+                            "Upstream returned an empty response (HTTP 200 with no data stream)",
                             new IOException(lastError)));
                     if (remainingBudgetMs(deadline) <= 0) break;
                     continue;
@@ -408,9 +425,11 @@ public class ModelGroupFailoverExecutor {
                 lastError = e.getMessage();
                 lastErrorUpstream = true;
                 log.error("模型组 {} 成员 {} (渠道 {}) 流式请求异常: {}", groupName, memberModel, channel.getId(), e.getMessage());
-                recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(), e));
+                recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                        "Channel request failed: " + e.getMessage(), e));
                 if (e.partialResult().bytesWritten()) {
-                    finishBrokenSse(httpResponse, "模型组 " + groupName + " 流式响应中断: " + lastError);
+                    finishBrokenSse(httpResponse, "模型组流式响应中断，请稍后重试",
+                            "Model group streaming response was interrupted, please try again later", true);
                     return;
                 }
                 if (remainingBudgetMs(deadline) <= 0) break;
@@ -419,9 +438,11 @@ public class ModelGroupFailoverExecutor {
                 lastError = e.getMessage();
                 lastErrorUpstream = true;
                 log.error("模型组 {} 成员 {} (渠道 {}) 流式请求异常: {}", groupName, memberModel, channel.getId(), e.getMessage());
-                recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(), e));
+                recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                        "Channel request failed: " + e.getMessage(), e));
                 if (httpResponse.isCommitted()) {
-                    finishBrokenSse(httpResponse, "模型组 " + groupName + " 流式响应中断: " + lastError);
+                    finishBrokenSse(httpResponse, "模型组流式响应中断，请稍后重试",
+                            "Model group streaming response was interrupted, please try again later", true);
                     return;
                 }
                 if (remainingBudgetMs(deadline) <= 0) break;
@@ -430,13 +451,15 @@ public class ModelGroupFailoverExecutor {
         if (!httpResponse.isCommitted()) {
             log.error("模型组 {} 流式请求所有成员均不可用，最后错误: {}", groupName, lastError);
             RelayServiceUtils.writeOpenAiError(httpResponse, 502,
-                    SseUtils.clientErrorMessage(exhaustedGroupMessage(groupName), lastErrorUpstream));
+                    SseUtils.clientErrorMessage(exhaustedGroupMessage(groupName),
+                            exhaustedGroupEnglishMessage(groupName), lastErrorUpstream));
         }
     }
 
-    private void finishBrokenSse(HttpServletResponse response, String message) {
+    private void finishBrokenSse(HttpServletResponse response, String zhMessage, String enMessage,
+                                 boolean isUpstreamError) {
         try {
-            SseUtils.writeSseErrorEvent(response, message);
+            SseUtils.writeSseErrorEvent(response, zhMessage, enMessage, isUpstreamError);
             response.getWriter().flush();
         } catch (Exception ignored) {
         }
@@ -482,7 +505,8 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
-            throw new BusinessException(503, "模型组无可用成员: " + groupName);
+            throw new BusinessException(503, "模型组无可用成员: " + groupName,
+                    "No available members in model group: " + groupName);
         }
 
         MediaAttemptResult result = attemptMedia(ctx, group, candidates, path, requestBody, creditCost);
@@ -526,15 +550,16 @@ public class ModelGroupFailoverExecutor {
         checkGroupAdminOnly(group, "admin".equals(ctx.user().getRole()));
         JsonNode body = support.objectMapper.readTree(requestBody);
         if (!body.isObject()) {
-            throw new BusinessException(400, "请求体必须是 JSON 对象");
+            throw new BusinessException(400, "请求体必须是 JSON 对象", "Request body must be a JSON object");
         }
         JsonNode inputNode = body.get("input");
         if (inputNode == null || !inputNode.isTextual() || inputNode.asText().isEmpty()) {
-            throw new BusinessException(400, "语音合成请求缺少有效的 input 文本参数");
+            throw new BusinessException(400, "语音合成请求缺少有效的 input 文本参数", "Text-to-speech request is missing a valid input text parameter");
         }
         String quality = body.hasNonNull("quality") && body.get("quality").isTextual() ? body.get("quality").asText() : null;
         if (quality != null && UsageLogService.resolveAudioTier(quality) == null) {
-            throw new BusinessException(400, "不支持的音频音质参数 (quality): " + quality);
+            throw new BusinessException(400, "不支持的音频音质参数 (quality): " + quality,
+                    "Unsupported audio quality parameter (quality): " + quality);
         }
         double speed = body.hasNonNull("speed") ? body.get("speed").asDouble() : 1.0;
         int estimatedSeconds = Math.max(1, (int) Math.ceil(
@@ -549,7 +574,8 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
-            throw new BusinessException(503, "模型组无可用成员: " + groupName);
+            throw new BusinessException(503, "模型组无可用成员: " + groupName,
+                    "No available members in model group: " + groupName);
         }
 
         String baseSpeechBody = support.objectMapper.writeValueAsString(upstreamBody);
@@ -564,7 +590,11 @@ public class ModelGroupFailoverExecutor {
                 : com.aiconnecting.common.AudioDurationUtil.measure(audio);
         if (measured <= 0) {
             boolean refunded = support.refundMediaCharge(ctx, charge);
-            throw new BusinessException(400, "生成的音频无法测量有效时长" + (refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿"));
+            throw new BusinessException(400,
+                    "生成的音频无法测量有效时长" + (refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿"),
+                    "Unable to measure a valid duration for the generated audio"
+                            + (refunded ? ", prepaid credits were refunded"
+                            : ", failed to refund prepaid credits; manual compensation is pending"));
         }
         int actualSeconds = Math.max(1, (int) Math.ceil(measured));
         BigDecimal actualCost = billingService.calculateAudioCreditCost(group, quality, actualSeconds);
@@ -602,7 +632,8 @@ public class ModelGroupFailoverExecutor {
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
             support.refundMediaCharge(ctx, charge);
-            throw new BusinessException(503, "模型组无可用成员: " + group.getName());
+            throw new BusinessException(503, "模型组无可用成员: " + group.getName(),
+                    "No available members in model group: " + group.getName());
         }
 
         long startTime = System.currentTimeMillis();
@@ -650,7 +681,8 @@ public class ModelGroupFailoverExecutor {
                 if (timeoutMs <= 0) break;
                 RelaySupport.BinaryResponse response = support.forwardMultipartRequest(channel, path, mb.build(), timeoutMs);
                 if (!rawPassThrough && !isValidTranscriptionJson(response.body())) {
-                    throw new BusinessException(502, "上游返回无法解析的转写结果");
+                    throw new BusinessException(502, "上游返回无法解析的转写结果",
+                            "Upstream returned an unparseable transcription result");
                 }
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 modelHealthTracker.recordSuccess(channel.getId(), modelConfigId);
@@ -675,7 +707,8 @@ public class ModelGroupFailoverExecutor {
         support.refundMediaCharge(ctx, charge);
         throw lastFailure != null
                 ? wrapFailure(lastFailure, exhaustedGroupMessage(group.getName()))
-                : new BusinessException(502, exhaustedGroupMessage(group.getName()));
+                : new BusinessException(502, exhaustedGroupMessage(group.getName()),
+                        exhaustedGroupEnglishMessage(group.getName()));
     }
 
     private boolean isValidTranscriptionJson(byte[] body) {
@@ -709,7 +742,8 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
         if (candidates.isEmpty()) {
-            throw new BusinessException(503, "模型组无可用成员: " + groupName);
+            throw new BusinessException(503, "模型组无可用成员: " + groupName,
+                    "No available members in model group: " + groupName);
         }
 
         MediaAttemptResult result = attemptMedia(ctx, group, candidates, path, requestBody, creditCost);
@@ -720,12 +754,14 @@ public class ModelGroupFailoverExecutor {
             json = support.objectMapper.readTree(result.response());
         } catch (Exception e) {
             support.refundMediaCharge(ctx, charge);
-            throw new BusinessException(502, "上游视频响应无效（非 JSON），预扣积分已退回");
+            throw new BusinessException(502, "上游视频响应无效（非 JSON），预扣积分已退回",
+                    "Invalid upstream video response (not JSON), prepaid credits were refunded");
         }
         String upstreamVideoId = json != null && json.isObject() ? firstText(json.get("video_id"), json.get("id")) : null;
         if (upstreamVideoId == null) {
             support.refundMediaCharge(ctx, charge);
-            throw new BusinessException(502, "上游视频响应缺少有效的任务 id，预扣积分已退回");
+            throw new BusinessException(502, "上游视频响应缺少有效的任务 id，预扣积分已退回",
+                    "Upstream video response is missing a valid task ID, prepaid credits were refunded");
         }
 
         VideoTask saved;
@@ -745,7 +781,10 @@ public class ModelGroupFailoverExecutor {
                     .build());
         } catch (Exception e) {
             boolean refunded = support.refundMediaCharge(ctx, charge);
-            throw new BusinessException(500, "视频任务保存失败" + (refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿"));
+            throw new BusinessException(500,
+                    "视频任务保存失败" + (refunded ? "，预扣积分已退回" : "，退回预扣积分失败，已记录待人工补偿"),
+                    "Failed to save video task" + (refunded ? ", prepaid credits were refunded"
+                            : ", failed to refund prepaid credits; manual compensation is pending"));
         }
 
         ObjectNode responseObject = (ObjectNode) json;
@@ -796,7 +835,8 @@ public class ModelGroupFailoverExecutor {
 
     private void releaseAttemptCharge(RelaySupport.RelayContext ctx, RelaySupport.MediaCharge charge) {
         if (!support.refundMediaCharge(ctx, charge)) {
-            throw new BusinessException(500, "本次失败成员的预扣积分退回失败，已记录待人工补偿，停止切换成员");
+            throw new BusinessException(500, "本次失败成员的预扣积分退回失败，已记录待人工补偿，停止切换成员",
+                    "Failed to refund prepaid credits for the failed member; manual compensation is pending, so member failover was stopped");
         }
     }
 
@@ -870,7 +910,8 @@ public class ModelGroupFailoverExecutor {
         }
         throw lastFailure != null
                 ? wrapFailure(lastFailure, exhaustedGroupMessage(group.getName()))
-                : new BusinessException(502, exhaustedGroupMessage(group.getName()));
+                : new BusinessException(502, exhaustedGroupMessage(group.getName()),
+                        exhaustedGroupEnglishMessage(group.getName()));
     }
 
     private MediaBinaryAttemptResult attemptBinaryMedia(RelaySupport.RelayContext ctx, ModelGroup group,
@@ -930,6 +971,7 @@ public class ModelGroupFailoverExecutor {
         }
         throw lastFailure != null
                 ? wrapFailure(lastFailure, exhaustedGroupMessage(group.getName()))
-                : new BusinessException(502, exhaustedGroupMessage(group.getName()));
+                : new BusinessException(502, exhaustedGroupMessage(group.getName()),
+                        exhaustedGroupEnglishMessage(group.getName()));
     }
 }

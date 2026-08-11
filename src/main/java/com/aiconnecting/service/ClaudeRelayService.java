@@ -57,7 +57,8 @@ public class ClaudeRelayService {
                 if (lastError != null) {
                     throw lastFailure != null
                             ? wrapFailure(lastFailure, "所有渠道均不可用，最后错误: " + lastError)
-                            : new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+                            : new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError,
+                                    "All channels are unavailable, please try again later");
                 }
                 throw e;
             }
@@ -104,12 +105,14 @@ public class ClaudeRelayService {
                 }
             }
         }
-        throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError);
+        throw new BusinessException(502, "所有渠道均不可用，最后错误: " + lastError,
+                "All channels are unavailable, please try again later");
     }
 
     /** 包裹重试耗尽后的汇总错误，保留原始异常的 upstreamResponse 标记，避免真实上游错误被误判为本地错误而向终端用户泄露细节 */
     private BusinessException wrapFailure(BusinessException cause, String message) {
-        return new BusinessException(cause.getCode(), message, cause, cause.getUpstreamResponseBody(),
+        return new BusinessException(cause.getCode(), message,
+                "All channels are unavailable, please try again later", cause, cause.getUpstreamResponseBody(),
                 cause.getRetryAfterSeconds(), cause.isUpstreamResponse());
     }
 
@@ -133,7 +136,7 @@ public class ClaudeRelayService {
             } catch (BusinessException e) {
                 if (!httpResponse.isCommitted()) {
                     RelayServiceUtils.writeClaudeError(httpResponse, e.getCode(),
-                            SseUtils.clientErrorMessage(e.getMessage(), e.isUpstreamResponse()));
+                            SseUtils.clientErrorMessage(e.getMessage(), e.getEnglishMessage(), e.isUpstreamResponse()));
                 }
                 return;
             }
@@ -163,7 +166,8 @@ public class ClaudeRelayService {
                 lastError = e.getMessage();
                 log.error("[Claude流式] 渠道 {} 失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 BusinessException classifyError = (e instanceof BusinessException be) ? be
-                        : new BusinessException(502, e.getMessage(), e);
+                        : new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                                "Channel request failed: " + e.getMessage(), e);
                 support.dispatchRelayFailure(channel.getId(), modelConfigId, classifyError, () -> {
                     ChannelHealthTracker.ErrorCategory category = (e instanceof BusinessException be)
                             ? ChannelHealthTracker.ErrorCategory.fromStatusCode(be.getCode())
@@ -177,7 +181,8 @@ public class ClaudeRelayService {
                 if (!httpResponse.isCommitted()) {
                     boolean upstream = !(e instanceof BusinessException) || classifyError.isUpstreamResponse();
                     RelayServiceUtils.writeClaudeError(httpResponse, classifyError.getCode(),
-                            SseUtils.clientErrorMessage(classifyError.getMessage(), upstream));
+                            SseUtils.clientErrorMessage(classifyError.getMessage(),
+                                    classifyError.getEnglishMessage(), upstream));
                 }
                 return;
             }
@@ -194,7 +199,7 @@ public class ClaudeRelayService {
                                             HttpServletRequest httpRequest,
                                             HttpServletResponse httpResponse) throws IOException {
         if (support.isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
+            throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
         }
 
         SseUtils.setSseHeaders(httpResponse);
@@ -244,7 +249,7 @@ public class ClaudeRelayService {
                                                     HttpServletRequest httpRequest,
                                                     HttpServletResponse httpResponse) throws IOException {
         if (support.isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
+            throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
         }
 
         String openAiBody = ProtocolConverter.convertClaudeToOpenAiBody(requestBody);
@@ -364,7 +369,7 @@ public class ClaudeRelayService {
                                                     HttpServletRequest httpRequest,
                                                     HttpServletResponse httpResponse) throws IOException {
         if (support.isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
+            throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
         }
 
         String geminiBody = ProtocolConverter.convertClaudeToGeminiRequest(requestBody);

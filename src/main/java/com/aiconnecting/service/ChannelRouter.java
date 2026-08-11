@@ -87,7 +87,8 @@ public class ChannelRouter {
                     .filter(c -> channelSupportsLevel(c, userLevel))
                     .toList();
             if (levelMatched.isEmpty()) {
-                throw new BusinessException(403, "当前账号等级不支持该模型，请升级账号或联系管理员");
+                throw new BusinessException(403, "当前账号等级不支持该模型，请升级账号或联系管理员",
+                        "Your account level does not support this model, please upgrade or contact admin");
             }
             channels = levelMatched;
         }
@@ -107,7 +108,7 @@ public class ChannelRouter {
                     .filter(c -> excludeIds == null || !excludeIds.contains(c.getId()))
                     .toList();
             if (fallback.isEmpty()) {
-                throw new BusinessException(503, "该模型当前不可用，请稍后重试或更换模型");
+                throw new BusinessException(503, "该模型当前不可用，请稍后重试或更换模型", "This model is currently unavailable, please try again later or use another model");
             }
             log.warn("所有渠道均被封禁，降级使用被封禁渠道: modelId={}", channelModelId);
             available = fallback;
@@ -136,7 +137,7 @@ public class ChannelRouter {
         }
 
         if (selected == null) {
-            throw new BusinessException(503, "该模型当前不可用，请稍后重试或更换模型");
+            throw new BusinessException(503, "该模型当前不可用，请稍后重试或更换模型", "This model is currently unavailable, please try again later or use another model");
         }
 
         // 若选中的渠道处于 HALF_OPEN（熔断探测期），需要获取探测许可，
