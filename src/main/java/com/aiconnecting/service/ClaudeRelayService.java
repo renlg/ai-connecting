@@ -201,6 +201,7 @@ public class ClaudeRelayService {
                     RelayServiceUtils.writeClaudeError(httpResponse, code, "上游返回 HTTP " + code);
                 } else {
                     httpResponse.setStatus(code);
+                    httpResponse.setCharacterEncoding("UTF-8");
                     httpResponse.getWriter().write(errorBody.isEmpty()
                             ? "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
                 }

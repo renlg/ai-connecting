@@ -211,6 +211,7 @@ public class GeminiRelayService {
                     RelayServiceUtils.writeGeminiError(httpResponse, code, "上游返回 HTTP " + code);
                 } else {
                     httpResponse.setStatus(code);
+                    httpResponse.setCharacterEncoding("UTF-8");
                     httpResponse.getWriter().write(errorBody.isEmpty()
                             ? "{\"error\":{\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
                 }
