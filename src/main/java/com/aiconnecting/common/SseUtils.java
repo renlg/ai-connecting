@@ -36,6 +36,7 @@ public final class SseUtils {
      * 不能再拼接另一个渠道/成员的输出，也不能静默断开——客户端需要一个明确的终止信号
      */
     public static void writeSseErrorEvent(HttpServletResponse response, String message) throws IOException {
+        response.setCharacterEncoding("UTF-8");
         String clientMessage = sanitizeForClient(message);
         StringBuilder data = new StringBuilder("data: {\"error\":{\"message\":\"")
                 .append(escapeJson(clientMessage)).append("\"");

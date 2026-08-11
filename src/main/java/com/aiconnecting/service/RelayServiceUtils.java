@@ -203,6 +203,8 @@ public final class RelayServiceUtils {
     public static void writeOpenAiError(HttpServletResponse response, int status, String message)
             throws IOException {
         response.setStatus(status);
+        response.setCharacterEncoding("UTF-8");
+        response.setContentType("application/json;charset=UTF-8");
         String clientMessage = SseUtils.sanitizeForClient(message);
         StringBuilder body = new StringBuilder("{\"error\":{\"message\":\"")
                 .append(SseUtils.escapeJson(clientMessage)).append("\"");
@@ -219,6 +221,7 @@ public final class RelayServiceUtils {
     public static void writeClaudeError(HttpServletResponse response, int status, String message)
             throws IOException {
         response.setStatus(status);
+        response.setCharacterEncoding("UTF-8");
         String clientMessage = SseUtils.sanitizeForClient(message);
         StringBuilder body = new StringBuilder(
                         "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"")
@@ -236,6 +239,7 @@ public final class RelayServiceUtils {
     public static void writeGeminiError(HttpServletResponse response, int status, String message)
             throws IOException {
         response.setStatus(status);
+        response.setCharacterEncoding("UTF-8");
         String clientMessage = SseUtils.sanitizeForClient(message);
         StringBuilder body = new StringBuilder("{\"error\":{\"message\":\"")
                 .append(SseUtils.escapeJson(clientMessage)).append("\"");
