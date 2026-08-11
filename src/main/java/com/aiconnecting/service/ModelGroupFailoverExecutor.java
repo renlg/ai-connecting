@@ -136,6 +136,13 @@ public class ModelGroupFailoverExecutor {
                 "Upstream API error: " + body, body, retryAfterSeconds);
     }
 
+    private String truncate(String value) {
+        if (value == null || value.length() <= 500) {
+            return value;
+        }
+        return value.substring(0, 500) + "...";
+    }
+
     /** 包裹重试耗尽后的汇总错误，保留原始异常的 upstreamResponse 标记，避免真实上游错误被误判为本地错误而向终端用户泄露细节 */
     private BusinessException wrapFailure(BusinessException cause, String message) {
         return new BusinessException(cause.getCode(), message,
@@ -207,12 +214,10 @@ public class ModelGroupFailoverExecutor {
             }
             if (modelHealthTracker.isInCooldown(channel.getId(), modelConfigId)) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 处于冷却期，跳过", groupName, candidate.modelConfig().getName(), channel.getId());
-                lastFailure = null;
                 continue;
             }
             if (support.isChannelRateLimited(channel)) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 触发限流，跳过", groupName, candidate.modelConfig().getName(), channel.getId());
-                lastFailure = null;
                 continue;
             }
 
@@ -349,8 +354,10 @@ public class ModelGroupFailoverExecutor {
             if (modelHealthTracker.isInCooldown(channel.getId(), modelConfigId)
                     || support.isChannelRateLimited(channel)) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", groupName, candidate.modelConfig().getName(), channel.getId());
-                lastError = "该成员暂不可用";
-                lastErrorUpstream = false;
+                if (lastError == null) {
+                    lastError = "该成员暂不可用";
+                    lastErrorUpstream = false;
+                }
                 continue;
             }
 
@@ -371,6 +378,8 @@ public class ModelGroupFailoverExecutor {
             } catch (IOException e) {
                 lastError = e.getMessage();
                 lastErrorUpstream = true;
+                log.warn("模型组 {} 成员 {} (渠道 {}) 建立上游连接失败: {}",
+                        groupName, memberModel, channel.getId(), e.getMessage());
                 recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(),
                         "Channel request failed: " + e.getMessage(), e));
                 if (remainingBudgetMs(deadline) <= 0) break;
@@ -386,6 +395,8 @@ public class ModelGroupFailoverExecutor {
                     lastErrorUpstream = true;
                     BusinessException upstreamError = upstreamFailure(code, errorBody,
                             RelaySupport.resolveCooldownSeconds(conn, errorBody));
+                    log.warn("模型组 {} 成员 {} (渠道 {}) 上游返回 HTTP {}: {}",
+                            groupName, memberModel, channel.getId(), code, truncate(errorBody));
                     conn.disconnect();
                     if (!FailureClassifier.isSwitchable(upstreamError)) {
                         RelayServiceUtils.writeOpenAiError(httpResponse, code,
@@ -659,7 +670,6 @@ public class ModelGroupFailoverExecutor {
             }
             if (modelHealthTracker.isInCooldown(channel.getId(), modelConfigId) || support.isChannelRateLimited(channel)) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
-                lastFailure = null;
                 continue;
             }
             String memberModel = candidate.modelConfig().getName();
@@ -877,7 +887,6 @@ public class ModelGroupFailoverExecutor {
             }
             if (modelHealthTracker.isInCooldown(channel.getId(), modelConfigId) || support.isChannelRateLimited(channel)) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
-                lastFailure = null;
                 continue;
             }
             String memberModel = candidate.modelConfig().getName();
@@ -940,7 +949,6 @@ public class ModelGroupFailoverExecutor {
             }
             if (modelHealthTracker.isInCooldown(channel.getId(), modelConfigId) || support.isChannelRateLimited(channel)) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
-                lastFailure = null;
                 continue;
             }
             String memberModel = candidate.modelConfig().getName();
