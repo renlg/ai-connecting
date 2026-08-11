@@ -401,6 +401,9 @@ public class TokenController {
                 item.put("kind", "group");
                 item.put("isGroup", true);
                 item.put("memberCount", availableMembers);
+                item.put("inputPrice", group.getInputPrice());
+                item.put("outputPrice", group.getOutputPrice());
+                item.put("cachedPrice", group.getCachedPrice());
                 result.add(item);
             }
         }

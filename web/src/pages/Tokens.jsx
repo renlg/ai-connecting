@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography, Tooltip } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
-import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCreditHistoryDetail, testTokenChatStream, getTokenModels, getModelGroups } from '../api'
+import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCreditHistoryDetail, testTokenChatStream, getTokenModels } from '../api'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
@@ -47,7 +47,9 @@ export default function Tokens() {
       const res = await getTokenModels()
       if (res.code !== 200) return
       const singleModels = res.data || []
-      const options = singleModels.map(m => ({
+      const options = singleModels
+        .filter(m => !(m.kind === 'group' || m.isGroup))
+        .map(m => ({
           value: m.displayName,
           label: m.displayName,
           kind: 'model',
@@ -56,26 +58,20 @@ export default function Tokens() {
           cacheRate: m.cacheCreditRate
         }))
 
-      // 管理端模型组接口提供成员明细；用当前用户可见的单模型 ID 判断组是否至少有一个可用成员。
-      try {
-        const groupRes = await getModelGroups()
-        if (groupRes.code === 200) {
-          const availableModelIds = new Set(singleModels.map(model => model.id))
-          const groupOptions = (groupRes.data || [])
-            .filter(item => item.group?.enabled)
-            .filter(item => isAdmin || !item.group?.adminOnly)
-            .filter(item => (item.members || []).some(member => availableModelIds.has(member.modelConfigId)))
-            .map(item => ({
-              value: item.group.name,
-              label: `${item.group.name}（模型组）`,
-              kind: 'group',
-              memberCount: item.members?.length || 0,
-            }))
-          options.push(...groupOptions)
-        }
-      } catch {
-        // 普通用户可能无权访问管理员模型组接口，仍保留原有单模型列表。
-      }
+      const groupOptions = singleModels
+        .filter(m => m.kind === 'group' || m.isGroup)
+        .map(m => ({
+          value: m.name,
+          label: m.displayName,
+          kind: 'group',
+          memberCount: m.memberCount,
+          groupType: m.type,
+          // 模型组价格按每 1K token 计费，换算为每百万 token 以与单模型比例展示口径一致
+          inputRate: m.inputPrice != null ? m.inputPrice * 1000 : undefined,
+          outputRate: m.outputPrice != null ? m.outputPrice * 1000 : undefined,
+          cacheRate: m.cachedPrice != null ? m.cachedPrice * 1000 : undefined,
+        }))
+      options.push(...groupOptions)
       setModelOptions(options)
     } catch (err) {
       message.error(err?.message || '可用模型加载失败')
@@ -246,9 +242,17 @@ export default function Tokens() {
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
             form.resetFields()
+            const optionValues = new Set(modelOptions.map(o => o.value))
             form.setFieldsValue({
               ...record,
-              allowedModels: record.allowedModels ? record.allowedModels.split(',').filter(Boolean) : [],
+              allowedModels: record.allowedModels ? record.allowedModels.split(',').filter(Boolean).map(v => {
+                // 兼容历史遗留的模型组脏值（如 "free（模型组）"），回退为真实的组名
+                if (!optionValues.has(v) && v.endsWith('（模型组）')) {
+                  const groupName = v.slice(0, -'（模型组）'.length)
+                  if (optionValues.has(groupName)) return groupName
+                }
+                return v
+              }) : [],
             })
             setModalOpen(true)
           }}>编辑</Button>
@@ -296,10 +300,11 @@ export default function Tokens() {
           <div style={{ marginBottom: 8, fontSize: 13, color: '#888' }}>可用模型（{modelOptions.length}）</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {modelOptions.map(m => {
-              const tooltipContent = m.kind === 'group' ? (
+              const tooltipContent = m.kind === 'group' && m.groupType !== 'text' ? (
                 <div style={{ fontSize: 13 }}>模型组，可用成员 {m.memberCount} 个</div>
               ) : (
                 <div style={{ fontSize: 13, lineHeight: '28px' }}>
+                  {m.kind === 'group' && <div>模型组，可用成员 {m.memberCount} 个</div>}
                   <div>输入比例：{m.inputRate || 0} 积分/百万token</div>
                   <div>输出比例：{m.outputRate || 0} 积分/百万token</div>
                   <div>缓存比例：{m.cacheRate || 0} 积分/百万token</div>
