@@ -149,7 +149,11 @@ export default function ModelGroups() {
     { title: '启用', dataIndex: 'enabled', width: 70, render: (value, record) => <Switch checked={!!value} onChange={checked => handleGroupStatusChange(record.id, checked)} /> },
     { title: '仅管理员', dataIndex: 'adminOnly', width: 90, render: value => value ? <Tag color="gold">是</Tag> : '否' },
     { title: '价格摘要', width: 300, render: (_, record) => groupPriceSummary(record) },
-    { title: '支持等级', width: 100, render: (_, record) => record.supportedLevels || '全部' },
+    { title: '支持等级', width: 150, render: (_, record) => {
+      const v = record.supportedLevels
+      if (!v) return '全部'
+      return v.split(',').map(l => l.trim()).filter(l => l).map(l => <Tag key={l} color="purple">Lv{l}</Tag>)
+    } },
     { title: '成员数', width: 80, render: (_, record) => record.members?.length || 0 },
     {
       title: '操作', width: 160, fixed: 'right', render: (_, record) => (

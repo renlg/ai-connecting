@@ -140,7 +140,10 @@ export default function Models() {
         return '-'
       }
     },
-    { title: '支持等级', dataIndex: 'supportedLevels', width: 100, render: v => v || '全部' },
+    { title: '支持等级', dataIndex: 'supportedLevels', width: 150, render: v => {
+      if (!v) return '全部'
+      return v.split(',').map(l => l.trim()).filter(l => l).map(l => <Tag key={l} color="purple">Lv{l}</Tag>)
+    } },
     { title: '描述', dataIndex: 'description', ellipsis: true, render: v => v || '-' },
     {
       title: '仅管理员', dataIndex: 'adminOnly', width: 100,
