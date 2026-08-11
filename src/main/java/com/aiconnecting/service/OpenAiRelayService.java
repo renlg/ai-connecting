@@ -85,7 +85,6 @@ public class OpenAiRelayService {
 
     private String relayRequestSingleModel(RelaySupport.RelayContext ctx, String path, String requestBody,
                                            String model, HttpServletRequest httpRequest) {
-        requestBody = support.normalizeContentForUpstream(requestBody);
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long startTime = System.currentTimeMillis();
