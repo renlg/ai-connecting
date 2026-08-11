@@ -45,6 +45,9 @@ public class ChannelService {
     private CacheInvalidationService cacheInvalidationService;
 
     @Autowired(required = false)
+    private ChannelHealthPersistenceService channelHealthPersistenceService;
+
+    @Autowired(required = false)
     private okhttp3.Interceptor tracingInterceptor;
 
     private OkHttpClient httpClient;
@@ -247,6 +250,7 @@ public class ChannelService {
             throw new BusinessException("渠道不存在");
         }
         channelRepository.deleteById(id);
+        channelHealthPersistenceService.deleteByChannelIdAsync(id);
         publishChannelInvalidation();
     }
 

@@ -31,6 +31,13 @@ public class ChannelHealthTracker {
         this.channelService = channelService;
     }
 
+    private ChannelHealthPersistenceService healthPersistenceService;
+
+    @Autowired
+    public void setHealthPersistenceService(ChannelHealthPersistenceService healthPersistenceService) {
+        this.healthPersistenceService = healthPersistenceService;
+    }
+
     // ==================== 配置常量 ====================
 
     /** 滚动窗口时长：1 分钟 */
@@ -241,8 +248,13 @@ public class ChannelHealthTracker {
      */
     public void recordFailure(Long channelId, ErrorCategory category, String errorMessage) {
         if (category != ErrorCategory.CLIENT_ERROR) {
-            memLastFailureAt.put(channelId, System.currentTimeMillis());
-            memLastFailureReason.put(channelId, category + ": " + errorMessage);
+            long now = System.currentTimeMillis();
+            String reason = category + ": " + errorMessage;
+            memLastFailureAt.put(channelId, now);
+            memLastFailureReason.put(channelId, reason);
+            if (healthPersistenceService != null) {
+                healthPersistenceService.recordFailureAsync(channelId, now, reason);
+            }
         }
         switch (category) {
             case RATE_LIMIT:
@@ -319,7 +331,11 @@ public class ChannelHealthTracker {
      * 记录渠道请求成功（异步执行，不阻塞请求线程）
      */
     public void recordSuccess(Long channelId) {
-        memLastSuccessAt.put(channelId, System.currentTimeMillis());
+        long now = System.currentTimeMillis();
+        memLastSuccessAt.put(channelId, now);
+        if (healthPersistenceService != null) {
+            healthPersistenceService.recordSuccessAsync(channelId, now);
+        }
         healthExecutor.submit(() -> {
             try {
                 CircuitState state = getEffectiveState(channelId);
@@ -360,6 +376,9 @@ public class ChannelHealthTracker {
         setState(channelId, true, until);
         releasePermit(channelId);
         memProbeFailures.merge(channelId, 1, Integer::sum);
+        if (healthPersistenceService != null) {
+            healthPersistenceService.incrementProbeFailuresAsync(channelId, System.currentTimeMillis());
+        }
         log.warn("渠道 {} 重新熔断，退避时长翻倍至 {} 秒", channelId, backoff / 1000);
     }
 
@@ -383,6 +402,9 @@ public class ChannelHealthTracker {
         releasePermit(channelId);
         clearWindow(channelId);
         memProbeFailures.remove(channelId);
+        if (healthPersistenceService != null) {
+            healthPersistenceService.resetProbeFailuresAsync(channelId, System.currentTimeMillis());
+        }
     }
 
     /**
@@ -601,6 +623,14 @@ public class ChannelHealthTracker {
      */
     public void autoDisableChannel(Long channelId) {
         log.error("===== 渠道 {} 持续熔断超过 {} 小时，自动禁用 =====", channelId, OPEN_AUTO_DISABLE_MS / 3600000);
+        long now = System.currentTimeMillis();
+        String lastReason = memLastFailureReason.get(channelId);
+        String reason = "持续熔断超过2小时自动禁用" + (lastReason != null ? ": " + lastReason : "");
+        memLastFailureAt.put(channelId, now);
+        memLastFailureReason.put(channelId, reason);
+        if (healthPersistenceService != null) {
+            healthPersistenceService.recordFailureAsync(channelId, now, reason);
+        }
         try {
             if (channelService != null) {
                 channelService.disableChannel(channelId);
