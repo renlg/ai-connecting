@@ -21,7 +21,7 @@ const STRATEGY_META = {
 }
 
 const groupPriceSummary = (group) => {
-  if (group.type === 'text') return `输入 ${group.inputPrice ?? 0} / 输出 ${group.outputPrice ?? 0} / 缓存 ${group.cachedPrice ?? 0}`
+  if (group.type === 'text') return `输入 ${group.inputPrice ?? 0} / 输出 ${group.outputPrice ?? 0} / 缓存 ${group.cachedPrice ?? 0}（积分/百万token）`
   if (group.type === 'image') return `1K ${group.price1k ?? 0} / 2K ${group.price2k ?? 0} / 4K ${group.price4k ?? 0}`
   if (group.type === 'video') return `480P ${group.price480p ?? 0} / 720P ${group.price720p ?? 0} / 1080P ${group.price1080p ?? 0} / 4K ${group.videoPrice4k ?? 0}`
   return `标准 ${group.priceStandard ?? 0} / 高清 ${group.priceHd ?? 0}`
@@ -186,9 +186,9 @@ export default function ModelGroups() {
           </Space>
 
           {groupType === 'text' && <Space style={{ display: 'flex' }} align="start">
-            <Form.Item name="inputPrice" label="输入价格（积分/1K token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
-            <Form.Item name="outputPrice" label="输出价格（积分/1K token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
-            <Form.Item name="cachedPrice" label="缓存价格（积分/1K token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
+            <Form.Item name="inputPrice" label="输入价格（积分/百万token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
+            <Form.Item name="outputPrice" label="输出价格（积分/百万token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
+            <Form.Item name="cachedPrice" label="缓存价格（积分/百万token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
           </Space>}
           {groupType === 'image' && <Space style={{ display: 'flex' }} align="start">
             <Form.Item name="price1k" label="1K（积分/张）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>

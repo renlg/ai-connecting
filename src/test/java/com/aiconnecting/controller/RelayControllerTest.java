@@ -9,6 +9,8 @@ import com.aiconnecting.repository.ChannelRepository;
 import com.aiconnecting.repository.ModelConfigRepository;
 import com.aiconnecting.repository.UserRepository;
 import com.aiconnecting.service.ModelConfigService;
+import com.aiconnecting.service.ModelGroupService;
+import com.aiconnecting.service.ModelGroupRoutingService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.UserService;
@@ -51,6 +53,12 @@ class RelayControllerTest {
 
     @MockBean
     private ModelConfigService modelConfigService;
+
+    @MockBean
+    private ModelGroupService modelGroupService;
+
+    @MockBean
+    private ModelGroupRoutingService modelGroupRoutingService;
 
     @MockBean
     private UserService userService;
@@ -131,7 +139,8 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.message").value("缺少 Authorization header 或格式不正确"));
+                .andExpect(jsonPath("$.message").value("上游服务暂时不可用，请稍后重试"))
+                .andExpect(jsonPath("$.traceId").isNotEmpty());
     }
 
     @Test
@@ -178,7 +187,8 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isTooManyRequests())
-                .andExpect(jsonPath("$.message").value("Token 额度已用完"));
+                .andExpect(jsonPath("$.message").value("上游服务暂时不可用，请稍后重试"))
+                .andExpect(jsonPath("$.traceId").isNotEmpty());
     }
 
     // ==================== Completions ====================
@@ -309,7 +319,8 @@ class RelayControllerTest {
         mockMvc.perform(get("/v1/models")
                         .header("Authorization", "Bearer sk-invalid"))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.message").value("无效的 Token"));
+                .andExpect(jsonPath("$.message").value("上游服务暂时不可用，请稍后重试"))
+                .andExpect(jsonPath("$.traceId").isNotEmpty());
     }
 
     @Test

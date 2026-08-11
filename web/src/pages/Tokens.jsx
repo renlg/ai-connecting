@@ -66,10 +66,10 @@ export default function Tokens() {
           kind: 'group',
           memberCount: m.memberCount,
           groupType: m.type,
-          // 模型组价格按每 1K token 计费，换算为每百万 token 以与单模型比例展示口径一致
-          inputRate: m.inputPrice != null ? m.inputPrice * 1000 : undefined,
-          outputRate: m.outputPrice != null ? m.outputPrice * 1000 : undefined,
-          cacheRate: m.cachedPrice != null ? m.cachedPrice * 1000 : undefined,
+          // 模型组价格与单模型价格口径一致，均为每百万 token 单价
+          inputRate: m.inputPrice != null ? m.inputPrice : undefined,
+          outputRate: m.outputPrice != null ? m.outputPrice : undefined,
+          cacheRate: m.cachedPrice != null ? m.cachedPrice : undefined,
         }))
       options.push(...groupOptions)
       setModelOptions(options)

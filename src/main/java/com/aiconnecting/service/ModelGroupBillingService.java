@@ -9,18 +9,18 @@ import java.math.RoundingMode;
 
 /**
  * 模型组计费：使用模型组自身价格计算积分消耗，与 {@link UsageLogService} 中单模型的
- * "每百万 token 积分比例" 计费公式完全独立（模型组文本按 "每 1K token 单价" 计费，二者不得混用）。
+ * "每百万 token 积分比例" 计费公式口径一致（模型组文本同样按 "每百万 token 单价" 计费）。
  * 图片/视频/音频沿用与 {@link UsageLogService} 相同的分辨率/音质档位识别逻辑（复用其静态方法），
  * 仅计价所用的单价来源换成模型组价格。
  */
 @Service
 public class ModelGroupBillingService {
 
-    private static final BigDecimal PER_1K = new BigDecimal("1000");
+    private static final BigDecimal PER_MILLION = new BigDecimal("1000000");
 
     /**
-     * 文本积分消耗 = (输入token - 缓存token)/1000 × input_price + 缓存token/1000 × cached_price
-     *              + 输出token/1000 × output_price
+     * 文本积分消耗 = (输入token - 缓存token)/1000000 × input_price + 缓存token/1000000 × cached_price
+     *              + 输出token/1000000 × output_price
      */
     public BigDecimal calculateTextCreditCost(ModelGroup group, int promptTokens, int completionTokens, int cachedTokens) {
         if (promptTokens == 0 && completionTokens == 0) return BigDecimal.ZERO;
@@ -29,9 +29,9 @@ public class ModelGroupBillingService {
         BigDecimal cachedPrice = nz(group.getCachedPrice());
         int clampedCachedTokens = Math.min(cachedTokens, promptTokens);
         int effectivePromptTokens = promptTokens - clampedCachedTokens;
-        BigDecimal inputCost = BigDecimal.valueOf(effectivePromptTokens).divide(PER_1K, 10, RoundingMode.HALF_UP).multiply(inputPrice);
-        BigDecimal cacheCost = BigDecimal.valueOf(clampedCachedTokens).divide(PER_1K, 10, RoundingMode.HALF_UP).multiply(cachedPrice);
-        BigDecimal outputCost = BigDecimal.valueOf(completionTokens).divide(PER_1K, 10, RoundingMode.HALF_UP).multiply(outputPrice);
+        BigDecimal inputCost = BigDecimal.valueOf(effectivePromptTokens).divide(PER_MILLION, 10, RoundingMode.HALF_UP).multiply(inputPrice);
+        BigDecimal cacheCost = BigDecimal.valueOf(clampedCachedTokens).divide(PER_MILLION, 10, RoundingMode.HALF_UP).multiply(cachedPrice);
+        BigDecimal outputCost = BigDecimal.valueOf(completionTokens).divide(PER_MILLION, 10, RoundingMode.HALF_UP).multiply(outputPrice);
         return inputCost.add(cacheCost).add(outputCost);
     }
 

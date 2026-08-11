@@ -4,6 +4,7 @@ import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.repository.ModelConfigRepository;
 import com.aiconnecting.service.ModelConfigService;
+import com.aiconnecting.service.ModelGroupService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
@@ -35,6 +36,9 @@ class ModelConfigControllerTest {
 
     @MockBean
     private ModelConfigService modelConfigService;
+
+    @MockBean
+    private ModelGroupService modelGroupService;
 
     @MockBean
     private RelayService relayService;
