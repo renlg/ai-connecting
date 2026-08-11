@@ -956,9 +956,13 @@ public class OpenAiRelayService {
                     conn.disconnect();
                     if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                     if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
-                    httpResponse.setStatus(code);
-                    httpResponse.getWriter().write(errorBody.isEmpty()
-                            ? "{\"error\":{\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
+                    if (SseUtils.isEndUserRelayPath()) {
+                        RelayServiceUtils.writeOpenAiError(httpResponse, code, "上游返回 HTTP " + code);
+                    } else {
+                        httpResponse.setStatus(code);
+                        httpResponse.getWriter().write(errorBody.isEmpty()
+                                ? "{\"error\":{\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
+                    }
                     return;
                 }
 

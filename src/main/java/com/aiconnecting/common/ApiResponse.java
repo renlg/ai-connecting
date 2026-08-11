@@ -10,6 +10,8 @@ public class ApiResponse<T> {
     private int code;
     private String message;
     private T data;
+    /** 链路追踪 id，仅在中转接口返回精简错误时附带，便于用户上报排查 */
+    private String traceId;
 
     public static <T> ApiResponse<T> success(T data) {
         return ApiResponse.<T>builder()

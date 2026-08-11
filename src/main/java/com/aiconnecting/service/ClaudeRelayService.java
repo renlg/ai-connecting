@@ -197,9 +197,13 @@ public class ClaudeRelayService {
                 String errorBody = conn.getErrorStream() != null
                         ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
                 log.warn("渠道 {} Claude 流式请求失败: {} - {}", channel.getId(), code, errorBody);
-                httpResponse.setStatus(code);
-                httpResponse.getWriter().write(errorBody.isEmpty()
-                        ? "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
+                if (SseUtils.isEndUserRelayPath()) {
+                    RelayServiceUtils.writeClaudeError(httpResponse, code, "上游返回 HTTP " + code);
+                } else {
+                    httpResponse.setStatus(code);
+                    httpResponse.getWriter().write(errorBody.isEmpty()
+                            ? "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
+                }
                 return;
             }
             String lastUsageData = support.streamSseResponse(conn, httpResponse,

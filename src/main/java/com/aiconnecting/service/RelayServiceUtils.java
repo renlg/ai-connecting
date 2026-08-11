@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.entity.Channel;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -196,12 +197,20 @@ public final class RelayServiceUtils {
     // ==================== 错误响应写入 ====================
 
     /**
-     * 写入 OpenAI 格式的错误响应
+     * 写入 OpenAI 格式的错误响应。面向终端用户的中转接口（/v1/**）会隐藏上游细节并附带 traceId，
+     * 管理后台/自测接口保留原始详细信息
      */
     public static void writeOpenAiError(HttpServletResponse response, int status, String message)
             throws IOException {
         response.setStatus(status);
-        response.getWriter().write("{\"error\":{\"message\":\"" + message + "\"}}");
+        String clientMessage = SseUtils.sanitizeForClient(message);
+        StringBuilder body = new StringBuilder("{\"error\":{\"message\":\"")
+                .append(SseUtils.escapeJson(clientMessage)).append("\"");
+        if (SseUtils.isEndUserRelayPath()) {
+            body.append(",\"traceId\":\"").append(SseUtils.currentTraceId()).append("\"");
+        }
+        body.append("}}");
+        response.getWriter().write(body.toString());
     }
 
     /**
@@ -210,8 +219,15 @@ public final class RelayServiceUtils {
     public static void writeClaudeError(HttpServletResponse response, int status, String message)
             throws IOException {
         response.setStatus(status);
-        response.getWriter().write(
-                "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"" + message + "\"}}");
+        String clientMessage = SseUtils.sanitizeForClient(message);
+        StringBuilder body = new StringBuilder(
+                        "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"")
+                .append(SseUtils.escapeJson(clientMessage)).append("\"");
+        if (SseUtils.isEndUserRelayPath()) {
+            body.append(",\"traceId\":\"").append(SseUtils.currentTraceId()).append("\"");
+        }
+        body.append("}}");
+        response.getWriter().write(body.toString());
     }
 
     /**
@@ -220,7 +236,14 @@ public final class RelayServiceUtils {
     public static void writeGeminiError(HttpServletResponse response, int status, String message)
             throws IOException {
         response.setStatus(status);
-        response.getWriter().write("{\"error\":{\"message\":\"" + message + "\"}}");
+        String clientMessage = SseUtils.sanitizeForClient(message);
+        StringBuilder body = new StringBuilder("{\"error\":{\"message\":\"")
+                .append(SseUtils.escapeJson(clientMessage)).append("\"");
+        if (SseUtils.isEndUserRelayPath()) {
+            body.append(",\"traceId\":\"").append(SseUtils.currentTraceId()).append("\"");
+        }
+        body.append("}}");
+        response.getWriter().write(body.toString());
     }
 
     // ==================== Gemini 流式 chunk 转换 ====================

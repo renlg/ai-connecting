@@ -207,9 +207,13 @@ public class GeminiRelayService {
             if (code != 200) {
                 String errorBody = conn.getErrorStream() != null
                         ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
-                httpResponse.setStatus(code);
-                httpResponse.getWriter().write(errorBody.isEmpty()
-                        ? "{\"error\":{\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
+                if (SseUtils.isEndUserRelayPath()) {
+                    RelayServiceUtils.writeGeminiError(httpResponse, code, "上游返回 HTTP " + code);
+                } else {
+                    httpResponse.setStatus(code);
+                    httpResponse.getWriter().write(errorBody.isEmpty()
+                            ? "{\"error\":{\"message\":\"上游返回 HTTP " + code + "\"}}" : errorBody);
+                }
                 return;
             }
 

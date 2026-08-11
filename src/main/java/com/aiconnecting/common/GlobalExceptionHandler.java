@@ -1,5 +1,6 @@
 package com.aiconnecting.common;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
@@ -20,8 +21,20 @@ import java.util.stream.Collectors;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e) {
+    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e, HttpServletRequest request) {
         HttpStatus httpStatus = mapToHttpStatus(e.getCode());
+        // 终端用户中转接口（/v1/**）隐藏上游细节，仅返回通用错误 + traceId；
+        // 管理后台/自测接口（/api/**，如渠道测试）继续返回详细错误
+        if (request.getRequestURI() != null && request.getRequestURI().startsWith("/v1/")) {
+            String traceId = SseUtils.currentTraceId();
+            return ResponseEntity
+                    .status(httpStatus)
+                    .body(ApiResponse.<Void>builder()
+                            .code(e.getCode())
+                            .message(SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE)
+                            .traceId(traceId)
+                            .build());
+        }
         return ResponseEntity
                 .status(httpStatus)
                 .body(ApiResponse.error(e.getCode(), e.getMessage()));
