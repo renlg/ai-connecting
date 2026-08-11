@@ -34,12 +34,12 @@ function buildTokenChartData(data) {
   if (!data || !data.dailyTokensByModel || data.dailyTokensByModel.length === 0) {
     return { chartData: [], models: [] }
   }
-  const models = [...new Set(data.dailyTokensByModel.map(d => d.model))]
+  const models = [...new Set(data.dailyTokensByModel.map(d => d.displayName))]
   const grouped = {}
   data.dailyTokensByModel.forEach(item => {
     if (!grouped[item.date]) grouped[item.date] = { date: item.date }
-    grouped[item.date][item.model + '_miss'] = item.cacheMissTokens
-    grouped[item.date][item.model + '_hit'] = item.cachedTokens
+    grouped[item.date][item.displayName + '_miss'] = item.cacheMissTokens
+    grouped[item.date][item.displayName + '_hit'] = item.cachedTokens
   })
   return {
     chartData: Object.values(grouped).sort((a, b) => a.date.localeCompare(b.date)),
@@ -350,14 +350,13 @@ export default function Dashboard() {
         <Card style={{ borderRadius: 8 }}><Empty description="暂无 Token 数据" /></Card>
       ) : (
         <Row gutter={[16, 16]}>
-          {models.map(model => {
-            const rows = (dailyStats?.dailyTokensByModel || []).filter(d => d.model === model)
+          {models.map(displayName => {
+            const rows = (dailyStats?.dailyTokensByModel || []).filter(d => d.displayName === displayName)
             const modelData = rows
               .map(d => ({ date: d.date, cacheMiss: d.cacheMissTokens, cacheHit: d.cachedTokens }))
               .sort((a, b) => a.date.localeCompare(b.date))
-            const displayName = rows[0]?.displayName || model
             return (
-              <Col xs={24} sm={24} md={12} key={model}>
+              <Col xs={24} sm={24} md={12} key={displayName}>
                 <Card
                   title={<span style={{ fontSize: 14 }}>{displayName}</span>}
                   size="small"

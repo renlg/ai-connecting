@@ -471,10 +471,10 @@ public class UsageLogService {
                     long totalTokens = ((Number) row[4]).longValue();
                     ModelConfigService.ModelInfo info = modelInfoMap.get(model);
                     String displayName = (info != null && info.displayName() != null && !info.displayName().isBlank())
-                            ? info.displayName() : model;
+                            ? info.displayName()
+                            : "未知模型-" + Integer.toHexString(model.hashCode() & 0xffff);
                     return DashboardDailyStats.DailyTokenByModelStat.builder()
                             .date((String) row[0])
-                            .model(model)
                             .displayName(displayName)
                             .inputTokens(inputTokens)
                             .cachedTokens(cachedTokens)
