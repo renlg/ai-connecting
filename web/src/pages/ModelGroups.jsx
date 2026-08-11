@@ -36,6 +36,7 @@ export default function ModelGroups() {
   const [groupMembers, setGroupMembers] = useState([])
   const [groupForm] = Form.useForm()
   const groupType = Form.useWatch('type', groupForm) || 'text'
+  const groupStrategy = Form.useWatch('strategy', groupForm)
 
   const loadGroups = () => {
     setGroupLoading(true)
@@ -217,7 +218,9 @@ export default function ModelGroups() {
               <div key={member.modelConfigId} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 8, background: '#fafafa', borderRadius: 6 }}>
                 <Text style={{ flex: 1 }}>{index + 1}. {model?.displayName || model?.name || `模型 #${member.modelConfigId}`}</Text>
                 <Text type="secondary">权重</Text>
-                <InputNumber min={1} value={member.weight} onChange={value => setGroupMembers(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, weight: value || 1 } : item))} style={{ width: 80 }} />
+                {groupStrategy === 'random'
+                  ? <InputNumber min={1} value={member.weight} onChange={value => setGroupMembers(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, weight: value || 1 } : item))} style={{ width: 80 }} />
+                  : <Text style={{ width: 80 }}>—</Text>}
                 <Button aria-label="上移" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => moveGroupMember(index, -1)} />
                 <Button aria-label="下移" icon={<ArrowDownOutlined />} disabled={index === groupMembers.length - 1} onClick={() => moveGroupMember(index, 1)} />
               </div>
