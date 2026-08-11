@@ -168,6 +168,7 @@ export default function Tokens() {
     setTestResult({ success: true, protocol: testProtocol })
     
     const startTime = Date.now()
+    let streamErrored = false
     try {
       await testTokenChatStream(
         {
@@ -177,6 +178,16 @@ export default function Tokens() {
           message: testMessage || 'hi'
         },
         (chunk) => {
+          if (chunk.error) {
+            // 上游返回了 HTTP 200 的 SSE，但内容是错误事件（如 400/402/429）
+            streamErrored = true
+            const statusMatch = /HTTP (\d{3})/.exec(chunk.error)
+            const statusCode = statusMatch ? Number(statusMatch[1]) : 0
+            setTestLoading(false)
+            setTestResult({ success: false, statusCode, error: chunk.error, protocol: testProtocol })
+            message.error(chunk.error.length > 2000 ? `${chunk.error.slice(0, 2000)}...` : chunk.error)
+            return
+          }
           // 从 SSE chunk 中提取内容
           let text = ''
           if (testProtocol === 'claude') {
@@ -197,7 +208,9 @@ export default function Tokens() {
         () => {
           // 完成
           setTestLoading(false)
-          message.success('测试完成')
+          if (!streamErrored) {
+            message.success('测试完成')
+          }
         },
         (err) => {
           setTestLoading(false)

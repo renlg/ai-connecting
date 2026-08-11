@@ -332,6 +332,7 @@ export default function Channels() {
         return
       }
 
+      let streamErrored = false
       await testChannelChatStream(
         {
           ...values,
@@ -340,6 +341,17 @@ export default function Channels() {
           message: testMessage || 'hi'
         },
         (chunk) => {
+          if (chunk.error) {
+            // 上游返回了 HTTP 200 的 SSE，但内容是错误事件（如 400/402/429）
+            if (testRunRef.current !== runId) return
+            streamErrored = true
+            const statusMatch = /HTTP (\d{3})/.exec(chunk.error)
+            const statusCode = statusMatch ? Number(statusMatch[1]) : 0
+            setTestLoading(false)
+            setTestResult({ success: false, statusCode, error: chunk.error, modelType })
+            message.error(chunk.error.length > 2000 ? `${chunk.error.slice(0, 2000)}...` : chunk.error)
+            return
+          }
           // 累积流式内容
           if (chunk.content) {
             setStreamContent(prev => prev + chunk.content)
@@ -351,7 +363,9 @@ export default function Channels() {
           // 完成
           if (testRunRef.current !== runId) return
           setTestLoading(false)
-          message.success('测试完成')
+          if (!streamErrored) {
+            message.success('测试完成')
+          }
         },
         (err) => {
           if (testRunRef.current !== runId) return
