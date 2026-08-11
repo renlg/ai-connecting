@@ -71,7 +71,11 @@ export default function ModelGroups() {
     setEditingGroup(group)
     setGroupMembers((group.members || []).map(member => ({ modelConfigId: member.modelConfigId, weight: member.weight || 1 })))
     groupForm.resetFields()
-    groupForm.setFieldsValue(group)
+    const formValues = { ...group }
+    if (formValues.supportedLevels && typeof formValues.supportedLevels === 'string') {
+      formValues.supportedLevels = formValues.supportedLevels.split(',').map(l => l.trim()).filter(l => l)
+    }
+    groupForm.setFieldsValue(formValues)
     setGroupModalOpen(true)
   }
 
@@ -91,6 +95,9 @@ export default function ModelGroups() {
 
   const handleGroupSave = async () => {
     const values = await groupForm.validateFields()
+    if (values.supportedLevels && Array.isArray(values.supportedLevels)) {
+      values.supportedLevels = values.supportedLevels.join(',')
+    }
     const payload = { ...values, members: groupMembers }
     try {
       if (editingGroup) {
@@ -184,6 +191,14 @@ export default function ModelGroups() {
             <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
             <Form.Item name="adminOnly" label="仅管理员可用" valuePropName="checked"><Switch /></Form.Item>
           </Space>
+          <Form.Item name="supportedLevels" label="支持等级" tooltip="不选表示对所有等级开放">
+            <Select
+              mode="multiple"
+              placeholder="不选表示对所有等级开放"
+              options={[1, 2, 3, 4, 5].map(l => ({ value: String(l), label: `Lv${l}` }))}
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
 
           {groupType === 'text' && <Space style={{ display: 'flex' }} align="start">
             <Form.Item name="inputPrice" label="输入价格（积分/百万token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>

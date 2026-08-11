@@ -92,6 +92,17 @@ public class ModelConfigController {
         }
     }
 
+    private static final java.util.regex.Pattern SUPPORTED_LEVELS_PATTERN = java.util.regex.Pattern.compile("^[1-5](,[1-5])*$");
+
+    private static void validateSupportedLevels(String supportedLevels) {
+        if (supportedLevels == null || supportedLevels.isBlank()) {
+            return;
+        }
+        if (!SUPPORTED_LEVELS_PATTERN.matcher(supportedLevels.trim()).matches()) {
+            throw new BusinessException("支持等级格式非法，应为 1-5 的逗号分隔数字，例如: 1,2,3", "Invalid supported-level format; use comma-separated numbers from 1 to 5, for example: 1,2,3");
+        }
+    }
+
     /**
      * 获取所有模型配置（启用优先，按名称排序）
      * 管理员返回全部，普通用户只返回 adminOnly=false 的
@@ -139,6 +150,7 @@ public class ModelConfigController {
         validatePrices(request);
         String type = validateType(request.getType());
         validateFallbackGroup(request.getFallbackGroupId(), type != null ? type : "text");
+        validateSupportedLevels(request.getSupportedLevels());
         ModelConfig config = ModelConfig.builder()
                 .name(request.getName())
                 .displayName(request.getDisplayName())
@@ -158,6 +170,7 @@ public class ModelConfigController {
                 .audioPriceStandard(request.getAudioPriceStandard())
                 .audioPriceHd(request.getAudioPriceHd())
                 .fallbackGroupId(request.getFallbackGroupId())
+                .supportedLevels(request.getSupportedLevels())
                 .status(1)
                 .build();
         ModelConfig saved = modelConfigService.save(config);
@@ -171,6 +184,7 @@ public class ModelConfigController {
     @PutMapping("/{id}")
     public ApiResponse<ModelConfig> update(@PathVariable Long id, @RequestBody ModelConfigRequest request) {
         validatePrices(request);
+        validateSupportedLevels(request.getSupportedLevels());
         ModelConfig config = modelConfigService.getById(id);
         if (request.getName() != null) {
             validateNotGroupName(request.getName());
@@ -230,6 +244,9 @@ public class ModelConfigController {
         if (request.getFallbackGroupId() != null) {
             validateFallbackGroup(request.getFallbackGroupId() == 0 ? null : request.getFallbackGroupId(), config.getType());
             config.setFallbackGroupId(request.getFallbackGroupId() == 0 ? null : request.getFallbackGroupId());
+        }
+        if (request.getSupportedLevels() != null) {
+            config.setSupportedLevels(request.getSupportedLevels());
         }
         ModelConfig saved = modelConfigService.save(config);
         relayService.clearModelNameCache();

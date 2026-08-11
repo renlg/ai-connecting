@@ -61,4 +61,7 @@ public class ModelConfigRequest {
 
     /** 可选的故障转移模型组 id：本模型请求失败后转入该组成员继续重试 */
     private Long fallbackGroupId;
+
+    /** 支持的用户等级列表, 逗号分隔, 例如 "1,2,3"; 为空表示对所有等级开放 */
+    private String supportedLevels;
 }

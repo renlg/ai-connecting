@@ -198,4 +198,18 @@ public class ModelConfigService {
                 .filter(model -> channelModelIds.contains(String.valueOf(model.getId())))
                 .toList();
     }
+
+    /**
+     * 获取可用模型列表，并按用户等级过滤（supportedLevels 为空表示对所有等级开放）；
+     * 管理员不做等级过滤
+     */
+    public List<ModelConfig> getAvailableModels(boolean isAdmin, Integer userLevel) {
+        List<ModelConfig> models = getAvailableModels(isAdmin);
+        if (isAdmin) {
+            return models;
+        }
+        return models.stream()
+                .filter(model -> com.aiconnecting.common.LevelUtils.isAllowed(model.getSupportedLevels(), userLevel))
+                .toList();
+    }
 }

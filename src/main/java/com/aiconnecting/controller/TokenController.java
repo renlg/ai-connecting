@@ -371,7 +371,7 @@ public class TokenController {
     public ApiResponse<List<Map<String, Object>>> getAvailableModels(@AuthenticationPrincipal User user) {
         boolean isAdmin = "admin".equals(user.getRole());
 
-        List<ModelConfig> models = modelConfigService.getAvailableModels(isAdmin);
+        List<ModelConfig> models = modelConfigService.getAvailableModels(isAdmin, user.getLevel());
 
         List<Map<String, Object>> result = new ArrayList<>();
         for (ModelConfig model : models) {
@@ -397,6 +397,7 @@ public class TokenController {
         if (modelGroupService != null) {
             for (ModelGroup group : modelGroupService.listEnabled()) {
                 if (Boolean.TRUE.equals(group.getAdminOnly()) && !isAdmin) continue;
+                if (!isAdmin && !com.aiconnecting.common.LevelUtils.isAllowed(group.getSupportedLevels(), user.getLevel())) continue;
                 long availableMembers = modelGroupService.listMemberViews(group.getId()).stream()
                         .map(ModelGroupService.MemberView::modelConfig)
                         .filter(model -> model.getStatus() != null && model.getStatus() == 1)

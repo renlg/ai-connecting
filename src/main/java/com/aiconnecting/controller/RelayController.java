@@ -230,7 +230,7 @@ public class RelayController {
 
         boolean isAdmin = userService.isAdmin(token.getUserId());
 
-        List<ModelConfig> models = modelConfigService.getAvailableModels(isAdmin);
+        List<ModelConfig> models = modelConfigService.getAvailableModels(isAdmin, tokenUser.getLevel());
 
         List<Map<String, Object>> modelList = new ArrayList<>();
         for (ModelConfig model : models) {
@@ -246,6 +246,9 @@ public class RelayController {
         // 非管理员额外排除 admin_only 组
         for (ModelGroup group : modelGroupService.listEnabled()) {
             if (Boolean.TRUE.equals(group.getAdminOnly()) && !isAdmin) {
+                continue;
+            }
+            if (!isAdmin && !com.aiconnecting.common.LevelUtils.isAllowed(group.getSupportedLevels(), tokenUser.getLevel())) {
                 continue;
             }
             if (!modelGroupRoutingService.hasAvailableMember(group, isAdmin)) {

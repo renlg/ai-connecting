@@ -304,7 +304,7 @@ class RelayControllerTest {
 
         ModelConfig m1 = ModelConfig.builder().id(1L).name("gpt-4").displayName("GPT-4").status(1)
                 .createdAt(LocalDateTime.now()).build();
-        when(modelConfigService.getAvailableModels(true)).thenReturn(List.of(m1));
+        when(modelConfigService.getAvailableModels(true, null)).thenReturn(List.of(m1));
 
         mockMvc.perform(get("/v1/models")
                         .header("Authorization", "Bearer sk-test"))
@@ -325,7 +325,7 @@ class RelayControllerTest {
 
         ModelConfig m1 = ModelConfig.builder().id(1L).name("gpt-4").displayName("GPT-4")
                 .adminOnly(false).status(1).createdAt(LocalDateTime.now()).build();
-        when(modelConfigService.getAvailableModels(false)).thenReturn(List.of(m1));
+        when(modelConfigService.getAvailableModels(false, null)).thenReturn(List.of(m1));
 
         mockMvc.perform(get("/v1/models")
                         .header("Authorization", "Bearer sk-test"))
@@ -372,7 +372,7 @@ class RelayControllerTest {
                 .createdAt(LocalDateTime.now()).build();
         ModelConfig m2 = ModelConfig.builder().id(2L).name("claude-3").displayName("Claude-3").status(1)
                 .createdAt(LocalDateTime.now()).build();
-        when(modelConfigService.getAvailableModels(true)).thenReturn(List.of(m1, m2));
+        when(modelConfigService.getAvailableModels(true, null)).thenReturn(List.of(m1, m2));
 
         mockMvc.perform(get("/v1/models")
                         .header("Authorization", "Bearer sk-test"))

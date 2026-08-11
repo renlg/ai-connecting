@@ -79,8 +79,19 @@ public class ModelGroupFailoverExecutor {
         }
     }
 
+    /**
+     * 用户等级不满足模型组 supportedLevels 时必须表现得与"模型组不存在"完全一致（同状态码/同错误体），
+     * 不能暴露组的存在性，故复用 {@link #requireGroup} 的未找到错误文案，而非 403
+     */
+    private void checkGroupLevel(ModelGroup group, Integer userLevel, boolean isAdmin) {
+        if (!isAdmin && !com.aiconnecting.common.LevelUtils.isAllowed(group.getSupportedLevels(), userLevel)) {
+            throw new BusinessException(404, "模型组不存在或未启用: " + group.getName(),
+                    "Model group not found or disabled: " + group.getName());
+        }
+    }
+
     /** 按 id 解析故障转移组（fallback_group_id），类型不符或未启用时返回空，调用方应放弃转入组、直接抛出原错误 */
-    public Optional<ModelGroup> resolveFallbackGroup(Long groupId, String expectedType, boolean isAdmin) {
+    public Optional<ModelGroup> resolveFallbackGroup(Long groupId, String expectedType, boolean isAdmin, Integer userLevel) {
         if (groupId == null) {
             return Optional.empty();
         }
@@ -88,6 +99,7 @@ public class ModelGroupFailoverExecutor {
                 .filter(g -> Boolean.TRUE.equals(g.getEnabled()))
                 .filter(g -> expectedType.equals(g.getType()));
         resolved.ifPresent(group -> checkGroupAdminOnly(group, isAdmin));
+        resolved.ifPresent(group -> checkGroupLevel(group, userLevel, isAdmin));
         return resolved;
     }
 

@@ -94,6 +94,10 @@ public class ModelGroup {
     @Column(name = "price_hd", precision = 10, scale = 2)
     private BigDecimal priceHd;
 
+    /** 支持的用户等级列表, 逗号分隔, 例如 "1,2,3"; 为空表示对所有等级开放 */
+    @Column(length = 50)
+    private String supportedLevels;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

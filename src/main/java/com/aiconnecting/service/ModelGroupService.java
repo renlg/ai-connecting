@@ -202,6 +202,9 @@ public class ModelGroupService {
         if (patch.getAdminOnly() != null) {
             existing.setAdminOnly(patch.getAdminOnly());
         }
+        if (patch.getSupportedLevels() != null) {
+            existing.setSupportedLevels(patch.getSupportedLevels());
+        }
         existing.setInputPrice(patch.getInputPrice() != null ? patch.getInputPrice() : existing.getInputPrice());
         existing.setOutputPrice(patch.getOutputPrice() != null ? patch.getOutputPrice() : existing.getOutputPrice());
         existing.setCachedPrice(patch.getCachedPrice() != null ? patch.getCachedPrice() : existing.getCachedPrice());

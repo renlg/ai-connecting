@@ -63,6 +63,9 @@ export default function Models() {
 
   const handleSave = async () => {
     const values = await form.validateFields()
+    if (values.supportedLevels && Array.isArray(values.supportedLevels)) {
+      values.supportedLevels = values.supportedLevels.join(',')
+    }
     const payload = {
       ...values,
       fallbackGroupId: values.fallbackGroupId || (editing ? 0 : null),
@@ -158,7 +161,11 @@ export default function Models() {
             setEditing(record)
             form.resetFields()
             const fallbackAvailable = fallbackGroups.some(group => group.id === record.fallbackGroupId && group.enabled && group.type === (record.type || 'text'))
-            form.setFieldsValue({ ...record, fallbackGroupId: fallbackAvailable ? record.fallbackGroupId : 0 })
+            const formValues = { ...record, fallbackGroupId: fallbackAvailable ? record.fallbackGroupId : 0 }
+            if (formValues.supportedLevels && typeof formValues.supportedLevels === 'string') {
+              formValues.supportedLevels = formValues.supportedLevels.split(',').map(l => l.trim()).filter(l => l)
+            }
+            form.setFieldsValue(formValues)
             setModalOpen(true)
           }}>编辑</Button>
           <Popconfirm title="确定删除该模型？" onConfirm={() => handleDelete(record.id)}>
@@ -255,6 +262,14 @@ export default function Models() {
           </>}
           <Form.Item name="description" label="描述"><Input placeholder="模型描述（可选）" /></Form.Item>
           <Form.Item name="adminOnly" label="仅管理员可选" valuePropName="checked" initialValue={false}><Switch /></Form.Item>
+          <Form.Item name="supportedLevels" label="支持等级" tooltip="不选表示对所有等级开放">
+            <Select
+              mode="multiple"
+              placeholder="不选表示对所有等级开放"
+              options={[1, 2, 3, 4, 5].map(l => ({ value: String(l), label: `Lv${l}` }))}
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
         </Form>
       </Modal>
 

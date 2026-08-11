@@ -5,6 +5,7 @@ import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.common.MediaDurationLimits;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
+import com.aiconnecting.entity.ModelGroup;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.entity.UsageLog;
@@ -182,8 +183,14 @@ public class RelaySupport {
                 throw new BusinessException(403, "该模型仅限管理员使用: " + routingModel,
                         "This model is admin-only: " + routingModel);
             }
-        } else if (modelGroupService.findByName(routingModel).filter(g -> Boolean.TRUE.equals(g.getEnabled())).isEmpty()) {
-            throw new BusinessException(404, "模型不存在: " + routingModel, "Model not found: " + routingModel);
+            if (!isAdmin && !com.aiconnecting.common.LevelUtils.isAllowed(config.getSupportedLevels(), tokenUser.getLevel())) {
+                throw new BusinessException(404, "模型不存在: " + routingModel, "Model not found: " + routingModel);
+            }
+        } else {
+            ModelGroup group = modelGroupService.findByName(routingModel).filter(g -> Boolean.TRUE.equals(g.getEnabled())).orElse(null);
+            if (group == null || (!isAdmin && !com.aiconnecting.common.LevelUtils.isAllowed(group.getSupportedLevels(), tokenUser.getLevel()))) {
+                throw new BusinessException(404, "模型不存在: " + routingModel, "Model not found: " + routingModel);
+            }
         }
         checkEndpointTypeMatch(routingModel, config, endpointType);
 

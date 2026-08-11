@@ -39,6 +39,7 @@ public class ModelGroupController {
 
     @PostMapping
     public ApiResponse<Map<String, Object>> create(@RequestBody ModelGroupRequest request) {
+        validateSupportedLevels(request.getSupportedLevels());
         ModelGroup group = fromRequest(new ModelGroup(), request);
         ModelGroup saved = modelGroupService.create(group, toMemberInputs(request));
         relayService.clearModelNameCache();
@@ -47,6 +48,7 @@ public class ModelGroupController {
 
     @PutMapping("/{id}")
     public ApiResponse<Map<String, Object>> update(@PathVariable Long id, @RequestBody ModelGroupRequest request) {
+        validateSupportedLevels(request.getSupportedLevels());
         ModelGroup patch = fromRequest(new ModelGroup(), request);
         ModelGroup saved = modelGroupService.update(id, patch, request.getMembers() != null ? toMemberInputs(request) : null);
         relayService.clearModelNameCache();
@@ -71,6 +73,17 @@ public class ModelGroupController {
         modelGroupService.update(id, patch, null);
         relayService.clearModelNameCache();
         return ApiResponse.success();
+    }
+
+    private static final java.util.regex.Pattern SUPPORTED_LEVELS_PATTERN = java.util.regex.Pattern.compile("^[1-5](,[1-5])*$");
+
+    private static void validateSupportedLevels(String supportedLevels) {
+        if (supportedLevels == null || supportedLevels.isBlank()) {
+            return;
+        }
+        if (!SUPPORTED_LEVELS_PATTERN.matcher(supportedLevels.trim()).matches()) {
+            throw new BusinessException("支持等级格式非法，应为 1-5 的逗号分隔数字，例如: 1,2,3", "Invalid supported-level format; use comma-separated numbers from 1 to 5, for example: 1,2,3");
+        }
     }
 
     private List<ModelGroupService.MemberInput> toMemberInputs(ModelGroupRequest request) {
@@ -101,6 +114,7 @@ public class ModelGroupController {
         group.setVideoPrice4k(request.getVideoPrice4k());
         group.setPriceStandard(request.getPriceStandard());
         group.setPriceHd(request.getPriceHd());
+        group.setSupportedLevels(request.getSupportedLevels());
         return group;
     }
 

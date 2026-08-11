@@ -42,6 +42,9 @@ public class ModelGroupRequest {
     private BigDecimal priceStandard;
     private BigDecimal priceHd;
 
+    /** 支持的用户等级列表, 逗号分隔, 例如 "1,2,3"; 为空表示对所有等级开放 */
+    private String supportedLevels;
+
     /** 成员列表，顺序即组内排序 */
     private List<MemberDto> members;
 

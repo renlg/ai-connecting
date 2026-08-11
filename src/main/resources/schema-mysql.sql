@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS model_configs (
     audio_price_standard DECIMAL(10,2) NOT NULL DEFAULT 0,
     audio_price_hd DECIMAL(10,2) NOT NULL DEFAULT 0,
     fallback_group_id BIGINT,
+    supported_levels VARCHAR(50),
     created_at DATETIME(6) NOT NULL,
     updated_at DATETIME(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -107,6 +108,7 @@ CREATE TABLE IF NOT EXISTS model_groups (
     video_price_4k DECIMAL(10,2),
     price_standard DECIMAL(10,2),
     price_hd DECIMAL(10,2),
+    supported_levels VARCHAR(50),
     created_at DATETIME(6) NOT NULL,
     UNIQUE KEY uk_model_groups_name (name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

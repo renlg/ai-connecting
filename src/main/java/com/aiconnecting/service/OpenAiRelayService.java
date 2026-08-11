@@ -73,7 +73,7 @@ public class OpenAiRelayService {
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
                     && FailureClassifier.isSwitchable(e)) {
                 var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(
-                        ctx.modelConfig().getFallbackGroupId(), "text", "admin".equals(ctx.user().getRole()));
+                        ctx.modelConfig().getFallbackGroupId(), "text", "admin".equals(ctx.user().getRole()), ctx.userLevel());
                 if (fallbackGroup.isPresent()) {
                     log.warn("模型 {} 请求失败，转入故障转移组 {} 继续尝试: {}", model, fallbackGroup.get().getName(), e.getMessage());
                     return modelGroupFailoverExecutor.relayRequestWithContext(ctx, fallbackGroup.get(), path, requestBody, httpRequest);
@@ -172,7 +172,7 @@ public class OpenAiRelayService {
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
                     && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
                 var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
-                        mediaType, "admin".equals(ctx.user().getRole()));
+                        mediaType, "admin".equals(ctx.user().getRole()), ctx.userLevel());
                 if (fallbackGroup.isPresent()) {
                     requireMediaRefundBeforeFallback(ctx, charge);
                     log.warn("模型 {} 媒体请求失败，转入故障转移组 {} 继续尝试", model, fallbackGroup.get().getName());
@@ -683,7 +683,7 @@ public class OpenAiRelayService {
                     && ctx.modelConfig().getFallbackGroupId() != null
                     && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
                 var fallback = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
-                        "audio", "admin".equals(ctx.user().getRole()));
+                        "audio", "admin".equals(ctx.user().getRole()), ctx.userLevel());
                 if (fallback.isPresent()) {
                     requireMediaRefundBeforeFallback(ctx, charge);
                     modelGroupFailoverExecutor.relayAudioSpeechWithContext(ctx, fallback.get(), requestBody,
@@ -810,7 +810,7 @@ public class OpenAiRelayService {
                     && ctx.modelConfig().getFallbackGroupId() != null
                     && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
                 var fallback = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
-                        "audio", "admin".equals(ctx.user().getRole()));
+                        "audio", "admin".equals(ctx.user().getRole()), ctx.userLevel());
                 if (fallback.isPresent()) {
                     requireMediaRefundBeforeFallback(ctx, charge);
                     return modelGroupFailoverExecutor.relayAudioTranscriptionWithContext(ctx, fallback.get(), path,
@@ -1042,7 +1042,7 @@ public class OpenAiRelayService {
             return false;
         }
         var fallback = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
-                "text", "admin".equals(ctx.user().getRole()));
+                "text", "admin".equals(ctx.user().getRole()), ctx.userLevel());
         if (fallback.isEmpty()) return false;
         modelGroupFailoverExecutor.relayStreamRequestWithContext(ctx, fallback.get(), path, requestBody,
                 httpRequest, httpResponse);
