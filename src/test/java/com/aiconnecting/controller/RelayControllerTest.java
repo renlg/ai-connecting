@@ -192,6 +192,43 @@ class RelayControllerTest {
                 .andExpect(jsonPath("$.traceId").doesNotExist());
     }
 
+    @Test
+    void chatCompletions_streamingValidationError_returnsSseWithoutTraceId() throws Exception {
+        when(relayService.resolveModelName("free1"))
+                .thenThrow(new BusinessException(404, "模型不存在: free1", "Model not found: free1"));
+
+        String body = "{\"model\":\"free1\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}";
+
+        mockMvc.perform(post("/v1/chat/completions")
+                        .header("Authorization", "Bearer sk-test")
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(content().string("event: error\ndata: {\"error\":{\"message\":\"Model not found: free1\"}}\n\n"));
+    }
+
+    @Test
+    void chatCompletions_unexpectedStreamingError_returnsGenericSseWithTraceId() throws Exception {
+        when(relayService.resolveModelName("gpt-4")).thenReturn("gpt-4");
+        doThrow(new IllegalStateException("unexpected failure")).when(relayService)
+                .relayStreamRequest(eq("sk-test"), eq("/v1/chat/completions"), anyString(),
+                        eq("gpt-4"), any(), any());
+
+        String body = "{\"model\":\"gpt-4\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}";
+
+        mockMvc.perform(post("/v1/chat/completions")
+                        .header("Authorization", "Bearer sk-test")
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(content().string(org.hamcrest.Matchers.matchesPattern(
+                        "event: error\\ndata: \\{\\\"error\\\":\\{\\\"message\\\":\\\"Internal server error, please try again later\\\",\\\"traceId\\\":\\\"[a-f0-9]{32}\\\"}}\\n\\n")));
+    }
+
     // ==================== Completions ====================
 
     @Test

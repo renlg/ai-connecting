@@ -1,6 +1,7 @@
 package com.aiconnecting.common;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
+import java.io.IOException;
 import java.util.stream.Collectors;
 
 @RestControllerAdvice
@@ -21,11 +23,23 @@ import java.util.stream.Collectors;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e, HttpServletRequest request) {
+    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e, HttpServletRequest request,
+                                                                      HttpServletResponse response) throws IOException {
         HttpStatus httpStatus = mapToHttpStatus(e.getCode());
         // 终端用户中转接口（/v1/**）：真实上游错误隐藏细节，仅返回通用错误 + traceId；
         // 本地业务错误（模型不存在、Token 无效、余额不足等）返回具体错误信息；
         // 管理后台/自测接口（/api/**，如渠道测试）继续返回详细错误
+        if (isSseRequest(request)) {
+            if (!response.isCommitted()) {
+                SseUtils.setSseHeaders(response);
+            }
+            String message = isEndUserRelayPath(request)
+                    ? (e.isUpstreamResponse() || e.getEnglishMessage() == null
+                            ? SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE : e.getEnglishMessage())
+                    : e.getMessage();
+            SseUtils.writeSseErrorEvent(response, message, e.isUpstreamResponse());
+            return null;
+        }
         if (isEndUserRelayPath(request)) {
             String message = e.isUpstreamResponse() || e.getEnglishMessage() == null
                     ? SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE
@@ -123,8 +137,18 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiResponse<Void>> handleException(Exception e, HttpServletRequest request) {
+    public ResponseEntity<ApiResponse<Void>> handleException(Exception e, HttpServletRequest request,
+                                                              HttpServletResponse response) throws IOException {
         log.error("服务器内部错误: {}", e.getMessage(), e);
+        if (isSseRequest(request)) {
+            if (!response.isCommitted()) {
+                SseUtils.setSseHeaders(response);
+            }
+            SseUtils.writeSseErrorEvent(response,
+                    localized(request, "Internal server error, please try again later", "服务器内部错误，请稍后重试"),
+                    true);
+            return null;
+        }
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.error(500, localized(request,
@@ -134,6 +158,11 @@ public class GlobalExceptionHandler {
     private boolean isEndUserRelayPath(HttpServletRequest request) {
         String uri = request.getRequestURI();
         return uri != null && uri.startsWith("/v1/");
+    }
+
+    private boolean isSseRequest(HttpServletRequest request) {
+        String accept = request.getHeader("Accept");
+        return accept != null && accept.contains("text/event-stream");
     }
 
     private String localized(HttpServletRequest request, String english, String chinese) {

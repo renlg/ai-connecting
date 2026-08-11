@@ -37,11 +37,20 @@ public final class SseUtils {
      */
     public static void writeSseErrorEvent(HttpServletResponse response, String zhMessage, String enMessage,
                                           boolean isUpstreamError) throws IOException {
-        response.setCharacterEncoding("UTF-8");
         String clientMessage = clientErrorMessage(zhMessage, enMessage, isUpstreamError);
+        writeSseErrorEvent(response, clientMessage, isUpstreamError);
+    }
+
+    /**
+     * Write an already-classified SSE error message. End-user relay responses include a trace id only
+     * when the error originated upstream, matching the JSON error response behavior.
+     */
+    public static void writeSseErrorEvent(HttpServletResponse response, String message,
+                                          boolean includeTraceId) throws IOException {
+        response.setCharacterEncoding("UTF-8");
         StringBuilder data = new StringBuilder("data: {\"error\":{\"message\":\"")
-                .append(escapeJson(clientMessage)).append("\"");
-        if (isEndUserRelayPath()) {
+                .append(escapeJson(message)).append("\"");
+        if (isEndUserRelayPath() && includeTraceId) {
             data.append(",\"traceId\":\"").append(currentTraceId()).append("\"");
         }
         data.append("}}\n\n");
