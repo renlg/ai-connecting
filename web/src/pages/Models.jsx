@@ -22,6 +22,7 @@ export default function Models() {
   const [editing, setEditing] = useState(null)
   const [searchName, setSearchName] = useState('')
   const [searchType, setSearchType] = useState(undefined)
+  const [searchStatus, setSearchStatus] = useState('all')
   const [form] = Form.useForm()
   const modelType = Form.useWatch('type', form) || 'text'
 
@@ -172,6 +173,10 @@ export default function Models() {
     .filter(group => group.enabled && group.type === modelType)
     .map(group => ({ value: group.id, label: group.name }))
 
+  const filteredModels = searchStatus === 'all'
+    ? models
+    : models.filter(model => model.status === searchStatus)
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -193,9 +198,14 @@ export default function Models() {
           setSearchType(value)
           load({ name: searchName || undefined, type: value })
         }} options={Object.entries(TYPE_META).map(([value, meta]) => ({ value, label: meta.label }))} style={{ width: 180 }} />
+        <Select value={searchStatus} onChange={setSearchStatus} options={[
+          { value: 'all', label: '全部状态' },
+          { value: 1, label: '仅启用' },
+          { value: 0, label: '仅禁用' },
+        ]} style={{ width: 140 }} />
       </Space>
 
-      <Table columns={columns} dataSource={models} rowKey="id" loading={loading} scroll={{ x: 1400 }} />
+      <Table columns={columns} dataSource={filteredModels} rowKey="id" loading={loading} scroll={{ x: 1400 }} />
 
       <Modal title={editing ? '编辑模型' : '新增模型'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={520}>
         <Form form={form} layout="vertical">

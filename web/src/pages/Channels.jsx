@@ -82,6 +82,7 @@ export default function Channels() {
   const [copyingId, setCopyingId] = useState(null)
   const [searchName, setSearchName] = useState('')
   const [searchModelIds, setSearchModelIds] = useState([])
+  const [searchStatus, setSearchStatus] = useState('all')
 
 
   const load = (filters) => {
@@ -531,6 +532,10 @@ export default function Channels() {
     },
   ]
 
+  const filteredChannels = searchStatus === 'all'
+    ? channels
+    : channels.filter(channel => channel.status === searchStatus)
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -558,8 +563,18 @@ export default function Channels() {
           style={{ minWidth: 300 }}
           filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
         />
+        <Select
+          value={searchStatus}
+          onChange={setSearchStatus}
+          options={[
+            { value: 'all', label: '全部状态' },
+            { value: 1, label: '仅启用' },
+            { value: 0, label: '仅禁用' },
+          ]}
+          style={{ width: 140 }}
+        />
       </Space>
-      <Table columns={columns} dataSource={channels} rowKey="id" loading={loading} scroll={{ x: 1100 }} />
+      <Table columns={columns} dataSource={filteredChannels} rowKey="id" loading={loading} scroll={{ x: 1100 }} />
       <Modal
         title={editing ? '编辑渠道' : '新增渠道'}
         open={modalOpen}

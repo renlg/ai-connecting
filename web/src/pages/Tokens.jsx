@@ -53,9 +53,19 @@ export default function Tokens() {
           value: m.displayName,
           label: m.displayName,
           kind: 'model',
+          modelType: m.type || 'text',
           inputRate: m.inputCreditRate,
           outputRate: m.outputCreditRate,
-          cacheRate: m.cacheCreditRate
+          cacheRate: m.cacheCreditRate,
+          imagePrice1k: m.imagePrice1k,
+          imagePrice2k: m.imagePrice2k,
+          imagePrice4k: m.imagePrice4k,
+          videoPrice480p: m.videoPrice480p,
+          videoPrice720p: m.videoPrice720p,
+          videoPrice1080p: m.videoPrice1080p,
+          videoPrice4k: m.videoPrice4k,
+          audioPriceStandard: m.audioPriceStandard,
+          audioPriceHd: m.audioPriceHd,
         }))
 
       const groupOptions = singleModels
@@ -65,11 +75,20 @@ export default function Tokens() {
           label: m.displayName,
           kind: 'group',
           memberCount: m.memberCount,
-          groupType: m.type,
-          // 模型组价格与单模型价格口径一致，均为每百万 token 单价
+          modelType: m.type || 'text',
+          // 文本模型组价格与单模型价格口径一致，均为每百万 token 单价
           inputRate: m.inputPrice != null ? m.inputPrice : undefined,
           outputRate: m.outputPrice != null ? m.outputPrice : undefined,
           cacheRate: m.cachedPrice != null ? m.cachedPrice : undefined,
+          imagePrice1k: m.price1k,
+          imagePrice2k: m.price2k,
+          imagePrice4k: m.price4k,
+          videoPrice480p: m.price480p,
+          videoPrice720p: m.price720p,
+          videoPrice1080p: m.price1080p,
+          videoPrice4k: m.videoPrice4k,
+          audioPriceStandard: m.priceStandard,
+          audioPriceHd: m.priceHd,
         }))
       options.push(...groupOptions)
       setModelOptions(options)
@@ -300,14 +319,29 @@ export default function Tokens() {
           <div style={{ marginBottom: 8, fontSize: 13, color: '#888' }}>可用模型（{modelOptions.length}）</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {modelOptions.map(m => {
-              const tooltipContent = m.kind === 'group' && m.groupType !== 'text' ? (
-                <div style={{ fontSize: 13 }}>模型组，可用成员 {m.memberCount} 个</div>
-              ) : (
+              const tooltipContent = (
                 <div style={{ fontSize: 13, lineHeight: '28px' }}>
                   {m.kind === 'group' && <div>模型组，可用成员 {m.memberCount} 个</div>}
-                  <div>输入比例：{m.inputRate || 0} 积分/百万token</div>
-                  <div>输出比例：{m.outputRate || 0} 积分/百万token</div>
-                  <div>缓存比例：{m.cacheRate || 0} 积分/百万token</div>
+                  {m.modelType === 'image' && <>
+                    <div>1K：{m.imagePrice1k ?? 0} 积分/张</div>
+                    <div>2K：{m.imagePrice2k ?? 0} 积分/张</div>
+                    <div>4K：{m.imagePrice4k ?? 0} 积分/张</div>
+                  </>}
+                  {m.modelType === 'video' && <>
+                    <div>480P：{m.videoPrice480p ?? 0} 积分/秒</div>
+                    <div>720P：{m.videoPrice720p ?? 0} 积分/秒</div>
+                    <div>1080P：{m.videoPrice1080p ?? 0} 积分/秒</div>
+                    <div>4K：{m.videoPrice4k ?? 0} 积分/秒</div>
+                  </>}
+                  {m.modelType === 'audio' && <>
+                    <div>标准：{m.audioPriceStandard ?? 0} 积分/秒</div>
+                    <div>高清：{m.audioPriceHd ?? 0} 积分/秒</div>
+                  </>}
+                  {m.modelType === 'text' && <>
+                    <div>输入比例：{m.inputRate || 0} 积分/百万token</div>
+                    <div>输出比例：{m.outputRate || 0} 积分/百万token</div>
+                    <div>缓存比例：{m.cacheRate || 0} 积分/百万token</div>
+                  </>}
                 </div>
               )
               return (

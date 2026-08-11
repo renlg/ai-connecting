@@ -379,9 +379,19 @@ public class TokenController {
             item.put("id", model.getId());
             item.put("name", model.getName());
             item.put("displayName", model.getDisplayName() != null ? model.getDisplayName() : model.getName());
+            item.put("type", model.getType());
             item.put("inputCreditRate", model.getInputCreditRate());
             item.put("outputCreditRate", model.getOutputCreditRate());
             item.put("cacheCreditRate", model.getCacheCreditRate());
+            item.put("imagePrice1k", model.getImagePrice1k());
+            item.put("imagePrice2k", model.getImagePrice2k());
+            item.put("imagePrice4k", model.getImagePrice4k());
+            item.put("videoPrice480p", model.getVideoPrice480p());
+            item.put("videoPrice720p", model.getVideoPrice720p());
+            item.put("videoPrice1080p", model.getVideoPrice1080p());
+            item.put("videoPrice4k", model.getVideoPrice4k());
+            item.put("audioPriceStandard", model.getAudioPriceStandard());
+            item.put("audioPriceHd", model.getAudioPriceHd());
             result.add(item);
         }
         if (modelGroupService != null) {
@@ -404,6 +414,15 @@ public class TokenController {
                 item.put("inputPrice", group.getInputPrice());
                 item.put("outputPrice", group.getOutputPrice());
                 item.put("cachedPrice", group.getCachedPrice());
+                item.put("price1k", group.getPrice1k());
+                item.put("price2k", group.getPrice2k());
+                item.put("price4k", group.getPrice4k());
+                item.put("price480p", group.getPrice480p());
+                item.put("price720p", group.getPrice720p());
+                item.put("price1080p", group.getPrice1080p());
+                item.put("videoPrice4k", group.getVideoPrice4k());
+                item.put("priceStandard", group.getPriceStandard());
+                item.put("priceHd", group.getPriceHd());
                 result.add(item);
             }
         }
