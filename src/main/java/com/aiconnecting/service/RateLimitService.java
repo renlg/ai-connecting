@@ -54,8 +54,7 @@ public class RateLimitService {
 
             if (result == null || result == 0L) {
                 log.warn("❌ [限流触发] 渠道 {} 请求频率超过限制: {}/min", channelId, maxRequests);
-                throw new BusinessException(429,
-                        String.format("请求过于频繁，该渠道限制为每分钟 %d 次请求，请稍后重试", maxRequests));
+                throw new BusinessException(429, "请求过于频繁，请稍后重试");
             } else {
                 log.info("✅ [限流通过] 渠道 {} 当前请求已放行 (限制: {}/min)", channelId, maxRequests);
             }

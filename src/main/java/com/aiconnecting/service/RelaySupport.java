@@ -62,6 +62,7 @@ public class RelaySupport {
     private final TokenService tokenService;
     private final UsageLogService usageLogService;
     private final ModelConfigService modelConfigService;
+    private final ModelGroupService modelGroupService;
     private final UserService userService;
     private final VideoTaskUsageLogService videoTaskUsageLogService;
 
@@ -180,6 +181,8 @@ public class RelaySupport {
             if (Boolean.TRUE.equals(config.getAdminOnly()) && !isAdmin) {
                 throw new BusinessException(403, "该模型仅限管理员使用: " + routingModel);
             }
+        } else if (modelGroupService.findByName(routingModel).filter(g -> Boolean.TRUE.equals(g.getEnabled())).isEmpty()) {
+            throw new BusinessException(404, "模型不存在: " + routingModel);
         }
         checkEndpointTypeMatch(routingModel, config, endpointType);
 

@@ -64,7 +64,7 @@ public class ClaudeRelayService {
             triedChannels.add(channel.getId());
 
             if (support.isChannelRateLimited(channel)) {
-                lastError = "渠道 " + channel.getId() + " 请求频率超限";
+                lastError = "上游渠道请求频率超限";
                 log.warn("跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
             }
@@ -140,7 +140,7 @@ public class ClaudeRelayService {
             triedChannels.add(channel.getId());
 
             if (support.isChannelRateLimited(channel)) {
-                lastError = "渠道 " + channel.getId() + " 请求频率超限";
+                lastError = "上游渠道请求频率超限";
                 log.warn("[Claude流式] 跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
             }

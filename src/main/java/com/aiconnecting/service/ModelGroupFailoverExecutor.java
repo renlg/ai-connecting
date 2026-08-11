@@ -137,6 +137,15 @@ public class ModelGroupFailoverExecutor {
                 cause.getRetryAfterSeconds(), cause.isUpstreamResponse());
     }
 
+    /**
+     * 成员切换耗尽后的终端用户可见消息：绝不能包含成员模型名 / 渠道 id（这些是内部实现细节，
+     * 只应出现在日志里），因此固定为不带 lastError 细节的通用文案；真实的失败细节交给
+     * 调用处的 log.error/log.warn 记录
+     */
+    private String exhaustedGroupMessage(String groupName) {
+        return "模型组 " + groupName + " 所有成员均不可用，请稍后重试";
+    }
+
     // ==================== 文本（非流式） ====================
 
     public String relayRequest(String tokenKey, String path, String requestBody, String groupName,
@@ -165,7 +174,6 @@ public class ModelGroupFailoverExecutor {
         long startTime = System.currentTimeMillis();
         long deadline = startTime + WALL_CLOCK_BUDGET_MS;
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
-        String lastError = null;
         BusinessException lastFailure = null;
         int attempts = 0;
         int spins = 0;
@@ -182,17 +190,16 @@ public class ModelGroupFailoverExecutor {
             try {
                 channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), ctx.userLevel());
             } catch (BusinessException e) {
-                lastError = e.getMessage();
                 lastFailure = null;
                 continue;
             }
             if (modelHealthTracker.isInCooldown(channel.getId(), modelConfigId)) {
-                lastError = "成员 " + candidate.modelConfig().getName() + " 渠道 " + channel.getId() + " 处于冷却期";
+                log.debug("模型组 {} 成员 {} (渠道 {}) 处于冷却期，跳过", groupName, candidate.modelConfig().getName(), channel.getId());
                 lastFailure = null;
                 continue;
             }
             if (support.isChannelRateLimited(channel)) {
-                lastError = "渠道 " + channel.getId() + " 请求频率超限";
+                log.debug("模型组 {} 成员 {} (渠道 {}) 触发限流，跳过", groupName, candidate.modelConfig().getName(), channel.getId());
                 lastFailure = null;
                 continue;
             }
@@ -218,7 +225,6 @@ public class ModelGroupFailoverExecutor {
                 return response;
             } catch (BusinessException e) {
                 lastFailure = e;
-                lastError = e.getMessage();
                 log.error("模型组 {} 成员 {} (渠道 {}) 请求失败 (尝试 {}/{}): {}",
                         groupName, memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 if (isFastFail(e)) {
@@ -229,8 +235,8 @@ public class ModelGroupFailoverExecutor {
             }
         }
         throw lastFailure != null
-                ? wrapFailure(lastFailure, "模型组所有成员均不可用，最后错误: " + lastError)
-                : new BusinessException(502, "模型组所有成员均不可用，最后错误: " + lastError);
+                ? wrapFailure(lastFailure, exhaustedGroupMessage(groupName))
+                : new BusinessException(502, exhaustedGroupMessage(groupName));
     }
 
     private void recordGroupTextUsage(Token token, Channel channel, ModelGroup group, String actualModel,
@@ -328,7 +334,8 @@ public class ModelGroupFailoverExecutor {
             }
             if (modelHealthTracker.isInCooldown(channel.getId(), modelConfigId)
                     || support.isChannelRateLimited(channel)) {
-                lastError = "成员 " + candidate.modelConfig().getName() + " 暂不可用";
+                log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", groupName, candidate.modelConfig().getName(), channel.getId());
+                lastError = "该成员暂不可用";
                 lastErrorUpstream = false;
                 continue;
             }
@@ -421,8 +428,9 @@ public class ModelGroupFailoverExecutor {
             }
         }
         if (!httpResponse.isCommitted()) {
+            log.error("模型组 {} 流式请求所有成员均不可用，最后错误: {}", groupName, lastError);
             RelayServiceUtils.writeOpenAiError(httpResponse, 502,
-                    SseUtils.clientErrorMessage("模型组所有成员均不可用: " + lastError, lastErrorUpstream));
+                    SseUtils.clientErrorMessage(exhaustedGroupMessage(groupName), lastErrorUpstream));
         }
     }
 
@@ -600,7 +608,6 @@ public class ModelGroupFailoverExecutor {
         long startTime = System.currentTimeMillis();
         long deadline = startTime + WALL_CLOCK_BUDGET_MS;
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
-        String lastError = null;
         BusinessException lastFailure = null;
         int attempts = 0;
         int spins = 0;
@@ -616,12 +623,11 @@ public class ModelGroupFailoverExecutor {
             try {
                 channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), ctx.userLevel());
             } catch (BusinessException e) {
-                lastError = e.getMessage();
                 lastFailure = null;
                 continue;
             }
             if (modelHealthTracker.isInCooldown(channel.getId(), modelConfigId) || support.isChannelRateLimited(channel)) {
-                lastError = "成员 " + candidate.modelConfig().getName() + " 暂不可用";
+                log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
                 lastFailure = null;
                 continue;
             }
@@ -656,7 +662,8 @@ public class ModelGroupFailoverExecutor {
                         .body(response.body());
             } catch (BusinessException e) {
                 lastFailure = e;
-                lastError = e.getMessage();
+                log.error("模型组 {} 成员 {} (渠道 {}) 转写请求失败 (尝试 {}/{}): {}",
+                        group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 if (isFastFail(e)) {
                     support.refundMediaCharge(ctx, charge);
                     throw e;
@@ -667,8 +674,8 @@ public class ModelGroupFailoverExecutor {
         }
         support.refundMediaCharge(ctx, charge);
         throw lastFailure != null
-                ? wrapFailure(lastFailure, "模型组所有成员均不可用，最后错误: " + lastError)
-                : new BusinessException(502, "模型组所有成员均不可用，最后错误: " + lastError);
+                ? wrapFailure(lastFailure, exhaustedGroupMessage(group.getName()))
+                : new BusinessException(502, exhaustedGroupMessage(group.getName()));
     }
 
     private boolean isValidTranscriptionJson(byte[] body) {
@@ -810,7 +817,6 @@ public class ModelGroupFailoverExecutor {
         long startTime = System.currentTimeMillis();
         long deadline = startTime + WALL_CLOCK_BUDGET_MS;
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
-        String lastError = null;
         BusinessException lastFailure = null;
         int attempts = 0;
         int spins = 0;
@@ -826,12 +832,11 @@ public class ModelGroupFailoverExecutor {
             try {
                 channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), ctx.userLevel());
             } catch (BusinessException e) {
-                lastError = e.getMessage();
                 lastFailure = null;
                 continue;
             }
             if (modelHealthTracker.isInCooldown(channel.getId(), modelConfigId) || support.isChannelRateLimited(channel)) {
-                lastError = "成员 " + candidate.modelConfig().getName() + " 暂不可用";
+                log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
                 lastFailure = null;
                 continue;
             }
@@ -851,7 +856,6 @@ public class ModelGroupFailoverExecutor {
             } catch (BusinessException e) {
                 releaseAttemptCharge(ctx, charge);
                 lastFailure = e;
-                lastError = e.getMessage();
                 log.error("模型组 {} 成员 {} (渠道 {}) 媒体请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 if (isFastFail(e)) {
@@ -865,8 +869,8 @@ public class ModelGroupFailoverExecutor {
             }
         }
         throw lastFailure != null
-                ? wrapFailure(lastFailure, "模型组所有成员均不可用，最后错误: " + lastError)
-                : new BusinessException(502, "模型组所有成员均不可用，最后错误: " + lastError);
+                ? wrapFailure(lastFailure, exhaustedGroupMessage(group.getName()))
+                : new BusinessException(502, exhaustedGroupMessage(group.getName()));
     }
 
     private MediaBinaryAttemptResult attemptBinaryMedia(RelaySupport.RelayContext ctx, ModelGroup group,
@@ -875,7 +879,6 @@ public class ModelGroupFailoverExecutor {
         long startTime = System.currentTimeMillis();
         long deadline = startTime + WALL_CLOCK_BUDGET_MS;
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
-        String lastError = null;
         BusinessException lastFailure = null;
         int attempts = 0;
         int spins = 0;
@@ -891,12 +894,11 @@ public class ModelGroupFailoverExecutor {
             try {
                 channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), ctx.userLevel());
             } catch (BusinessException e) {
-                lastError = e.getMessage();
                 lastFailure = null;
                 continue;
             }
             if (modelHealthTracker.isInCooldown(channel.getId(), modelConfigId) || support.isChannelRateLimited(channel)) {
-                lastError = "成员 " + candidate.modelConfig().getName() + " 暂不可用";
+                log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
                 lastFailure = null;
                 continue;
             }
@@ -914,7 +916,8 @@ public class ModelGroupFailoverExecutor {
             } catch (BusinessException e) {
                 releaseAttemptCharge(ctx, charge);
                 lastFailure = e;
-                lastError = e.getMessage();
+                log.error("模型组 {} 成员 {} (渠道 {}) 二进制媒体请求失败 (尝试 {}/{}): {}",
+                        group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 if (isFastFail(e)) {
                     throw e;
                 }
@@ -926,7 +929,7 @@ public class ModelGroupFailoverExecutor {
             }
         }
         throw lastFailure != null
-                ? wrapFailure(lastFailure, "模型组所有成员均不可用，最后错误: " + lastError)
-                : new BusinessException(502, "模型组所有成员均不可用，最后错误: " + lastError);
+                ? wrapFailure(lastFailure, exhaustedGroupMessage(group.getName()))
+                : new BusinessException(502, exhaustedGroupMessage(group.getName()));
     }
 }
