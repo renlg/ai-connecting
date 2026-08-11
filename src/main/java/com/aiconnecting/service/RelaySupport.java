@@ -947,6 +947,7 @@ public class RelaySupport {
         try {
             JsonNode jsonBody = objectMapper.readTree(requestBody);
             if (jsonBody.isObject()) {
+                normalizeContentForUpstream(jsonBody);
                 ObjectNode streamOptions = objectMapper.createObjectNode();
                 streamOptions.put("include_usage", true);
                 ((ObjectNode) jsonBody).set("stream_options", streamOptions);
@@ -954,6 +955,55 @@ public class RelaySupport {
             }
         } catch (Exception e) {
             log.warn("注入 stream_options 失败，使用原始请求体");
+        }
+        return requestBody;
+    }
+
+    /**
+     * 部分上游（如 Cloudflare Workers AI）的 OpenAI 兼容接口只接受字符串 content，
+     * 拒绝客户端标准的多模态数组格式。当 messages[].content 数组内每个元素都是纯文本
+     * part 时，合并为字符串以兼容此类上游；含图片等非文本 part 的消息保持原样
+     * （上游会因不支持而拒绝，好于静默丢弃图片数据）。
+     */
+    boolean normalizeContentForUpstream(JsonNode body) {
+        if (!(body instanceof ObjectNode obj)) return false;
+        JsonNode messages = obj.get("messages");
+        if (messages == null || !messages.isArray()) return false;
+        boolean changed = false;
+        for (JsonNode message : messages) {
+            if (!(message instanceof ObjectNode msgObj)) continue;
+            JsonNode content = msgObj.get("content");
+            if (content == null || !content.isArray()) continue;
+            StringBuilder merged = new StringBuilder();
+            boolean allText = true;
+            for (JsonNode part : content) {
+                JsonNode typeNode = part.isObject() ? part.get("type") : null;
+                boolean isTextPart = part.isObject() && (typeNode == null || "text".equals(typeNode.asText()))
+                        && part.hasNonNull("text") && part.get("text").isTextual();
+                if (!isTextPart) {
+                    allText = false;
+                    break;
+                }
+                if (merged.length() > 0) merged.append("\n");
+                merged.append(part.get("text").asText());
+            }
+            if (allText) {
+                msgObj.put("content", merged.toString());
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    /** 单模型转发前对文本/流式 chat 请求体做上游兼容性归一化，不改变原始请求体（无 messages 数组时原样返回）。 */
+    String normalizeContentForUpstream(String requestBody) {
+        try {
+            JsonNode node = objectMapper.readTree(requestBody);
+            if (normalizeContentForUpstream(node)) {
+                return objectMapper.writeValueAsString(node);
+            }
+        } catch (Exception e) {
+            log.warn("规范化 messages content 失败，使用原始请求体: {}", e.getMessage());
         }
         return requestBody;
     }

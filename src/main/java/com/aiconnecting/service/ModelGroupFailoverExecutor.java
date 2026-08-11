@@ -104,6 +104,7 @@ public class ModelGroupFailoverExecutor {
             JsonNode node = support.objectMapper.readTree(requestBody);
             if (node instanceof ObjectNode obj) {
                 obj.put("model", model);
+                support.normalizeContentForUpstream(obj);
                 return support.objectMapper.writeValueAsString(obj);
             }
         } catch (Exception e) {
