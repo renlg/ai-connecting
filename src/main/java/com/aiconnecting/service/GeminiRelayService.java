@@ -39,7 +39,6 @@ public class GeminiRelayService {
                                      String model, HttpServletRequest httpRequest) {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
         Set<Long> triedChannels = new HashSet<>();
-        Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long startTime = System.currentTimeMillis();
         String lastError = null;
         int attempt = 0;
@@ -55,12 +54,6 @@ public class GeminiRelayService {
                 throw e;
             }
             triedChannels.add(channel.getId());
-
-            if (support.isModelInCooldown(channel.getId(), modelConfigId)) {
-                lastError = "渠道 " + channel.getId() + " 模型冷却中";
-                log.warn("跳过冷却中的渠道 {} (model={}): {}", channel.getId(), model, lastError);
-                continue;
-            }
 
             if (support.isChannelRateLimited(channel)) {
                 lastError = "渠道 " + channel.getId() + " 请求频率超限";
@@ -90,14 +83,12 @@ public class GeminiRelayService {
                         0, 0, 0, duration, httpRequest,
                         "/v1/models/" + model + ":generateContent");
                 support.channelHealthTracker.recordSuccess(channel.getId());
-                support.recordModelSuccess(channel.getId(), modelConfigId);
                 return response;
             } catch (BusinessException e) {
                 lastError = e.getMessage();
                 log.error("Gemini 渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.channelHealthTracker.recordFailure(channel.getId(),
                         ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage());
-                support.recordModelFailure(channel.getId(), modelConfigId, e);
                 if (attempt == RelaySupport.MAX_RETRIES) {
                     throw new BusinessException(e.getCode(),
                             "所有渠道均不可用，最后错误: " + lastError);
@@ -117,7 +108,6 @@ public class GeminiRelayService {
         log.info("[Gemini流式] 开始处理, model={}", model);
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
         Set<Long> triedChannels = new HashSet<>();
-        Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         String lastError = null;
         int attempt = 0;
 
@@ -132,12 +122,6 @@ public class GeminiRelayService {
                 return;
             }
             triedChannels.add(channel.getId());
-
-            if (support.isModelInCooldown(channel.getId(), modelConfigId)) {
-                lastError = "渠道 " + channel.getId() + " 模型冷却中";
-                log.warn("[Gemini流式] 跳过冷却中的渠道 {}: {}", channel.getId(), lastError);
-                continue;
-            }
 
             if (support.isChannelRateLimited(channel)) {
                 lastError = "渠道 " + channel.getId() + " 请求频率超限";
@@ -157,19 +141,15 @@ public class GeminiRelayService {
                     forwardOpenAiStreamAsGeminiSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
                 }
                 support.channelHealthTracker.recordSuccess(channel.getId());
-                support.recordModelSuccess(channel.getId(), modelConfigId);
                 log.info("[Gemini流式] 处理完成, channel={}", channel.getId());
                 return;
             } catch (Exception e) {
                 lastError = e.getMessage();
                 log.error("[Gemini流式] 渠道 {} 失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
-                BusinessException classifyError = (e instanceof BusinessException be) ? be
-                        : new BusinessException(502, e.getMessage(), e);
                 ChannelHealthTracker.ErrorCategory category = (e instanceof BusinessException be)
                         ? ChannelHealthTracker.ErrorCategory.fromStatusCode(be.getCode())
                         : ChannelHealthTracker.ErrorCategory.fromException(e);
                 support.channelHealthTracker.recordFailure(channel.getId(), category, e.getMessage());
-                support.recordModelFailure(channel.getId(), modelConfigId, classifyError);
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) {
                     log.info("[Gemini流式] 响应未提交，尝试下一个渠道");
                     continue;

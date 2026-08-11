@@ -73,9 +73,6 @@ public class RelaySupport {
     @Autowired(required = false)
     private okhttp3.Interceptor tracingInterceptor;
 
-    @Autowired(required = false)
-    ModelHealthTracker modelHealthTracker;
-
     private OkHttpClient httpClient;
     final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -375,40 +372,6 @@ public class RelaySupport {
             }
         }
         return false;
-    }
-
-    /**
-     * 该 渠道+模型 组合是否处于冷却期。与模型组故障转移共享同一 {@link ModelHealthTracker} 状态，
-     * 使冷却成为全局（渠道+模型）级限制，而非仅在模型组故障转移路径内生效。
-     */
-    boolean isModelInCooldown(Long channelId, Long modelConfigId) {
-        return modelHealthTracker != null && modelHealthTracker.isInCooldown(channelId, modelConfigId);
-    }
-
-    void recordModelSuccess(Long channelId, Long modelConfigId) {
-        if (modelHealthTracker != null) {
-            modelHealthTracker.recordSuccess(channelId, modelConfigId);
-        }
-    }
-
-    /**
-     * 按 {@link FailureClassifier} 分类，仅 RATE_LIMIT/QUOTA/MODEL_NOT_FOUND 写入模型级冷却；
-     * 其余（渠道级）失败仍只由调用方按状态码写入 {@link ChannelHealthTracker}，此方法不重复处理。
-     */
-    void recordModelFailure(Long channelId, Long modelConfigId, BusinessException error) {
-        if (modelHealthTracker == null || channelId == null || modelConfigId == null) {
-            return;
-        }
-        FailureClassifier.Classification classification = FailureClassifier.classify(error);
-        switch (classification.kind()) {
-            case RATE_LIMIT -> modelHealthTracker.recordFailure(channelId, modelConfigId,
-                    ModelHealthTracker.FailureType.RATE_LIMIT, classification.retryAfterSeconds());
-            case QUOTA -> modelHealthTracker.recordFailure(channelId, modelConfigId,
-                    ModelHealthTracker.FailureType.QUOTA, classification.retryAfterSeconds());
-            case MODEL_NOT_FOUND -> modelHealthTracker.recordFailure(channelId, modelConfigId,
-                    ModelHealthTracker.FailureType.MODEL_NOT_FOUND);
-            default -> { }
-        }
     }
 
     boolean isClaudeTypeChannel(Channel channel) {
