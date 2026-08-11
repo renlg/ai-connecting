@@ -137,6 +137,19 @@ public class ChannelHealthTracker {
         }
     }
 
+    /**
+     * submit() can throw RejectedExecutionException once shutdown has begun (PreDestroy races with
+     * in-flight requests); every async entry point in this class goes through here so a rejection
+     * only logs and never propagates out of recordFailure()/recordSuccess().
+     */
+    private void safeSubmit(Runnable task) {
+        try {
+            healthExecutor.submit(task);
+        } catch (RejectedExecutionException e) {
+            log.warn("渠道健康追踪任务提交失败（执行器已关闭），忽略: {}", e.getMessage());
+        }
+    }
+
     // ==================== 内存回退数据结构 ====================
     private final ConcurrentHashMap<Long, Long> memRateLimitUntil = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> memCbState = new ConcurrentHashMap<>(); // 0/1
@@ -258,10 +271,10 @@ public class ChannelHealthTracker {
         }
         switch (category) {
             case RATE_LIMIT:
-                healthExecutor.submit(() -> applyRateLimitCooldown(channelId, errorMessage));
+                safeSubmit(() -> applyRateLimitCooldown(channelId, errorMessage));
                 break;
             case AUTH_ERROR:
-                healthExecutor.submit(() -> {
+                safeSubmit(() -> {
                     log.warn("渠道 {} 鉴权失败（{}），密钥可能已失效，立即熔断 1 小时: {}",
                             channelId, category, errorMessage);
                     forceOpen(channelId, AUTH_BLOCK_DURATION_MS);
@@ -274,7 +287,7 @@ public class ChannelHealthTracker {
             case SERVER_ERROR:
             case CONNECTION_ERROR:
             default:
-                healthExecutor.submit(() -> {
+                safeSubmit(() -> {
                     try {
                         onHealthRelevantFailure(channelId, category, errorMessage);
                     } catch (Exception e) {
@@ -336,7 +349,7 @@ public class ChannelHealthTracker {
         if (healthPersistenceService != null) {
             healthPersistenceService.recordSuccessAsync(channelId, now);
         }
-        healthExecutor.submit(() -> {
+        safeSubmit(() -> {
             try {
                 CircuitState state = getEffectiveState(channelId);
                 if (state == CircuitState.HALF_OPEN) {

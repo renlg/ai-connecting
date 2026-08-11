@@ -41,24 +41,37 @@ public class ChannelHealthPersistenceService {
     }
 
     public void recordSuccessAsync(Long channelId, long now) {
-        executor.submit(() -> safeRun(() -> upsertSuccess(channelId, now)));
+        safeEnqueue(() -> safeRun(() -> upsertSuccess(channelId, now)));
     }
 
     public void recordFailureAsync(Long channelId, long now, String reason) {
-        executor.submit(() -> safeRun(() -> upsertFailure(channelId, now, reason)));
+        safeEnqueue(() -> safeRun(() -> upsertFailure(channelId, now, reason)));
     }
 
     public void incrementProbeFailuresAsync(Long channelId, long now) {
-        executor.submit(() -> safeRun(() -> upsertProbeFailureIncrement(channelId, now)));
+        safeEnqueue(() -> safeRun(() -> upsertProbeFailureIncrement(channelId, now)));
     }
 
     public void resetProbeFailuresAsync(Long channelId, long now) {
-        executor.submit(() -> safeRun(() -> upsertProbeFailureReset(channelId, now)));
+        safeEnqueue(() -> safeRun(() -> upsertProbeFailureReset(channelId, now)));
     }
 
     public void deleteByChannelIdAsync(Long channelId) {
-        executor.submit(() -> safeRun(() -> jdbcTemplate.update(
+        safeEnqueue(() -> safeRun(() -> jdbcTemplate.update(
                 "DELETE FROM channel_health WHERE channel_id = ?", channelId)));
+    }
+
+    /**
+     * executor.submit() can throw RejectedExecutionException once shutdown has begun (PreDestroy
+     * races with in-flight requests); callers in ChannelHealthTracker run further in-memory circuit
+     * breaker logic right after invoking us, so an uncaught exception here must never propagate.
+     */
+    private void safeEnqueue(Runnable task) {
+        try {
+            executor.submit(task);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            log.warn("渠道健康数据落库任务提交失败（执行器已关闭），忽略: {}", e.getMessage());
+        }
     }
 
     private void safeRun(Runnable action) {
@@ -73,19 +86,24 @@ public class ChannelHealthPersistenceService {
         return DbDialectUtil.isMysql(jdbcTemplate);
     }
 
+    /**
+     * SELECT ... WHERE EXISTS(channels) instead of a plain VALUES(...) insert so a health event that
+     * lands after the channel row was deleted produces zero rows rather than resurrecting the
+     * channel_health row (channel_health has no FK and deletion of it is itself async).
+     */
     private void upsertSuccess(Long channelId, long now) {
         if (isMysql()) {
             jdbcTemplate.update(
                     "INSERT INTO channel_health (channel_id, last_success_at, probe_failures, updated_at, created_at) " +
-                            "VALUES (?, ?, 0, ?, ?) " +
+                            "SELECT ?, ?, 0, ?, ? FROM DUAL WHERE EXISTS (SELECT 1 FROM channels WHERE id = ?) " +
                             "ON DUPLICATE KEY UPDATE last_success_at = VALUES(last_success_at), updated_at = VALUES(updated_at)",
-                    channelId, now, now, now);
+                    channelId, now, now, now, channelId);
         } else {
             jdbcTemplate.update(
                     "INSERT INTO channel_health (channel_id, last_success_at, probe_failures, updated_at, created_at) " +
-                            "VALUES (?, ?, 0, ?, ?) " +
+                            "SELECT ?, ?, 0, ?, ? WHERE EXISTS (SELECT 1 FROM channels WHERE id = ?) " +
                             "ON CONFLICT(channel_id) DO UPDATE SET last_success_at = excluded.last_success_at, updated_at = excluded.updated_at",
-                    channelId, now, now, now);
+                    channelId, now, now, now, channelId);
         }
     }
 
@@ -93,15 +111,15 @@ public class ChannelHealthPersistenceService {
         if (isMysql()) {
             jdbcTemplate.update(
                     "INSERT INTO channel_health (channel_id, last_failure_at, last_failure_reason, probe_failures, updated_at, created_at) " +
-                            "VALUES (?, ?, ?, 0, ?, ?) " +
+                            "SELECT ?, ?, ?, 0, ?, ? FROM DUAL WHERE EXISTS (SELECT 1 FROM channels WHERE id = ?) " +
                             "ON DUPLICATE KEY UPDATE last_failure_at = VALUES(last_failure_at), last_failure_reason = VALUES(last_failure_reason), updated_at = VALUES(updated_at)",
-                    channelId, now, reason, now, now);
+                    channelId, now, reason, now, now, channelId);
         } else {
             jdbcTemplate.update(
                     "INSERT INTO channel_health (channel_id, last_failure_at, last_failure_reason, probe_failures, updated_at, created_at) " +
-                            "VALUES (?, ?, ?, 0, ?, ?) " +
+                            "SELECT ?, ?, ?, 0, ?, ? WHERE EXISTS (SELECT 1 FROM channels WHERE id = ?) " +
                             "ON CONFLICT(channel_id) DO UPDATE SET last_failure_at = excluded.last_failure_at, last_failure_reason = excluded.last_failure_reason, updated_at = excluded.updated_at",
-                    channelId, now, reason, now, now);
+                    channelId, now, reason, now, now, channelId);
         }
     }
 
@@ -109,15 +127,15 @@ public class ChannelHealthPersistenceService {
         if (isMysql()) {
             jdbcTemplate.update(
                     "INSERT INTO channel_health (channel_id, probe_failures, updated_at, created_at) " +
-                            "VALUES (?, 1, ?, ?) " +
+                            "SELECT ?, 1, ?, ? FROM DUAL WHERE EXISTS (SELECT 1 FROM channels WHERE id = ?) " +
                             "ON DUPLICATE KEY UPDATE probe_failures = probe_failures + 1, updated_at = VALUES(updated_at)",
-                    channelId, now, now);
+                    channelId, now, now, channelId);
         } else {
             jdbcTemplate.update(
                     "INSERT INTO channel_health (channel_id, probe_failures, updated_at, created_at) " +
-                            "VALUES (?, 1, ?, ?) " +
+                            "SELECT ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM channels WHERE id = ?) " +
                             "ON CONFLICT(channel_id) DO UPDATE SET probe_failures = channel_health.probe_failures + 1, updated_at = excluded.updated_at",
-                    channelId, now, now);
+                    channelId, now, now, channelId);
         }
     }
 
@@ -125,15 +143,15 @@ public class ChannelHealthPersistenceService {
         if (isMysql()) {
             jdbcTemplate.update(
                     "INSERT INTO channel_health (channel_id, probe_failures, updated_at, created_at) " +
-                            "VALUES (?, 0, ?, ?) " +
+                            "SELECT ?, 0, ?, ? FROM DUAL WHERE EXISTS (SELECT 1 FROM channels WHERE id = ?) " +
                             "ON DUPLICATE KEY UPDATE probe_failures = 0, updated_at = VALUES(updated_at)",
-                    channelId, now, now);
+                    channelId, now, now, channelId);
         } else {
             jdbcTemplate.update(
                     "INSERT INTO channel_health (channel_id, probe_failures, updated_at, created_at) " +
-                            "VALUES (?, 0, ?, ?) " +
+                            "SELECT ?, 0, ?, ? WHERE EXISTS (SELECT 1 FROM channels WHERE id = ?) " +
                             "ON CONFLICT(channel_id) DO UPDATE SET probe_failures = 0, updated_at = excluded.updated_at",
-                    channelId, now, now);
+                    channelId, now, now, channelId);
         }
     }
 }

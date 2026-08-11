@@ -35,9 +35,9 @@ public class ChannelHealth {
     @Column(name = "probe_failures", nullable = false)
     private Integer probeFailures = 0;
 
-    @Column(name = "updated_at")
+    @Column(name = "updated_at", nullable = false)
     private Long updatedAt;
 
-    @Column(name = "created_at")
+    @Column(name = "created_at", nullable = false)
     private Long createdAt;
 }

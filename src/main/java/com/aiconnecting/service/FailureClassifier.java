@@ -24,8 +24,6 @@ final class FailureClassifier {
             "rate_limit", "rate_limit_exceeded", "overloaded");
     private static final Set<String> UPSTREAM_AUTH = Set.of(
             "authentication_error", "invalid_api_key", "unauthorized", "upstream_auth_error");
-    private static final Set<String> INVALID_REQUEST = Set.of(
-            "invalid_request_error", "invalid_request", "invalid_json");
     private static final Set<String> POLICY = Set.of(
             "moderation", "policy", "content_filter", "content_policy_violation");
 
@@ -85,7 +83,14 @@ final class FailureClassifier {
             }
         }
 
-        if (code == 413 || code == 400 || code == 422) {
+        if (code == 400) {
+            // Product decision: every upstream 400 that isn't one of the specific fast-fail signals
+            // above (context_length_exceeded / moderation / request-too-large) must switch to the next
+            // group member instead of failing the whole request — e.g. groq/compound (free group
+            // member) rejecting tool calling with a generic invalid_request_error.
+            return new Classification(true, Kind.CHANNEL, retryAfterSeconds);
+        }
+        if (code == 413 || code == 422) {
             return new Classification(false, Kind.FAST_FAIL, retryAfterSeconds);
         }
         if (code == 401 || code == 403) {
@@ -131,8 +136,9 @@ final class FailureClassifier {
     private static Kind classifyStructuredMessage(String message) {
         if (message == null) return null;
         String normalized = normalize(message);
-        if (normalized.contains("context_length_exceeded") || normalized.contains("content_filter")
-                || normalized.contains("moderation") || normalized.contains("policy_violation")) return Kind.FAST_FAIL;
+        if (normalized.contains("context_length_exceeded") || normalized.contains("request_too_large")
+                || normalized.contains("content_filter") || normalized.contains("moderation")
+                || normalized.contains("policy_violation")) return Kind.FAST_FAIL;
         if (normalized.contains("model_not_found") || normalized.contains("model_decommissioned")) return Kind.MODEL_NOT_FOUND;
         if (normalized.contains("insufficient_quota") || normalized.contains("quota_exceeded")) return Kind.QUOTA;
         if (normalized.contains("rate_limit_exceeded") || normalized.contains("rate_limit")) return Kind.RATE_LIMIT;
@@ -143,7 +149,7 @@ final class FailureClassifier {
         Set<String> values = new java.util.HashSet<>();
         values.add(code);
         values.add(type);
-        if (values.contains("context_length_exceeded") || values.stream().anyMatch(INVALID_REQUEST::contains)
+        if (values.contains("context_length_exceeded") || values.contains("request_too_large")
                 || values.stream().anyMatch(POLICY::contains)) return Kind.FAST_FAIL;
         if (values.stream().anyMatch(MODEL_NOT_FOUND::contains)) return Kind.MODEL_NOT_FOUND;
         if (values.stream().anyMatch(QUOTA::contains)) return Kind.QUOTA;
@@ -155,8 +161,9 @@ final class FailureClassifier {
     private static Kind classifyLegacyMessage(String message) {
         if (message == null) return null;
         String lower = message.toLowerCase(Locale.ROOT);
-        if (lower.contains("context_length_exceeded") || lower.contains("content_filter")
-                || lower.contains("moderation") || lower.contains("policy")) return Kind.FAST_FAIL;
+        if (lower.contains("context_length_exceeded") || lower.contains("request_too_large")
+                || lower.contains("content_filter") || lower.contains("moderation")
+                || lower.contains("policy")) return Kind.FAST_FAIL;
         if (lower.contains("model_not_found") || lower.contains("model_decommissioned")) return Kind.MODEL_NOT_FOUND;
         if (lower.contains("insufficient_quota") || lower.contains("insufficient_user_quota") || lower.contains("quota")) return Kind.QUOTA;
         if (lower.contains("rate_limit") || lower.contains("overloaded")) return Kind.RATE_LIMIT;
