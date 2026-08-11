@@ -141,16 +141,18 @@ export default function Channels() {
     }
   }
 
+  // 基于全量本地模型构建 modelOptions，用于渠道弹窗初始展示，避免复用上一个渠道"获取模型"后残留的窄化列表
+  const buildBaseModelOptions = (models) => models.map(m => ({
+    value: String(m.id),
+    label: m.displayName ? `${m.name}（${m.displayName}）` : m.name
+  }))
+
   const loadModels = () => {
     getEnabledModels().then(res => {
       if (res.code === 200) {
         const models = res.data || []
         setAllLocalModels(models)
-        // 使用模型ID作为value，显示名称和displayName
-        setModelOptions(models.map(m => ({ 
-          value: String(m.id), 
-          label: m.displayName ? `${m.name}（${m.displayName}）` : m.name 
-        })))
+        setModelOptions(buildBaseModelOptions(models))
       }
     })
   }
@@ -507,6 +509,8 @@ export default function Channels() {
           )}
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
+            // 重置为该渠道自身对应的本地模型列表，清除上一次为其他渠道"获取模型"后残留的窄化选项
+            setModelOptions(buildBaseModelOptions(allLocalModels))
             const formValues = { ...record, apiKey: undefined }
             if (formValues.modelIds && typeof formValues.modelIds === 'string') {
               // 将逗号分隔的模型ID转换为数组
@@ -531,7 +535,7 @@ export default function Channels() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>渠道管理</h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true) }}>新增渠道</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModelOptions(buildBaseModelOptions(allLocalModels)); setModalOpen(true) }}>新增渠道</Button>
       </div>
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
