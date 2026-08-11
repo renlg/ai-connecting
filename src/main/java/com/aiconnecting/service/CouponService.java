@@ -103,7 +103,7 @@ public class CouponService {
     }
 
     public List<Coupon> listCoupons() {
-        return couponRepository.findAllOrderByUpdatedAtDesc();
+        return couponRepository.findAllOrderByCreatedAtDesc();
     }
 
     @Transactional(readOnly = true)

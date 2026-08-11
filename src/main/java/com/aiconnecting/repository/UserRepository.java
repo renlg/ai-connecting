@@ -37,9 +37,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
            "LOWER(u.username) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            "LOWER(u.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            "LOWER(u.email) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
-           "ORDER BY COALESCE(u.updatedAt, u.createdAt) DESC")
+           "ORDER BY u.createdAt DESC")
     List<User> searchByKeyword(@Param("keyword") String keyword);
 
-    @Query("SELECT u FROM User u ORDER BY COALESCE(u.updatedAt, u.createdAt) DESC")
-    List<User> findAllOrderByUpdatedAtDesc();
+    @Query("SELECT u FROM User u ORDER BY u.createdAt DESC")
+    List<User> findAllOrderByCreatedAtDesc();
 }

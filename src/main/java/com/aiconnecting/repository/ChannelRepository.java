@@ -14,11 +14,11 @@ public interface ChannelRepository extends JpaRepository<Channel, Long> {
     @Query("SELECT c FROM Channel c WHERE c.status = 1 AND (',' || c.modelIds || ',') LIKE :modelIdPattern ORDER BY c.priority DESC")
     List<Channel> findActiveChannelsByModel(@Param("modelIdPattern") String modelIdPattern);
 
-    @Query("SELECT c FROM Channel c ORDER BY COALESCE(c.updatedAt, c.createdAt) DESC")
-    List<Channel> findAllOrderByUpdatedAtDesc();
+    @Query("SELECT c FROM Channel c ORDER BY c.createdAt DESC")
+    List<Channel> findAllOrderByCreatedAtDesc();
 
     @Query("SELECT c FROM Channel c WHERE LOWER(c.name) LIKE LOWER(CONCAT('%', :name, '%')) " +
-           "ORDER BY COALESCE(c.updatedAt, c.createdAt) DESC")
+           "ORDER BY c.createdAt DESC")
     List<Channel> searchByName(@Param("name") String name);
 
     @Modifying

@@ -267,7 +267,7 @@ public class UserService {
         if (keyword != null && !keyword.trim().isEmpty()) {
             return userRepository.searchByKeyword(keyword.trim());
         }
-        return userRepository.findAllOrderByUpdatedAtDesc();
+        return userRepository.findAllOrderByCreatedAtDesc();
     }
 
     /**

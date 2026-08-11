@@ -10,8 +10,8 @@ import java.util.Optional;
 public interface CouponRepository extends JpaRepository<Coupon, Long> {
     Optional<Coupon> findByCode(String code);
 
-    @Query("SELECT c FROM Coupon c ORDER BY COALESCE(c.updatedAt, c.createdAt) DESC")
-    List<Coupon> findAllOrderByUpdatedAtDesc();
+    @Query("SELECT c FROM Coupon c ORDER BY c.createdAt DESC")
+    List<Coupon> findAllOrderByCreatedAtDesc();
 
     /**
      * 原子递增使用次数，返回更新后的 usedCount

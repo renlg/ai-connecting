@@ -167,7 +167,7 @@ public class ChannelService {
     }
 
     public List<Channel> listAll() {
-        return channelRepository.findAllOrderByUpdatedAtDesc();
+        return channelRepository.findAllOrderByCreatedAtDesc();
     }
 
     /**
@@ -176,7 +176,7 @@ public class ChannelService {
     public List<Channel> listAll(String name, List<String> modelIds) {
         List<Channel> channels = (name != null && !name.isBlank())
                 ? channelRepository.searchByName(name.trim())
-                : channelRepository.findAllOrderByUpdatedAtDesc();
+                : channelRepository.findAllOrderByCreatedAtDesc();
         if (modelIds != null && !modelIds.isEmpty()) {
             channels = channels.stream()
                     .filter(c -> supportsAnyModel(c.getModelIds(), modelIds))

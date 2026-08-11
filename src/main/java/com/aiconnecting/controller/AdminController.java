@@ -239,7 +239,7 @@ public class AdminController {
      */
     @GetMapping("/announcements")
     public ApiResponse<List<Announcement>> listAnnouncements() {
-        return ApiResponse.success(announcementRepository.findAllByOrderByUpdatedAtDesc());
+        return ApiResponse.success(announcementRepository.findAllByOrderByCreatedAtDesc());
     }
 
     /**

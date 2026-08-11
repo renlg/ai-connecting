@@ -76,7 +76,7 @@ public class ModelConfigService {
     }
 
     public List<ModelConfig> listAll() {
-        return modelConfigRepository.findAllOrderByUpdatedAtDesc();
+        return modelConfigRepository.findAllOrderByCreatedAtDesc();
     }
 
     public List<ModelConfig> listAll(String name, String type) {
@@ -84,7 +84,7 @@ public class ModelConfigService {
     }
 
     public List<ModelConfig> listNonAdmin() {
-        return modelConfigRepository.findByAdminOnlyFalseOrderByUpdatedAtDesc();
+        return modelConfigRepository.findByAdminOnlyFalseOrderByCreatedAtDesc();
     }
 
     public List<ModelConfig> listNonAdmin(String name, String type) {
