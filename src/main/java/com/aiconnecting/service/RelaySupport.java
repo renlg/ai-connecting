@@ -737,7 +737,7 @@ public class RelaySupport {
 
     String forwardClaudeRequest(Channel channel, String requestBody) {
         if (isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
+            throw new BusinessException(429, "请求过于频繁，请稍后重试");
         }
 
         String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1/messages";
@@ -770,7 +770,7 @@ public class RelaySupport {
     /** @param readTimeoutMs 覆盖默认读超时（毫秒），语义同 {@link #forwardRequest(Channel, String, String, Long)} */
     String forwardGeminiRequest(Channel channel, String requestBody, Long readTimeoutMs) {
         if (isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试");
+            throw new BusinessException(429, "请求过于频繁，请稍后重试");
         }
 
         String model = "default";
