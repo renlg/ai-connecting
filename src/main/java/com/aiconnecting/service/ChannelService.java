@@ -50,6 +50,9 @@ public class ChannelService {
     @Autowired(required = false)
     private okhttp3.Interceptor tracingInterceptor;
 
+    @Autowired(required = false)
+    private ModelConfigService modelConfigService;
+
     private OkHttpClient httpClient;
     private OkHttpClient streamHttpClient;
     private OkHttpClient videoDownloadHttpClient;
@@ -307,6 +310,25 @@ public class ChannelService {
     }
 
     /**
+     * 将客户端传入的模型名解析为上游模型名：先按 name 精确匹配，
+     * 再按 display_name 匹配并取其 name，否则原样透传。
+     * 与 RelaySupport#resolveModelName 保持一致的解析规则，供测试类接口复用。
+     */
+    private String resolveTestModelName(String model) {
+        if (model == null || model.isEmpty() || modelConfigService == null) {
+            return model;
+        }
+        if (!modelConfigService.findByName(model).isEmpty()) {
+            return model;
+        }
+        List<com.aiconnecting.entity.ModelConfig> byDisplayName = modelConfigService.findByDisplayName(model);
+        if (!byDisplayName.isEmpty()) {
+            return byDisplayName.get(0).getName();
+        }
+        return model;
+    }
+
+    /**
      * 测试渠道聊天功能 - 发送一条消息并返回响应
      */
     public Map<String, Object> testChat(String baseUrl, String apiKey, String type, String model, String message) {
@@ -316,6 +338,7 @@ public class ChannelService {
         if (model == null || model.isBlank()) {
             throw new BusinessException("请选择模型");
         }
+        model = resolveTestModelName(model);
 
         long startTime = System.currentTimeMillis();
 
@@ -337,7 +360,7 @@ public class ChannelService {
         String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key");
         String channelType = request.get("type");
         String modelType = requireTestValue(request, "modelType", "缺少模型类型").toLowerCase();
-        String model = requireTestValue(request, "model", "请选择模型");
+        String model = resolveTestModelName(requireTestValue(request, "model", "请选择模型"));
         String prompt = request.getOrDefault("message", "hi");
         validateBaseUrlForSsrf(baseUrl);
 
@@ -943,6 +966,7 @@ public class ChannelService {
         if (model == null || model.isBlank()) {
             throw new BusinessException("请选择模型");
         }
+        model = resolveTestModelName(model);
 
         try {
             boolean isClaude = "claude".equalsIgnoreCase(type) || "anthropic".equalsIgnoreCase(type);
