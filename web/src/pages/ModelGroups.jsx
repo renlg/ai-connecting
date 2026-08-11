@@ -63,7 +63,7 @@ export default function ModelGroups() {
     setEditingGroup(null)
     setGroupMembers([])
     groupForm.resetFields()
-    groupForm.setFieldsValue({ type: 'text', strategy: 'round_robin', maxAttempts: 5, enabled: true, adminOnly: false })
+    groupForm.setFieldsValue({ type: 'text', strategy: 'round_robin', maxAttempts: 5, enabled: true, adminOnly: false, supportedLevels: ['1', '2', '3', '4', '5'] })
     setGroupModalOpen(true)
   }
 
@@ -74,6 +74,9 @@ export default function ModelGroups() {
     const formValues = { ...group }
     if (formValues.supportedLevels && typeof formValues.supportedLevels === 'string') {
       formValues.supportedLevels = formValues.supportedLevels.split(',').map(l => l.trim()).filter(l => l)
+    }
+    if (!formValues.supportedLevels || formValues.supportedLevels.length === 0) {
+      formValues.supportedLevels = ['1', '2', '3', '4', '5']
     }
     groupForm.setFieldsValue(formValues)
     setGroupModalOpen(true)
@@ -95,8 +98,8 @@ export default function ModelGroups() {
 
   const handleGroupSave = async () => {
     const values = await groupForm.validateFields()
-    if (values.supportedLevels && Array.isArray(values.supportedLevels)) {
-      values.supportedLevels = values.supportedLevels.join(',')
+    if (Array.isArray(values.supportedLevels)) {
+      values.supportedLevels = values.supportedLevels.length === 5 ? '' : values.supportedLevels.join(',')
     }
     const payload = { ...values, members: groupMembers }
     try {
@@ -146,6 +149,7 @@ export default function ModelGroups() {
     { title: '启用', dataIndex: 'enabled', width: 70, render: (value, record) => <Switch checked={!!value} onChange={checked => handleGroupStatusChange(record.id, checked)} /> },
     { title: '仅管理员', dataIndex: 'adminOnly', width: 90, render: value => value ? <Tag color="gold">是</Tag> : '否' },
     { title: '价格摘要', width: 300, render: (_, record) => groupPriceSummary(record) },
+    { title: '支持等级', width: 100, render: (_, record) => record.supportedLevels || '全部' },
     { title: '成员数', width: 80, render: (_, record) => record.members?.length || 0 },
     {
       title: '操作', width: 160, fixed: 'right', render: (_, record) => (

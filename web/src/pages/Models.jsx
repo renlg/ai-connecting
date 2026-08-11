@@ -63,8 +63,8 @@ export default function Models() {
 
   const handleSave = async () => {
     const values = await form.validateFields()
-    if (values.supportedLevels && Array.isArray(values.supportedLevels)) {
-      values.supportedLevels = values.supportedLevels.join(',')
+    if (Array.isArray(values.supportedLevels)) {
+      values.supportedLevels = values.supportedLevels.length === 5 ? '' : values.supportedLevels.join(',')
     }
     const payload = {
       ...values,
@@ -130,18 +130,17 @@ export default function Models() {
         return <Tag color={meta.color}>{meta.label}</Tag>
       }
     },
-    { title: '输入比例（积分/百万token）', dataIndex: 'inputCreditRate', width: 130, render: (v, r) => ['image', 'video', 'audio'].includes(r.type) ? '-' : (v || 0) },
-    { title: '输出比例（积分/百万token）', dataIndex: 'outputCreditRate', width: 130, render: (v, r) => ['image', 'video', 'audio'].includes(r.type) ? '-' : (v || 0) },
-    { title: '缓存比例（积分/百万token）', dataIndex: 'cacheCreditRate', width: 130, render: (v, r) => ['image', 'video', 'audio'].includes(r.type) ? '-' : (v ?? 0) },
     {
-      title: '档位价格（积分）', width: 220,
+      title: '价格摘要', width: 300,
       render: (_, r) => {
-        if (r.type === 'image') return `1K: ${r.imagePrice1k ?? 0} / 2K: ${r.imagePrice2k ?? 0} / 4K: ${r.imagePrice4k ?? 0}`
-        if (r.type === 'video') return `480P: ${r.videoPrice480p ?? 0} / 720P: ${r.videoPrice720p ?? 0} / 1080P: ${r.videoPrice1080p ?? 0} / 4K: ${r.videoPrice4k ?? 0}`
-        if (r.type === 'audio') return `标准: ${r.audioPriceStandard ?? 0} / 高清: ${r.audioPriceHd ?? 0}`
+        if (r.type === 'text') return `输入 ${r.inputCreditRate ?? 0} / 输出 ${r.outputCreditRate ?? 0} / 缓存 ${r.cacheCreditRate ?? 0}（积分/百万token）`
+        if (r.type === 'image') return `1K ${r.imagePrice1k ?? 0} / 2K ${r.imagePrice2k ?? 0} / 4K ${r.imagePrice4k ?? 0}`
+        if (r.type === 'video') return `480P ${r.videoPrice480p ?? 0} / 720P ${r.videoPrice720p ?? 0} / 1080P ${r.videoPrice1080p ?? 0} / 4K ${r.videoPrice4k ?? 0}`
+        if (r.type === 'audio') return `标准 ${r.audioPriceStandard ?? 0} / 高清 ${r.audioPriceHd ?? 0}`
         return '-'
       }
     },
+    { title: '支持等级', dataIndex: 'supportedLevels', width: 100, render: v => v || '全部' },
     { title: '描述', dataIndex: 'description', ellipsis: true, render: v => v || '-' },
     {
       title: '仅管理员', dataIndex: 'adminOnly', width: 100,
@@ -164,6 +163,9 @@ export default function Models() {
             const formValues = { ...record, fallbackGroupId: fallbackAvailable ? record.fallbackGroupId : 0 }
             if (formValues.supportedLevels && typeof formValues.supportedLevels === 'string') {
               formValues.supportedLevels = formValues.supportedLevels.split(',').map(l => l.trim()).filter(l => l)
+            }
+            if (!formValues.supportedLevels || formValues.supportedLevels.length === 0) {
+              formValues.supportedLevels = ['1', '2', '3', '4', '5']
             }
             form.setFieldsValue(formValues)
             setModalOpen(true)
@@ -191,7 +193,7 @@ export default function Models() {
         <Button type="primary" icon={<PlusOutlined />} onClick={() => {
           setEditing(null)
           form.resetFields()
-          form.setFieldsValue({ type: 'text', adminOnly: false, fallbackGroupId: 0 })
+          form.setFieldsValue({ type: 'text', adminOnly: false, fallbackGroupId: 0, supportedLevels: ['1', '2', '3', '4', '5'] })
           setModalOpen(true)
         }}>新增模型</Button>
       </div>

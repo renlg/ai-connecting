@@ -377,7 +377,9 @@ public class TokenController {
         for (ModelConfig model : models) {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("id", model.getId());
-            item.put("name", isAdmin ? model.getName() : null);
+            if (isAdmin) {
+                item.put("name", model.getName());
+            }
             item.put("displayName", model.getDisplayName() != null ? model.getDisplayName() : model.getName());
             item.put("type", model.getType());
             item.put("inputCreditRate", model.getInputCreditRate());
@@ -411,7 +413,9 @@ public class TokenController {
                 item.put("type", group.getType());
                 item.put("kind", "group");
                 item.put("isGroup", true);
-                item.put("memberCount", isAdmin ? availableMembers : null);
+                if (isAdmin) {
+                    item.put("memberCount", availableMembers);
+                }
                 item.put("inputPrice", group.getInputPrice());
                 item.put("outputPrice", group.getOutputPrice());
                 item.put("cachedPrice", group.getCachedPrice());
