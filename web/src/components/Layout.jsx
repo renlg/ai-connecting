@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react'
-import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Menu, Avatar, Dropdown, Space, theme, Modal, Input, message, Alert, Typography } from 'antd'
+import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom'
+import { Layout, Menu, Avatar, Dropdown, Space, theme, Modal, Input, message, Alert, Typography, Button } from 'antd'
 import {
   DashboardOutlined, ApiOutlined, KeyOutlined,
   UserOutlined, TeamOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
-  RobotOutlined, GiftOutlined, CopyOutlined, BugOutlined
+  RobotOutlined, GiftOutlined, CopyOutlined, BugOutlined, ReadOutlined
 } from '@ant-design/icons'
 import { redeemCoupon, getLatestAnnouncements, getInviteCode } from '../api'
 
@@ -180,12 +180,17 @@ export default function AppLayout() {
           <span onClick={() => setCollapsed(!collapsed)} style={{ fontSize: 18, cursor: 'pointer' }}>
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           </span>
-          <Dropdown menu={userMenu}>
-            <Space style={{ cursor: 'pointer' }}>
-              <Avatar icon={<UserOutlined />} />
-              <span>{user.nickname || user.username || '用户'}</span>
-            </Space>
-          </Dropdown>
+          <Space size="middle">
+            <Link to="/docs">
+              <Button type="text" icon={<ReadOutlined />}>使用文档</Button>
+            </Link>
+            <Dropdown menu={userMenu}>
+              <Space style={{ cursor: 'pointer' }}>
+                <Avatar icon={<UserOutlined />} />
+                <span>{user.nickname || user.username || '用户'}</span>
+              </Space>
+            </Dropdown>
+          </Space>
         </Header>
         <Content style={{ margin: '24px 16px', padding: 24, background: themeToken.colorBgContainer, borderRadius: themeToken.borderRadiusLG, minHeight: 280 }}>
           <Outlet />
