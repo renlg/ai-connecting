@@ -73,10 +73,26 @@ public class PassthroughRelayService {
             request.setAttribute("passthrough.local-json-error", Boolean.TRUE);
             throw e;
         }
+        return tryPassthroughForModel(rawBody, requestedModel, request, servletResponse);
+    }
+
+    /** Gemini supplies its model in the URL; keep its body byte-for-byte intact on custom channels. */
+    public boolean tryPassthroughForModel(String rawBody, String requestedModel,
+                                          HttpServletRequest request,
+                                          HttpServletResponse servletResponse) throws IOException {
         String canonicalModel = support.resolveModelName(requestedModel);
         String channelModelId = support.resolveToChannelModelId(canonicalModel);
         if (!channelService.isPassthroughOnlyModel(channelModelId)) {
             return false;
+        }
+        if (request.getRequestURI() != null && request.getRequestURI().startsWith("/v1/models/")) {
+            try {
+                JsonNode json = objectMapper.readTree(rawBody);
+                if (json == null || !json.isObject()) throw new IOException("body is not a JSON object");
+            } catch (Exception e) {
+                request.setAttribute("passthrough.local-json-error", Boolean.TRUE);
+                throw new BusinessException(400, "请求 JSON 格式无效", "Invalid request JSON", e);
+            }
         }
 
         String tokenKey = extractTokenKey(request);
@@ -100,8 +116,11 @@ public class PassthroughRelayService {
             }
             attempted.add(channel.getId());
             String upstreamModel = mappedModel(channel, canonicalModel);
-            String rewrittenBody = rewriteTopLevelModelVerbatim(rawBody, upstreamModel);
-            Request upstreamRequest = buildPassthroughRequest(channel, request, rewrittenBody);
+            String mappedPath = mappedGeminiPath(request.getRequestURI(), upstreamModel);
+            String rewrittenBody = mappedPath != null
+                    ? rawBody : rewriteTopLevelModelVerbatim(rawBody, upstreamModel);
+            Request upstreamRequest = buildPassthroughRequest(channel, request, rewrittenBody,
+                    mappedPath);
             long startedAt = System.currentTimeMillis();
 
             final Response upstreamResponse;
@@ -214,10 +233,15 @@ public class PassthroughRelayService {
 
     public Request buildPassthroughRequest(Channel channel, HttpServletRequest originalRequest,
                                            String rewrittenBody) {
+        return buildPassthroughRequest(channel, originalRequest, rewrittenBody, null);
+    }
+
+    public Request buildPassthroughRequest(Channel channel, HttpServletRequest originalRequest,
+                                           String rewrittenBody, String overridePath) {
         StringBuilder url = new StringBuilder(channel.getBaseUrl().replaceAll("/+$", ""))
-                .append(originalRequest.getRequestURI());
+                .append(overridePath != null ? overridePath : originalRequest.getRequestURI());
         if (originalRequest.getQueryString() != null && !originalRequest.getQueryString().isEmpty()) {
-            url.append('?').append(originalRequest.getQueryString());
+            url.append(url.indexOf("?") >= 0 ? '&' : '?').append(originalRequest.getQueryString());
         }
         Request.Builder builder = new Request.Builder().url(url.toString());
         Enumeration<String> names = originalRequest.getHeaderNames();
@@ -235,6 +259,13 @@ public class PassthroughRelayService {
         RequestBody body = RequestBody.create(rewrittenBody.getBytes(StandardCharsets.UTF_8),
                 MediaType.parse(contentType));
         return builder.post(body).build();
+    }
+
+    private String mappedGeminiPath(String uri, String upstreamModel) {
+        if (uri == null || !uri.startsWith("/v1/models/")) return null;
+        int colon = uri.indexOf(':', "/v1/models/".length());
+        if (colon < 0) return null;
+        return "/v1/models/" + upstreamModel + uri.substring(colon);
     }
 
     public void copyUpstreamResponse(Response response, HttpServletResponse servletResponse,

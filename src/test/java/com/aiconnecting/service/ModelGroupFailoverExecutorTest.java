@@ -8,6 +8,7 @@ import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.repository.VideoTaskRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -133,6 +134,91 @@ class ModelGroupFailoverExecutorTest {
     }
 
     @Test
+    void claudeGroupRoutesThroughOpenAiMemberAndBillsAtGroupPrice() throws Exception {
+        GroupFixture fixture = groupFixture("application/json", new byte[0], 200);
+        fixture.channel.setType("openai");
+        String openAiResponse = "{\"model\":\"member-model\",\"choices\":[{\"message\":{\"content\":\"ok\"},"
+                + "\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":6,\"total_tokens\":10}}";
+        doReturn(openAiResponse).when(fixture.support)
+                .forwardRequest(eq(fixture.channel), eq("/v1/chat/completions"), anyString(), anyLong());
+        String raw = "{\"model\":\"public-group\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":64}";
+        UnifiedRelayRequest unified = new RelayProtocolAdapter(new ObjectMapper()).adaptRequest(
+                RelayProtocol.CLAUDE, "/v1/messages", raw, null);
+
+        String result = fixture.executor.relayRequest(
+                "client-key", unified, request(), new MockHttpServletResponse());
+
+        JsonNode resultJson = new ObjectMapper().readTree(result);
+        assertThat(resultJson.path("type").asText()).isEqualTo("message");
+        assertThat(resultJson.path("content").path(0).path("text").asText()).isEqualTo("ok");
+        verify(fixture.billing).calculateTextCreditCost(any(), eq(4), eq(6), eq(0));
+        org.mockito.ArgumentCaptor<com.aiconnecting.entity.UsageLog> usage =
+                org.mockito.ArgumentCaptor.forClass(com.aiconnecting.entity.UsageLog.class);
+        verify(fixture.usageLogs).recordUsageAndQuotas(usage.capture(), eq(8L), eq(9L), eq(10), eq(7L));
+        assertThat(usage.getValue().getModel()).isEqualTo("public-group");
+        assertThat(usage.getValue().getActualModel()).isEqualTo("member-model");
+    }
+
+    @Test
+    void geminiGroupRoutesThroughOpenAiMemberAndBillsAtGroupPrice() throws Exception {
+        GroupFixture fixture = groupFixture("application/json", new byte[0], 200);
+        fixture.channel.setType("openai");
+        String openAiResponse = "{\"choices\":[{\"message\":{\"content\":\"gemini-ok\"},\"finish_reason\":\"stop\"}],"
+                + "\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5,\"total_tokens\":8}}";
+        doReturn(openAiResponse).when(fixture.support)
+                .forwardRequest(eq(fixture.channel), eq("/v1/chat/completions"), anyString(), anyLong());
+        String raw = "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hi\"}]}]}";
+        UnifiedRelayRequest unified = new RelayProtocolAdapter(new ObjectMapper()).adaptRequest(
+                RelayProtocol.GEMINI, "/v1/models/public-group:generateContent", raw, "public-group");
+
+        String result = fixture.executor.relayRequest(
+                "client-key", unified, request(), new MockHttpServletResponse());
+
+        JsonNode resultJson = new ObjectMapper().readTree(result);
+        assertThat(resultJson.path("candidates").path(0).path("content").path("parts").path(0)
+                .path("text").asText()).isEqualTo("gemini-ok");
+        verify(fixture.billing).calculateTextCreditCost(any(), eq(3), eq(5), eq(0));
+    }
+
+    @Test
+    void claudeGroupCustomMemberPreservesBodyAndResponse() throws Exception {
+        byte[] responseBytes = "{\"type\":\"message\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}"
+                .getBytes(StandardCharsets.UTF_8);
+        GroupFixture fixture = groupFixture("application/json", responseBytes, 200);
+        String raw = "{ \"model\" : \"public-group\", \"messages\":[] }";
+        UnifiedRelayRequest unified = new RelayProtocolAdapter(new ObjectMapper()).adaptRequest(
+                RelayProtocol.CLAUDE, "/v1/messages", raw, null);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThat(fixture.executor.relayRequest("client-key", unified, request(), response)).isNull();
+        assertThat(response.getContentAsByteArray()).isEqualTo(responseBytes);
+        okio.Buffer sentBody = new okio.Buffer();
+        fixture.sentRequest.getValue().body().writeTo(sentBody);
+        assertThat(sentBody.readUtf8()).isEqualTo("{ \"model\" : \"vendor-model\", \"messages\":[] }");
+    }
+
+    @Test
+    void geminiGroupCustomMemberMapsUrlModelWhenBodyHasNoModel() throws Exception {
+        byte[] responseBytes = "{\"candidates\":[],\"usageMetadata\":{\"totalTokenCount\":0}}"
+                .getBytes(StandardCharsets.UTF_8);
+        GroupFixture fixture = groupFixture("application/json", responseBytes, 200);
+        String raw = "{\"contents\":[]}";
+        UnifiedRelayRequest unified = new RelayProtocolAdapter(new ObjectMapper()).adaptRequest(
+                RelayProtocol.GEMINI, "/v1/models/public-group:generateContent", raw, "public-group");
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/v1/models/public-group:generateContent");
+        request.addHeader("Authorization", "Bearer client-key");
+
+        assertThat(fixture.executor.relayRequest(
+                "client-key", unified, request, new MockHttpServletResponse())).isNull();
+        Request sent = fixture.sentRequest.getValue();
+        assertThat(sent.url().encodedPath()).isEqualTo("/v1/models/vendor-model:generateContent");
+        okio.Buffer sentBody = new okio.Buffer();
+        sent.body().writeTo(sentBody);
+        assertThat(sentBody.readUtf8()).isEqualTo(raw);
+    }
+
+    @Test
     void customMemberMissingCanonicalMappingFailsLocallyWith404() throws Exception {
         GroupFixture fixture = groupFixture("application/json", new byte[0], 200);
         fixture.channel.setModelMapping("{}");
@@ -200,10 +286,10 @@ class ModelGroupFailoverExecutorTest {
         ModelGroupFailoverExecutor executor = new ModelGroupFailoverExecutor(
                 support, groupService, routing, billing, modelHealth, usageLogs,
                 mock(VideoTaskRepository.class), mock(VideoTaskUsageLogService.class), passthrough);
-        return new GroupFixture(executor, support, usageLogs, calls, sentRequest, channel);
+        return new GroupFixture(executor, support, usageLogs, billing, calls, sentRequest, channel);
     }
 
     private record GroupFixture(ModelGroupFailoverExecutor executor, RelaySupport support,
-                                UsageLogService usageLogs, Call.Factory calls,
+                                UsageLogService usageLogs, ModelGroupBillingService billing, Call.Factory calls,
                                 org.mockito.ArgumentCaptor<Request> sentRequest, Channel channel) {}
 }

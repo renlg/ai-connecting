@@ -1,7 +1,6 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
-import com.aiconnecting.common.ProtocolConverter;
 import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelGroup;
@@ -16,14 +15,18 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MultiValueMap;
 import okhttp3.Request;
 import okhttp3.Response;
 
 import java.io.IOException;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.net.HttpURLConnection;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -48,6 +51,10 @@ public class ModelGroupFailoverExecutor {
     private final VideoTaskRepository videoTaskRepository;
     private final VideoTaskUsageLogService videoTaskUsageLogService;
     private final PassthroughRelayService passthroughRelayService;
+
+    /** Field injection keeps the long-standing constructor used by focused unit tests source-compatible. */
+    @Autowired(required = false)
+    private RelayProtocolAdapter protocolAdapter;
 
     /** 总耗时预算（毫秒），介于业务约定的 120-150s 之间 */
     private static final long WALL_CLOCK_BUDGET_MS = 130_000L;
@@ -160,10 +167,11 @@ public class ModelGroupFailoverExecutor {
 
     /** 包裹重试耗尽后的汇总错误，保留原始异常的 upstreamResponse 标记，避免真实上游错误被误判为本地错误而向终端用户泄露细节 */
     private BusinessException wrapFailure(BusinessException cause, String message) {
+        boolean upstream = cause.isUpstreamResponse() || FailureClassifier.isSwitchable(cause);
         return new BusinessException(cause.getCode(), message,
                 "All members of the model group are unavailable, please try again later",
                 cause, cause.getUpstreamResponseBody(),
-                cause.getRetryAfterSeconds(), cause.isUpstreamResponse());
+                cause.getRetryAfterSeconds(), upstream);
     }
 
     /**
@@ -190,8 +198,21 @@ public class ModelGroupFailoverExecutor {
                                HttpServletRequest httpRequest, HttpServletResponse httpResponse) {
         ModelGroup group = requireGroup(groupName, "text");
         RelaySupport.RelayContext ctx = support.prepareGroupContext(tokenKey, groupName);
+        boolean isAdmin = "admin".equals(ctx.user().getRole());
+        checkGroupAdminOnly(group, isAdmin);
+        checkGroupLevel(group, ctx.userLevel(), isAdmin);
+        UnifiedRelayRequest request = adapter().adaptRequest(
+                RelayProtocol.OPENAI, path, requestBody, groupName);
+        return relayRequestWithContext(ctx, group, request, httpRequest, httpResponse);
+    }
+
+    public String relayRequest(String tokenKey, UnifiedRelayRequest request,
+                               HttpServletRequest httpRequest, HttpServletResponse httpResponse) {
+        String groupName = request.model();
+        ModelGroup group = requireGroup(groupName, "text");
+        RelaySupport.RelayContext ctx = support.prepareGroupContext(tokenKey, groupName);
         checkGroupAdminOnly(group, "admin".equals(ctx.user().getRole()));
-        return relayRequestWithContext(ctx, group, path, requestBody, httpRequest, httpResponse);
+        return relayRequestWithContext(ctx, group, request, httpRequest, httpResponse);
     }
 
     /**
@@ -207,6 +228,17 @@ public class ModelGroupFailoverExecutor {
     String relayRequestWithContext(RelaySupport.RelayContext ctx, ModelGroup group, String path,
                                    String requestBody, HttpServletRequest httpRequest,
                                    HttpServletResponse httpResponse) {
+        UnifiedRelayRequest request = adapter().adaptRequest(
+                RelayProtocol.OPENAI, path, requestBody, group.getName());
+        return relayRequestWithContext(ctx, group, request, httpRequest, httpResponse);
+    }
+
+    private String relayRequestWithContext(RelaySupport.RelayContext ctx, ModelGroup group,
+                                           UnifiedRelayRequest request,
+                                           HttpServletRequest httpRequest,
+                                           HttpServletResponse httpResponse) {
+        String path = request.path();
+        String requestBody = request.rawBody();
         String groupName = group.getName();
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
@@ -260,10 +292,14 @@ public class ModelGroupFailoverExecutor {
                                 "Passthrough model-group request is missing its response context");
                     }
                     String upstreamModel = passthroughRelayService.mappedModel(channel, memberModel);
-                    String passthroughBody = passthroughRelayService.rewriteTopLevelModelVerbatim(
-                            requestBody, upstreamModel);
+                    String passthroughBody = request.protocol() == RelayProtocol.GEMINI
+                            ? requestBody : passthroughRelayService.rewriteTopLevelModelVerbatim(
+                                    requestBody, upstreamModel);
+                    String passthroughPath = request.protocol() == RelayProtocol.GEMINI
+                            ? adapter().upstreamPath(RelayProtocol.GEMINI, upstreamModel, request.stream())
+                            : null;
                     Request upstreamRequest = passthroughRelayService.buildPassthroughRequest(
-                            channel, httpRequest, passthroughBody);
+                            channel, httpRequest, passthroughBody, passthroughPath);
                     Response upstreamResponse;
                     try {
                         upstreamResponse = passthroughRelayService.executePassthrough(upstreamRequest, attemptTimeoutMs);
@@ -278,17 +314,21 @@ public class ModelGroupFailoverExecutor {
                     continue;
                 }
 
-                String response;
-                String upstreamBody = rewriteModelField(requestBody, memberModel);
-                if (support.isGeminiTypeChannel(channel)) {
-                    String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(upstreamBody);
-                    response = support.forwardGeminiRequest(channel, geminiBody, attemptTimeoutMs);
-                    response = ProtocolConverter.convertGeminiToOpenAiResponse(response);
-                } else {
-                    response = support.forwardRequest(channel, path, upstreamBody, attemptTimeoutMs);
-                }
+                RelayProtocol upstreamProtocol = adapter().channelProtocol(channel);
+                String upstreamBody = adapter().toUpstreamBody(request, memberModel, upstreamProtocol);
+                String upstreamResponse = switch (upstreamProtocol) {
+                    case OPENAI -> support.forwardRequest(channel,
+                            request.protocol() == RelayProtocol.OPENAI ? request.path()
+                                    : adapter().upstreamPath(upstreamProtocol, memberModel, false),
+                            upstreamBody, attemptTimeoutMs);
+                    case CLAUDE -> support.forwardClaudeRequest(channel, upstreamBody, attemptTimeoutMs);
+                    case GEMINI -> support.forwardGeminiRequest(channel, upstreamBody, attemptTimeoutMs);
+                };
+                String response = adapter().fromUpstreamResponse(
+                        upstreamResponse, upstreamProtocol, request.protocol());
                 long duration = System.currentTimeMillis() - startTime;
-                recordGroupTextUsage(ctx.token(), channel, group, memberModel, response, duration, httpRequest, path);
+                recordGroupTextUsage(ctx.token(), channel, group, memberModel, response,
+                        request.protocol(), duration, httpRequest, path);
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 modelHealthTracker.recordSuccess(channel.getId(), modelConfigId);
                 return response;
@@ -395,29 +435,15 @@ public class ModelGroupFailoverExecutor {
     }
 
     private void recordGroupTextUsage(Token token, Channel channel, ModelGroup group, String actualModel,
-                                      String response, long duration, HttpServletRequest httpRequest, String path) {
-        int promptTokens = 0, completionTokens = 0, totalTokens = 0;
-        int cachedTokens = 0, cacheCreationTokens = 0, cacheReadTokens = 0;
-        try {
-            JsonNode jsonNode = support.objectMapper.readTree(response);
-            JsonNode usage = jsonNode.get("usage");
-            if (usage != null) {
-                promptTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt() : 0;
-                completionTokens = usage.has("completion_tokens") ? usage.get("completion_tokens").asInt() : 0;
-                totalTokens = usage.has("total_tokens") ? usage.get("total_tokens").asInt() : 0;
-                JsonNode promptDetails = usage.path("prompt_tokens_details");
-                if (!promptDetails.isMissingNode()) {
-                    cachedTokens = promptDetails.has("cached_tokens") ? promptDetails.get("cached_tokens").asInt() : 0;
-                }
-                cacheCreationTokens = usage.has("cache_creation_input_tokens") ? usage.get("cache_creation_input_tokens").asInt() : 0;
-                cacheReadTokens = usage.has("cache_read_input_tokens") ? usage.get("cache_read_input_tokens").asInt() : 0;
-                if (cachedTokens == 0 && cacheReadTokens > 0) {
-                    cachedTokens = cacheReadTokens;
-                }
-            }
-        } catch (Exception e) {
-            log.warn("模型组文本响应 usage 解析失败: {}", e.getMessage());
-        }
+                                      String response, RelayProtocol protocol, long duration,
+                                      HttpServletRequest httpRequest, String path) {
+        RelayServiceUtils.UsageInfo parsed = adapter().parseUsage(protocol, response);
+        int promptTokens = parsed.promptTokens();
+        int completionTokens = parsed.completionTokens();
+        int totalTokens = parsed.totalTokens();
+        int cachedTokens = parsed.cachedTokens();
+        int cacheCreationTokens = parsed.cacheCreationTokens();
+        int cacheReadTokens = parsed.cacheReadTokens();
         BigDecimal creditCost = billingService.calculateTextCreditCost(group, promptTokens, completionTokens, cachedTokens);
         UsageLog usageLog = UsageLog.builder()
                 .tokenId(token.getId())
@@ -438,6 +464,10 @@ public class ModelGroupFailoverExecutor {
         usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(), totalTokens, token.getUserId());
     }
 
+    private RelayProtocolAdapter adapter() {
+        return protocolAdapter != null ? protocolAdapter : new RelayProtocolAdapter(support.objectMapper);
+    }
+
     // ==================== 文本（流式 SSE） ====================
 
     /**
@@ -446,14 +476,34 @@ public class ModelGroupFailoverExecutor {
      */
     public void relayStreamRequest(String tokenKey, String path, String requestBody, String groupName,
                                    HttpServletRequest httpRequest, HttpServletResponse httpResponse) throws IOException {
+        UnifiedRelayRequest request = adapter().adaptRequest(
+                RelayProtocol.OPENAI, path, requestBody, groupName);
+        relayStreamRequest(tokenKey, request, httpRequest, httpResponse);
+    }
+
+    public void relayStreamRequest(String tokenKey, UnifiedRelayRequest request,
+                                   HttpServletRequest httpRequest,
+                                   HttpServletResponse httpResponse) throws IOException {
+        String groupName = request.model();
         ModelGroup group = requireGroup(groupName, "text");
         RelaySupport.RelayContext ctx = support.prepareGroupContext(tokenKey, groupName);
-        relayStreamRequestWithContext(ctx, group, path, requestBody, httpRequest, httpResponse);
+        relayStreamRequestWithContext(ctx, group, request, httpRequest, httpResponse);
     }
 
     void relayStreamRequestWithContext(RelaySupport.RelayContext ctx, ModelGroup group, String path,
                                        String requestBody, HttpServletRequest httpRequest,
                                        HttpServletResponse httpResponse) throws IOException {
+        UnifiedRelayRequest request = adapter().adaptRequest(
+                RelayProtocol.OPENAI, path, requestBody, group.getName());
+        relayStreamRequestWithContext(ctx, group, request, httpRequest, httpResponse);
+    }
+
+    private void relayStreamRequestWithContext(RelaySupport.RelayContext ctx, ModelGroup group,
+                                               UnifiedRelayRequest request,
+                                               HttpServletRequest httpRequest,
+                                               HttpServletResponse httpResponse) throws IOException {
+        String path = request.path();
+        String requestBody = request.rawBody();
         String groupName = group.getName();
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
@@ -461,9 +511,9 @@ public class ModelGroupFailoverExecutor {
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
                 group, isAdmin, ctx.userLevel());
         if (candidates.isEmpty()) {
-            RelayServiceUtils.writeOpenAiError(httpResponse, 503,
+            adapter().writeError(request.protocol(), httpResponse, 503,
                     SseUtils.clientErrorMessage("模型组无可用成员: " + groupName,
-                            "No available members in model group: " + groupName, false));
+                            "No available members in model group: " + groupName, false), false);
             return;
         }
 
@@ -510,10 +560,13 @@ public class ModelGroupFailoverExecutor {
             if (isCustomChannel(channel)) {
                 try {
                     String upstreamModel = passthroughRelayService.mappedModel(channel, memberModel);
-                    String passthroughBody = passthroughRelayService.rewriteTopLevelModelVerbatim(
-                            requestBody, upstreamModel);
+                    String passthroughBody = request.protocol() == RelayProtocol.GEMINI
+                            ? requestBody : passthroughRelayService.rewriteTopLevelModelVerbatim(
+                                    requestBody, upstreamModel);
+                    String passthroughPath = request.protocol() == RelayProtocol.GEMINI
+                            ? adapter().upstreamPath(RelayProtocol.GEMINI, upstreamModel, true) : null;
                     Request upstreamRequest = passthroughRelayService.buildPassthroughRequest(
-                            channel, httpRequest, passthroughBody);
+                            channel, httpRequest, passthroughBody, passthroughPath);
                     Response upstreamResponse = passthroughRelayService.executePassthrough(
                             upstreamRequest, attemptTimeoutMs);
                     if (copyGroupPassthroughResponse(ctx, group, channel, modelConfigId, upstreamModel,
@@ -536,16 +589,18 @@ public class ModelGroupFailoverExecutor {
                 }
             }
 
-            String modifiedBody = support.injectStreamOptions(rewriteModelField(requestBody, memberModel), path);
+            RelayProtocol upstreamProtocol = adapter().channelProtocol(channel);
+            String modifiedBody = adapter().toUpstreamBody(request, memberModel, upstreamProtocol);
+            if (upstreamProtocol == RelayProtocol.OPENAI) {
+                modifiedBody = support.injectStreamOptions(modifiedBody, "/v1/chat/completions");
+            }
 
             HttpURLConnection conn;
             try {
-                if (support.isGeminiTypeChannel(channel)) {
-                    String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(modifiedBody);
-                    conn = support.createSseConnection(channel, "/v1/models/" + memberModel + ":streamGenerateContent?alt=sse", geminiBody, attemptTimeoutMs);
-                } else {
-                    conn = support.createSseConnection(channel, path, modifiedBody, attemptTimeoutMs);
-                }
+                conn = support.createSseConnection(channel,
+                        upstreamProtocol == RelayProtocol.OPENAI && request.protocol() == RelayProtocol.OPENAI
+                                ? request.path() : adapter().upstreamPath(upstreamProtocol, memberModel, true),
+                        modifiedBody, attemptTimeoutMs);
             } catch (IOException e) {
                 lastError = e.getMessage();
                 lastErrorUpstream = true;
@@ -570,9 +625,9 @@ public class ModelGroupFailoverExecutor {
                             groupName, memberModel, channel.getId(), code, truncate(errorBody));
                     conn.disconnect();
                     if (!FailureClassifier.isSwitchable(upstreamError)) {
-                        RelayServiceUtils.writeOpenAiError(httpResponse, code,
+                        adapter().writeError(request.protocol(), httpResponse, code,
                                 SseUtils.clientErrorMessage("上游返回错误: " + errorBody,
-                                        "Upstream returned an error: " + errorBody, true));
+                                        "Upstream returned an error: " + errorBody, true), true);
                         return;
                     }
                     recordFailure(channel, modelConfigId, upstreamError);
@@ -582,7 +637,8 @@ public class ModelGroupFailoverExecutor {
 
                 // 首字节即将开始写出：本次尝试之后（若确有数据写出）不再允许切换成员
                 SseUtils.setSseHeaders(httpResponse);
-                RelaySupport.SseStreamResult streamResult = support.streamSseResponseTracked(conn, httpResponse, null);
+                GroupStreamResult streamResult = streamGroupResponse(
+                        conn, httpResponse, request.protocol(), upstreamProtocol, memberModel);
                 conn.disconnect();
 
                 if (!streamResult.bytesWritten()) {
@@ -597,7 +653,7 @@ public class ModelGroupFailoverExecutor {
                 }
 
                 long duration = System.currentTimeMillis() - startTime;
-                RelayServiceUtils.UsageInfo usage = RelayServiceUtils.parseOpenAiStreamUsage(support.objectMapper, streamResult.lastUsageData());
+                RelayServiceUtils.UsageInfo usage = streamResult.usage();
                 recordGroupStreamUsage(ctx.token(), channel, group, memberModel, usage, duration, httpRequest, path);
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 modelHealthTracker.recordSuccess(channel.getId(), modelConfigId);
@@ -610,7 +666,7 @@ public class ModelGroupFailoverExecutor {
                 recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(),
                         "Channel request failed: " + e.getMessage(), e));
                 if (e.partialResult().bytesWritten()) {
-                    finishBrokenSse(httpResponse, "模型组流式响应中断，请稍后重试",
+                    finishBrokenSse(request.protocol(), httpResponse, "模型组流式响应中断，请稍后重试",
                             "Model group streaming response was interrupted, please try again later", true);
                     return;
                 }
@@ -623,7 +679,7 @@ public class ModelGroupFailoverExecutor {
                 recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(),
                         "Channel request failed: " + e.getMessage(), e));
                 if (httpResponse.isCommitted()) {
-                    finishBrokenSse(httpResponse, "模型组流式响应中断，请稍后重试",
+                    finishBrokenSse(request.protocol(), httpResponse, "模型组流式响应中断，请稍后重试",
                             "Model group streaming response was interrupted, please try again later", true);
                     return;
                 }
@@ -632,16 +688,81 @@ public class ModelGroupFailoverExecutor {
         }
         if (!httpResponse.isCommitted()) {
             log.error("模型组 {} 流式请求所有成员均不可用，最后错误: {}", groupName, lastError);
-            RelayServiceUtils.writeOpenAiError(httpResponse, 502,
+            adapter().writeError(request.protocol(), httpResponse, 502,
                     SseUtils.clientErrorMessage(exhaustedGroupMessage(groupName),
-                            exhaustedGroupEnglishMessage(groupName), lastErrorUpstream));
+                            exhaustedGroupEnglishMessage(groupName), lastErrorUpstream), lastErrorUpstream);
         }
     }
 
-    private void finishBrokenSse(HttpServletResponse response, String zhMessage, String enMessage,
+    private record GroupStreamResult(RelayServiceUtils.UsageInfo usage, boolean bytesWritten) {}
+
+    /** Converts complete SSE data events at the protocol boundary and tracks the first client byte. */
+    private GroupStreamResult streamGroupResponse(HttpURLConnection conn, HttpServletResponse response,
+                                                  RelayProtocol clientProtocol,
+                                                  RelayProtocol upstreamProtocol,
+                                                  String memberModel) throws IOException {
+        RelayProtocolAdapter.StreamState state = adapter().newStreamState(
+                memberModel, upstreamProtocol, clientProtocol);
+        boolean bytesWritten = false;
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+            var writer = response.getWriter();
+            List<String> prefix = adapter().streamPrefix(state);
+            boolean prefixWritten = prefix.isEmpty();
+            boolean sawDataEvent = false;
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (upstreamProtocol == clientProtocol) {
+                    writer.write(line);
+                    writer.write("\n");
+                    writer.flush();
+                    bytesWritten = true;
+                    if (line.startsWith("data:")) {
+                        adapter().convertStreamData(line.substring(5).stripLeading(), state);
+                    }
+                    continue;
+                }
+                if (!line.startsWith("data:")) {
+                    continue;
+                }
+                String data = line.substring(5).stripLeading();
+                sawDataEvent = true;
+                if (!prefixWritten && !"[DONE]".equals(data)) {
+                    for (String event : prefix) writer.write("data: " + event + "\n\n");
+                    writer.flush();
+                    bytesWritten = true;
+                    prefixWritten = true;
+                }
+                for (String converted : adapter().convertStreamData(data, state)) {
+                    writer.write("data: " + converted + "\n\n");
+                    writer.flush();
+                    bytesWritten = true;
+                }
+            }
+            if (sawDataEvent) {
+                if (!prefixWritten) {
+                    for (String event : prefix) writer.write("data: " + event + "\n\n");
+                    writer.flush();
+                    bytesWritten = true;
+                }
+                for (String event : adapter().streamSuffix(state)) {
+                    writer.write("data: " + event + "\n\n");
+                    writer.flush();
+                    bytesWritten = true;
+                }
+            }
+            return new GroupStreamResult(adapter().streamUsage(state), bytesWritten);
+        } catch (IOException e) {
+            throw new RelaySupport.SseStreamingException(e,
+                    new RelaySupport.SseStreamResult(null, bytesWritten));
+        }
+    }
+
+    private void finishBrokenSse(RelayProtocol protocol, HttpServletResponse response,
+                                 String zhMessage, String enMessage,
                                  boolean isUpstreamError) {
         try {
-            SseUtils.writeSseErrorEvent(response, zhMessage, enMessage, isUpstreamError);
+            adapter().writeSseError(protocol, response, zhMessage, enMessage, isUpstreamError);
             response.getWriter().flush();
         } catch (Exception ignored) {
         }

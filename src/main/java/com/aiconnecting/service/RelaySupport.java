@@ -758,6 +758,11 @@ public class RelaySupport {
     }
 
     String forwardClaudeRequest(Channel channel, String requestBody) {
+        return forwardClaudeRequest(channel, requestBody, null);
+    }
+
+    /** @param readTimeoutMs remaining model-group wall-clock budget, or null for the normal timeout */
+    String forwardClaudeRequest(Channel channel, String requestBody, Long readTimeoutMs) {
         if (isChannelRateLimited(channel)) {
             throw new BusinessException(429, "请求过于频繁，请稍后重试", "Too many requests, please try again later");
         }
@@ -770,7 +775,8 @@ public class RelaySupport {
                 .post(body);
         applyChannelAuth(reqBuilder, channel);
 
-        try (okhttp3.Response response = httpClient.newCall(reqBuilder.build()).execute()) {
+        OkHttpClient client = boundedReadTimeoutClient(readTimeoutMs);
+        try (okhttp3.Response response = client.newCall(reqBuilder.build()).execute()) {
             String responseBody = response.body() != null ? response.body().string() : "";
             if (!response.isSuccessful()) {
                 log.error("Claude upstream API error: {} - {}", response.code(), responseBody);

@@ -90,7 +90,7 @@ public class RelayController {
             return null;
         }
 
-        String result = relayService.claudeRelayRequest(tokenKey, requestBody, resolvedModel, request);
+        String result = relayService.claudeRelayRequest(tokenKey, requestBody, resolvedModel, request, response);
         return objectMapper.readTree(result);
     }
 
@@ -288,8 +288,10 @@ public class RelayController {
     public Object geminiGenerateContent(@PathVariable String model,
                                         @RequestHeader(value = "Authorization", required = false) String authHeader,
                                         @RequestBody String requestBody,
-                                        HttpServletRequest request) throws IOException {
+                                        HttpServletRequest request,
+                                        HttpServletResponse response) throws IOException {
         String tokenKey = extractTokenKey(authHeader);
+        if (passthroughRelayService.tryPassthroughForModel(requestBody, model, request, response)) return null;
         String resolvedModel = relayService.resolveModelName(model);
 
         JsonNode jsonBody = objectMapper.readTree(requestBody);
@@ -298,7 +300,7 @@ public class RelayController {
             requestBody = objectMapper.writeValueAsString(jsonBody);
         }
 
-        String result = relayService.geminiRelayRequest(tokenKey, requestBody, resolvedModel, request);
+        String result = relayService.geminiRelayRequest(tokenKey, requestBody, resolvedModel, request, response);
         return objectMapper.readTree(result);
     }
 
@@ -313,6 +315,7 @@ public class RelayController {
                                               HttpServletRequest request,
                                               HttpServletResponse response) throws IOException {
         String tokenKey = extractTokenKey(authHeader);
+        if (passthroughRelayService.tryPassthroughForModel(requestBody, model, request, response)) return null;
         String resolvedModel = relayService.resolveModelName(model);
 
         JsonNode jsonBody = objectMapper.readTree(requestBody);

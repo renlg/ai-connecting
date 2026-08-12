@@ -20,6 +20,7 @@ import java.io.IOException;
 public class RelayService {
 
     private final RelaySupport relaySupport;
+    private final RelayOrchestrator relayOrchestrator;
     private final OpenAiRelayService openAiRelayService;
     private final ClaudeRelayService claudeRelayService;
     private final GeminiRelayService geminiRelayService;
@@ -37,21 +38,15 @@ public class RelayService {
     public String relayRequest(String tokenKey, String path, String requestBody,
                                String model, HttpServletRequest httpRequest,
                                HttpServletResponse httpResponse) {
-        if (isGroupModel(model)) {
-            return modelGroupFailoverExecutor.relayRequest(
-                    tokenKey, path, requestBody, model, httpRequest, httpResponse);
-        }
-        return openAiRelayService.relayRequest(tokenKey, path, requestBody, model, httpRequest, httpResponse);
+        return relayOrchestrator.relay(tokenKey, RelayProtocol.OPENAI, path, requestBody,
+                model, httpRequest, httpResponse);
     }
 
     public void relayStreamRequest(String tokenKey, String path, String requestBody,
                                     String model, HttpServletRequest httpRequest,
                                     HttpServletResponse httpResponse) throws IOException {
-        if (isGroupModel(model)) {
-            modelGroupFailoverExecutor.relayStreamRequest(tokenKey, path, requestBody, model, httpRequest, httpResponse);
-            return;
-        }
-        openAiRelayService.relayStreamRequest(tokenKey, path, requestBody, model, httpRequest, httpResponse);
+        relayOrchestrator.relayStream(tokenKey, RelayProtocol.OPENAI, path, requestBody,
+                model, httpRequest, httpResponse);
     }
 
     public String relayMediaRequest(String tokenKey, String path, String requestBody,
@@ -99,26 +94,44 @@ public class RelayService {
 
     public String claudeRelayRequest(String tokenKey, String requestBody,
                                      String model, HttpServletRequest httpRequest) {
-        return claudeRelayService.claudeRelayRequest(tokenKey, requestBody, model, httpRequest);
+        return relayOrchestrator.relay(tokenKey, RelayProtocol.CLAUDE, "/v1/messages",
+                requestBody, model, httpRequest, null);
+    }
+
+    public String claudeRelayRequest(String tokenKey, String requestBody,
+                                     String model, HttpServletRequest httpRequest,
+                                     HttpServletResponse httpResponse) {
+        return relayOrchestrator.relay(tokenKey, RelayProtocol.CLAUDE, "/v1/messages",
+                requestBody, model, httpRequest, httpResponse);
     }
 
     public void claudeRelayStreamRequest(String tokenKey, String requestBody,
                                           String model, HttpServletRequest httpRequest,
                                           HttpServletResponse httpResponse) throws IOException {
-        claudeRelayService.claudeRelayStreamRequest(tokenKey, requestBody, model, httpRequest, httpResponse);
+        relayOrchestrator.relayStream(tokenKey, RelayProtocol.CLAUDE, "/v1/messages",
+                requestBody, model, httpRequest, httpResponse);
     }
 
     // ==================== Gemini 协议中转 ====================
 
     public String geminiRelayRequest(String tokenKey, String requestBody,
                                      String model, HttpServletRequest httpRequest) {
-        return geminiRelayService.geminiRelayRequest(tokenKey, requestBody, model, httpRequest);
+        return relayOrchestrator.relay(tokenKey, RelayProtocol.GEMINI,
+                "/v1/models/" + model + ":generateContent", requestBody, model, httpRequest, null);
+    }
+
+    public String geminiRelayRequest(String tokenKey, String requestBody,
+                                     String model, HttpServletRequest httpRequest,
+                                     HttpServletResponse httpResponse) {
+        return relayOrchestrator.relay(tokenKey, RelayProtocol.GEMINI,
+                "/v1/models/" + model + ":generateContent", requestBody, model, httpRequest, httpResponse);
     }
 
     public void geminiRelayStreamRequest(String tokenKey, String requestBody,
                                           String model, HttpServletRequest httpRequest,
                                           HttpServletResponse httpResponse) throws IOException {
-        geminiRelayService.geminiRelayStreamRequest(tokenKey, requestBody, model, httpRequest, httpResponse);
+        relayOrchestrator.relayStream(tokenKey, RelayProtocol.GEMINI,
+                "/v1/models/" + model + ":streamGenerateContent", requestBody, model, httpRequest, httpResponse);
     }
 
     // ==================== 模型名称解析 ====================

@@ -29,18 +29,28 @@ public class GlobalExceptionHandler {
     private final ObjectMapper objectMapper;
 
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e, HttpServletRequest request,
-                                                                      HttpServletResponse response) throws IOException {
+    public ResponseEntity<?> handleBusinessException(BusinessException e, HttpServletRequest request,
+                                                     HttpServletResponse response) throws IOException {
         HttpStatus httpStatus = mapToHttpStatus(e.getCode());
         // 终端用户中转接口（/v1/**）：真实上游错误隐藏细节，仅返回通用错误 + traceId；
         // 本地业务错误（模型不存在、Token 无效、余额不足等）返回具体错误信息；
         // 管理后台/自测接口（/api/**，如渠道测试）继续返回详细错误
         // 请求尚未建立 SSE 响应时，本地 404 必须保留标准 HTTP 状态与 JSON 错误体；
         // 这使流式请求的模型/模型组权限拒绝与非流式请求不可区分。
+        if (isSseRequest(request) && !response.isCommitted()
+                && (isClaudePath(request) || isGeminiPath(request))) {
+            String message = e.isUpstreamResponse() || e.getEnglishMessage() == null
+                    ? SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE : e.getEnglishMessage();
+            writeProtocolErrorIfNeeded(request, response, httpStatus.value(), message, e.isUpstreamResponse());
+            return null;
+        }
         if (isSseRequest(request) && !e.isUpstreamResponse()
                 && (e.getCode() == 404 || Boolean.TRUE.equals(request.getAttribute("passthrough.local-json-error")))) {
             String message = e.getEnglishMessage() != null
                     ? e.getEnglishMessage() : SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE;
+            if (writeProtocolErrorIfNeeded(request, response, httpStatus.value(), message, false)) {
+                return null;
+            }
             response.setStatus(httpStatus.value());
             response.setContentType("application/json");
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
@@ -65,6 +75,19 @@ public class GlobalExceptionHandler {
             String message = e.isUpstreamResponse() || e.getEnglishMessage() == null
                     ? SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE
                     : e.getEnglishMessage();
+            if (isClaudePath(request)) {
+                java.util.Map<String, Object> error = new java.util.LinkedHashMap<>();
+                error.put("type", "api_error");
+                error.put("message", message);
+                if (e.isUpstreamResponse()) error.put("traceId", SseUtils.currentTraceId());
+                return ResponseEntity.status(httpStatus).body(java.util.Map.of("type", "error", "error", error));
+            }
+            if (isGeminiPath(request)) {
+                java.util.Map<String, Object> error = new java.util.LinkedHashMap<>();
+                error.put("message", message);
+                if (e.isUpstreamResponse()) error.put("traceId", SseUtils.currentTraceId());
+                return ResponseEntity.status(httpStatus).body(java.util.Map.of("error", error));
+            }
             return ResponseEntity.status(httpStatus).body(ApiResponse.<Void>builder()
                     .code(e.getCode())
                     .message(message)
@@ -74,6 +97,37 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(httpStatus)
                 .body(ApiResponse.error(e.getCode(), e.getMessage()));
+    }
+
+    private boolean writeProtocolErrorIfNeeded(HttpServletRequest request, HttpServletResponse response,
+                                               int status, String message, boolean upstream) throws IOException {
+        response.setStatus(status);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        if (isClaudePath(request)) {
+            response.setContentType("application/json");
+            String trace = upstream ? ",\"traceId\":\"" + SseUtils.currentTraceId() + "\"" : "";
+            response.getWriter().write("{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\""
+                    + SseUtils.escapeJson(message) + "\"" + trace + "}}");
+            return true;
+        }
+        if (isGeminiPath(request)) {
+            response.setContentType("application/json");
+            String trace = upstream ? ",\"traceId\":\"" + SseUtils.currentTraceId() + "\"" : "";
+            response.getWriter().write("{\"error\":{\"message\":\"" + SseUtils.escapeJson(message)
+                    + "\"" + trace + "}}");
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isClaudePath(HttpServletRequest request) {
+        return "/v1/messages".equals(request.getRequestURI());
+    }
+
+    private boolean isGeminiPath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        return uri != null && uri.startsWith("/v1/models/")
+                && (uri.endsWith(":generateContent") || uri.endsWith(":streamGenerateContent"));
     }
 
     /**
