@@ -139,55 +139,73 @@ public class RelayProtocolAdapter {
     }
 
     public void writeError(RelayProtocol protocol, HttpServletResponse response, int status,
-                           String message) throws IOException {
-        writeError(protocol, response, status, message, true);
+                           String message, boolean upstream) throws IOException {
+        response.setStatus(status);
+        response.setCharacterEncoding("UTF-8");
+        response.setContentType("application/json;charset=UTF-8");
+        objectMapper.writeValue(response.getWriter(), errorEnvelope(protocol, status, message, upstream));
     }
 
-    public void writeError(RelayProtocol protocol, HttpServletResponse response, int status,
-                           String message, boolean upstream) throws IOException {
-        if (!upstream) {
-            response.setStatus(status);
-            response.setCharacterEncoding("UTF-8");
-            response.setContentType("application/json;charset=UTF-8");
-            String escaped = com.aiconnecting.common.SseUtils.escapeJson(message);
-            String body = switch (protocol) {
-                case OPENAI -> "{\"error\":{\"message\":\"" + escaped + "\"}}";
-                case CLAUDE -> "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\""
-                        + escaped + "\"}}";
-                case GEMINI -> "{\"error\":{\"message\":\"" + escaped + "\"}}";
-            };
-            response.getWriter().write(body);
-            return;
-        }
+    /** Builds the canonical public error envelope used by both MVC and direct relay responses. */
+    public ObjectNode errorEnvelope(RelayProtocol protocol, int status, String message, boolean upstream) {
+        ObjectNode root = objectMapper.createObjectNode();
+        ObjectNode error = root.putObject("error");
         switch (protocol) {
-            case OPENAI -> RelayServiceUtils.writeOpenAiError(response, status, message);
-            case CLAUDE -> RelayServiceUtils.writeClaudeError(response, status, message);
-            case GEMINI -> RelayServiceUtils.writeGeminiError(response, status, message);
+            case OPENAI -> {
+                error.put("message", message);
+                error.put("type", status >= 500 ? "api_error" : "invalid_request_error");
+                error.put("code", status);
+            }
+            case CLAUDE -> {
+                root.put("type", "error");
+                error.put("type", "api_error");
+                error.put("message", message);
+            }
+            case GEMINI -> {
+                error.put("code", status);
+                error.put("message", message);
+                error.put("status", geminiStatus(status));
+            }
         }
+        if (upstream) error.put("traceId", com.aiconnecting.common.SseUtils.currentTraceId());
+        return root;
+    }
+
+    static String geminiStatus(int status) {
+        return switch (status) {
+            case 400 -> "INVALID_ARGUMENT";
+            case 401 -> "UNAUTHENTICATED";
+            case 403 -> "PERMISSION_DENIED";
+            case 404 -> "NOT_FOUND";
+            case 409 -> "ABORTED";
+            case 413, 429 -> "RESOURCE_EXHAUSTED";
+            case 501 -> "UNIMPLEMENTED";
+            case 502, 503 -> "UNAVAILABLE";
+            case 504 -> "DEADLINE_EXCEEDED";
+            default -> status >= 500 ? "INTERNAL" : "UNKNOWN";
+        };
     }
 
     public StreamState newStreamState(String model, RelayProtocol upstream, RelayProtocol client) {
         return new StreamState(model, upstream, client);
     }
 
-    public void writeSseError(RelayProtocol protocol, HttpServletResponse response,
+    public void writeSseError(RelayProtocol protocol, HttpServletResponse response, int status,
                               String zhMessage, String enMessage, boolean upstream) throws IOException {
-        if (protocol == RelayProtocol.OPENAI) {
-            com.aiconnecting.common.SseUtils.writeSseErrorEvent(
-                    response, zhMessage, enMessage, upstream);
-            return;
-        }
         String message = com.aiconnecting.common.SseUtils.clientErrorMessage(
                 zhMessage, enMessage, upstream);
-        String trace = upstream ? ",\"traceId\":\""
-                + com.aiconnecting.common.SseUtils.currentTraceId() + "\"" : "";
-        String json = protocol == RelayProtocol.CLAUDE
-                ? "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\""
-                    + com.aiconnecting.common.SseUtils.escapeJson(message) + "\"" + trace + "}}"
-                : "{\"error\":{\"message\":\""
-                    + com.aiconnecting.common.SseUtils.escapeJson(message) + "\"" + trace + "}}";
-        response.getWriter().write("data: " + json + "\n\n");
-        response.getWriter().flush();
+        writeSseError(protocol, response, status, message, upstream);
+    }
+
+    public void writeSseError(RelayProtocol protocol, HttpServletResponse response, int status,
+                              String message, boolean upstream) throws IOException {
+        response.setCharacterEncoding("UTF-8");
+        var writer = response.getWriter();
+        if (protocol != RelayProtocol.GEMINI) writer.write("event: error\n");
+        writer.write("data: ");
+        writer.write(objectMapper.writeValueAsString(errorEnvelope(protocol, status, message, upstream)));
+        writer.write("\n\n");
+        writer.flush();
     }
 
     /** Synthetic lifecycle prefix is needed only when a non-Claude upstream is exposed as Claude. */

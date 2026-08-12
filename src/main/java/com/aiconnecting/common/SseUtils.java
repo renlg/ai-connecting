@@ -5,7 +5,6 @@ import org.slf4j.MDC;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
-import java.io.IOException;
 import java.util.UUID;
 
 /**
@@ -29,35 +28,6 @@ public final class SseUtils {
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("Connection", "keep-alive");
-    }
-
-    /**
-     * 已经开始向客户端写出数据（响应已提交）后发生上游失败时，按 SSE 协议补写一个 error 事件并结束流，
-     * 不能再拼接另一个渠道/成员的输出，也不能静默断开——客户端需要一个明确的终止信号
-     */
-    public static void writeSseErrorEvent(HttpServletResponse response, String zhMessage, String enMessage,
-                                          boolean isUpstreamError) throws IOException {
-        String clientMessage = clientErrorMessage(zhMessage, enMessage, isUpstreamError);
-        writeSseErrorEvent(response, clientMessage, isUpstreamError);
-    }
-
-    /**
-     * Write an already-classified SSE error message. End-user relay responses include a trace id only
-     * when the error originated upstream, matching the JSON error response behavior.
-     */
-    public static void writeSseErrorEvent(HttpServletResponse response, String message,
-                                          boolean includeTraceId) throws IOException {
-        response.setCharacterEncoding("UTF-8");
-        StringBuilder data = new StringBuilder("data: {\"error\":{\"message\":\"")
-                .append(escapeJson(message)).append("\"");
-        if (isEndUserRelayPath() && includeTraceId) {
-            data.append(",\"traceId\":\"").append(currentTraceId()).append("\"");
-        }
-        data.append("}}\n\n");
-        var writer = response.getWriter();
-        writer.write("event: error\n");
-        writer.write(data.toString());
-        writer.flush();
     }
 
     /**

@@ -30,6 +30,7 @@ import java.util.Set;
 public class GeminiRelayService {
 
     private final RelaySupport support;
+    private final RelayProtocolAdapter protocolAdapter;
 
     /**
      * Gemini API 中转 (非流式) - 最多重试 3 次
@@ -132,8 +133,9 @@ public class GeminiRelayService {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
             } catch (BusinessException e) {
                 if (!httpResponse.isCommitted()) {
-                    RelayServiceUtils.writeGeminiError(httpResponse, e.getCode(),
-                            SseUtils.clientErrorMessage(e.getMessage(), e.getEnglishMessage(), e.isUpstreamResponse()));
+                    protocolAdapter.writeError(RelayProtocol.GEMINI, httpResponse, e.getCode(),
+                            SseUtils.clientErrorMessage(e.getMessage(), e.getEnglishMessage(), e.isUpstreamResponse()),
+                            e.isUpstreamResponse());
                 }
                 return;
             }
@@ -177,9 +179,9 @@ public class GeminiRelayService {
                 }
                 if (!httpResponse.isCommitted()) {
                     boolean upstream = !(e instanceof BusinessException) || classifyError.isUpstreamResponse();
-                    RelayServiceUtils.writeGeminiError(httpResponse, classifyError.getCode(),
+                    protocolAdapter.writeError(RelayProtocol.GEMINI, httpResponse, classifyError.getCode(),
                             SseUtils.clientErrorMessage(classifyError.getMessage(),
-                                    classifyError.getEnglishMessage(), upstream));
+                                    classifyError.getEnglishMessage(), upstream), upstream);
                 }
                 return;
             }
@@ -225,7 +227,8 @@ public class GeminiRelayService {
                 String errorBody = conn.getErrorStream() != null
                         ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
                 if (SseUtils.isEndUserRelayPath()) {
-                    RelayServiceUtils.writeGeminiError(httpResponse, code, SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE);
+                    protocolAdapter.writeError(RelayProtocol.GEMINI, httpResponse, code,
+                            SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
                 } else {
                     httpResponse.setStatus(code);
                     httpResponse.setCharacterEncoding("UTF-8");
@@ -273,8 +276,8 @@ public class GeminiRelayService {
             conn = support.createSseConnection(channel, "/v1/chat/completions", openAiBody);
             int code = conn.getResponseCode();
             if (code != 200) {
-                writer.write("data: {\"error\":{\"message\":\"上游错误\"}}\n\n");
-                writer.flush();
+                protocolAdapter.writeError(RelayProtocol.GEMINI, httpResponse, code,
+                        SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
                 return;
             }
             try (BufferedReader reader = new BufferedReader(
@@ -339,8 +342,8 @@ public class GeminiRelayService {
             conn = support.createSseConnection(channel, "/v1/messages", claudeBody);
             int code = conn.getResponseCode();
             if (code != 200) {
-                writer.write("data: {\"error\":{\"message\":\"上游错误\"}}\n\n");
-                writer.flush();
+                protocolAdapter.writeError(RelayProtocol.GEMINI, httpResponse, code,
+                        SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
                 return;
             }
             try (BufferedReader reader = new BufferedReader(

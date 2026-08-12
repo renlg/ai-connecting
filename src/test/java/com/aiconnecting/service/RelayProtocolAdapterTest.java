@@ -3,6 +3,8 @@ package com.aiconnecting.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
+import org.springframework.mock.web.MockHttpServletResponse;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -10,6 +12,48 @@ class RelayProtocolAdapterTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final RelayProtocolAdapter adapter = new RelayProtocolAdapter(mapper);
+
+    @Test
+    void buildsCanonicalErrorEnvelopesAndOnlyAddsTraceIdForUpstreamErrors() {
+        MDC.put("traceId", "trace-test");
+        try {
+            JsonNode openAi = adapter.errorEnvelope(RelayProtocol.OPENAI, 404, "missing", false);
+            assertThat(openAi.path("error").path("message").asText()).isEqualTo("missing");
+            assertThat(openAi.path("error").path("type").asText()).isEqualTo("invalid_request_error");
+            assertThat(openAi.path("error").path("code").asInt()).isEqualTo(404);
+            assertThat(openAi.path("error").has("traceId")).isFalse();
+
+            JsonNode claude = adapter.errorEnvelope(RelayProtocol.CLAUDE, 502, "upstream", true);
+            assertThat(claude.path("type").asText()).isEqualTo("error");
+            assertThat(claude.path("error").path("type").asText()).isEqualTo("api_error");
+            assertThat(claude.path("error").path("traceId").asText()).isEqualTo("trace-test");
+
+            JsonNode gemini = adapter.errorEnvelope(RelayProtocol.GEMINI, 504, "timeout", true);
+            assertThat(gemini.path("error").path("code").asInt()).isEqualTo(504);
+            assertThat(gemini.path("error").path("status").asText()).isEqualTo("DEADLINE_EXCEEDED");
+            assertThat(gemini.path("error").path("traceId").asText()).isEqualTo("trace-test");
+        } finally {
+            MDC.remove("traceId");
+        }
+    }
+
+    @Test
+    void writesProtocolCompleteSseErrors() throws Exception {
+        MockHttpServletResponse openAi = new MockHttpServletResponse();
+        adapter.writeSseError(RelayProtocol.OPENAI, openAi, 500, "broken", false);
+        assertThat(openAi.getContentAsString()).isEqualTo(
+                "event: error\ndata: {\"error\":{\"message\":\"broken\",\"type\":\"api_error\",\"code\":500}}\n\n");
+
+        MockHttpServletResponse claude = new MockHttpServletResponse();
+        adapter.writeSseError(RelayProtocol.CLAUDE, claude, 502, "broken", false);
+        assertThat(claude.getContentAsString()).isEqualTo(
+                "event: error\ndata: {\"error\":{\"type\":\"api_error\",\"message\":\"broken\"},\"type\":\"error\"}\n\n");
+
+        MockHttpServletResponse gemini = new MockHttpServletResponse();
+        adapter.writeSseError(RelayProtocol.GEMINI, gemini, 503, "broken", false);
+        assertThat(gemini.getContentAsString()).isEqualTo(
+                "data: {\"error\":{\"code\":503,\"message\":\"broken\",\"status\":\"UNAVAILABLE\"}}\n\n");
+    }
 
     @Test
     void adaptsClaudeRequestToUnifiedAndOpenAiWithoutDroppingCoreFields() throws Exception {

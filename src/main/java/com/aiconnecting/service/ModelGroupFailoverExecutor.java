@@ -762,7 +762,7 @@ public class ModelGroupFailoverExecutor {
                                  String zhMessage, String enMessage,
                                  boolean isUpstreamError) {
         try {
-            adapter().writeSseError(protocol, response, zhMessage, enMessage, isUpstreamError);
+            adapter().writeSseError(protocol, response, 502, zhMessage, enMessage, isUpstreamError);
             response.getWriter().flush();
         } catch (Exception ignored) {
         }

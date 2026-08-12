@@ -632,11 +632,11 @@ public class RelaySupport {
         } catch (SocketTimeoutException e) {
             log.error("Timed out forwarding request to channel {}: {}", channel.getId(), e.getMessage());
             throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
-                    "Channel request timed out: " + e.getMessage(), e);
+                    "Channel request timed out: " + e.getMessage(), e, null, null, true);
         } catch (IOException e) {
             log.error("Failed to forward request to channel {}: {}", channel.getId(), e.getMessage());
             throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
-                    "Channel request failed: " + e.getMessage(), e);
+                    "Channel request failed: " + e.getMessage(), e, null, null, true);
         }
     }
 
@@ -663,11 +663,11 @@ public class RelaySupport {
         } catch (SocketTimeoutException e) {
             log.error("Timed out forwarding GET request to channel {}: {}", channel.getId(), e.getMessage());
             throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
-                    "Channel request timed out: " + e.getMessage(), e);
+                    "Channel request timed out: " + e.getMessage(), e, null, null, true);
         } catch (IOException e) {
             log.error("Failed to forward GET request to channel {}: {}", channel.getId(), e.getMessage());
             throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
-                    "Channel request failed: " + e.getMessage(), e);
+                    "Channel request failed: " + e.getMessage(), e, null, null, true);
         }
     }
 
@@ -732,11 +732,11 @@ public class RelaySupport {
         } catch (SocketTimeoutException e) {
             log.error("Timed out forwarding request to channel {}: {}", channel.getId(), e.getMessage());
             throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
-                    "Channel request timed out: " + e.getMessage(), e);
+                    "Channel request timed out: " + e.getMessage(), e, null, null, true);
         } catch (IOException e) {
             log.error("Failed to forward request to channel {}: {}", channel.getId(), e.getMessage());
             throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
-                    "Channel request failed: " + e.getMessage(), e);
+                    "Channel request failed: " + e.getMessage(), e, null, null, true);
         }
     }
 
@@ -787,10 +787,10 @@ public class RelaySupport {
             return responseBody;
         } catch (SocketTimeoutException e) {
             throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
-                    "Channel request timed out: " + e.getMessage(), e);
+                    "Channel request timed out: " + e.getMessage(), e, null, null, true);
         } catch (IOException e) {
             throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
-                    "Channel request failed: " + e.getMessage(), e);
+                    "Channel request failed: " + e.getMessage(), e, null, null, true);
         }
     }
 
@@ -833,10 +833,10 @@ public class RelaySupport {
             return responseBody;
         } catch (SocketTimeoutException e) {
             throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
-                    "Channel request timed out: " + e.getMessage(), e);
+                    "Channel request timed out: " + e.getMessage(), e, null, null, true);
         } catch (IOException e) {
             throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
-                    "Channel request failed: " + e.getMessage(), e);
+                    "Channel request failed: " + e.getMessage(), e, null, null, true);
         }
     }
 

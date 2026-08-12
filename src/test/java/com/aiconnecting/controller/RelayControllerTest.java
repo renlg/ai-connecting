@@ -136,7 +136,7 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("not-json"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value(400));
+                .andExpect(jsonPath("$.error.code").value(400));
 
         verifyNoInteractions(relayService);
     }
@@ -184,7 +184,7 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().is5xxServerError())
-                .andExpect(jsonPath("$.message").value("Internal server error, please try again later"));
+                .andExpect(jsonPath("$.error.message").value("Internal server error, please try again later"));
     }
 
     @Test
@@ -201,8 +201,8 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.message").value("Missing or malformed Authorization header"))
-                .andExpect(jsonPath("$.traceId").doesNotExist());
+                .andExpect(jsonPath("$.error.message").value("Missing or malformed Authorization header"))
+                .andExpect(jsonPath("$.error.traceId").doesNotExist());
     }
 
     @Test
@@ -249,8 +249,8 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isTooManyRequests())
-                .andExpect(jsonPath("$.message").value("Token quota exhausted"))
-                .andExpect(jsonPath("$.traceId").doesNotExist());
+                .andExpect(jsonPath("$.error.message").value("Token quota exhausted"))
+                .andExpect(jsonPath("$.error.traceId").doesNotExist());
     }
 
     @Test
@@ -266,10 +266,8 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isNotFound())
-                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.code").value(404))
-                .andExpect(jsonPath("$.message").value("Model not found: free1"))
-                .andExpect(jsonPath("$.traceId").doesNotExist());
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(content().string("event: error\ndata: {\"error\":{\"message\":\"Model not found: free1\",\"type\":\"invalid_request_error\",\"code\":404}}\n\n"));
     }
 
     @Test
@@ -288,10 +286,10 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value(404))
-                .andExpect(jsonPath("$.message")
+                .andExpect(jsonPath("$.error.code").value(404))
+                .andExpect(jsonPath("$.error.message")
                         .value("Model group not found or disabled: bailian-good"))
-                .andExpect(jsonPath("$.traceId").doesNotExist());
+                .andExpect(jsonPath("$.error.traceId").doesNotExist());
     }
 
     @Test
@@ -311,11 +309,8 @@ class RelayControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isNotFound())
-                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.code").value(404))
-                .andExpect(jsonPath("$.message")
-                        .value("Model group not found or disabled: bailian-good"))
-                .andExpect(jsonPath("$.traceId").doesNotExist());
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(content().string("event: error\ndata: {\"error\":{\"message\":\"Model group not found or disabled: bailian-good\",\"type\":\"invalid_request_error\",\"code\":404}}\n\n"));
     }
 
     @Test
@@ -332,10 +327,10 @@ class RelayControllerTest {
                         .accept(MediaType.TEXT_EVENT_STREAM)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isOk())
+                .andExpect(status().isInternalServerError())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
                 .andExpect(content().string(org.hamcrest.Matchers.matchesPattern(
-                        "event: error\\ndata: \\{\\\"error\\\":\\{\\\"message\\\":\\\"Internal server error, please try again later\\\",\\\"traceId\\\":\\\"[a-f0-9]{32}\\\"}}\\n\\n")));
+                        "event: error\\ndata: \\{\\\"error\\\":\\{\\\"message\\\":\\\"Internal server error, please try again later\\\",\\\"type\\\":\\\"api_error\\\",\\\"code\\\":500}}\\n\\n")));
     }
 
     // ==================== Completions ====================
@@ -466,8 +461,8 @@ class RelayControllerTest {
         mockMvc.perform(get("/v1/models")
                         .header("Authorization", "Bearer sk-invalid"))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.message").value("Invalid token"))
-                .andExpect(jsonPath("$.traceId").doesNotExist());
+                .andExpect(jsonPath("$.error.message").value("Invalid token"))
+                .andExpect(jsonPath("$.error.traceId").doesNotExist());
     }
 
     @Test

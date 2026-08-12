@@ -34,6 +34,7 @@ import java.util.Set;
 public class ClaudeRelayService {
 
     private final RelaySupport support;
+    private final RelayProtocolAdapter protocolAdapter;
 
     /**
      * Claude Messages API 中转 (非流式) - 最多重试 3 次
@@ -135,8 +136,9 @@ public class ClaudeRelayService {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
             } catch (BusinessException e) {
                 if (!httpResponse.isCommitted()) {
-                    RelayServiceUtils.writeClaudeError(httpResponse, e.getCode(),
-                            SseUtils.clientErrorMessage(e.getMessage(), e.getEnglishMessage(), e.isUpstreamResponse()));
+                    protocolAdapter.writeError(RelayProtocol.CLAUDE, httpResponse, e.getCode(),
+                            SseUtils.clientErrorMessage(e.getMessage(), e.getEnglishMessage(), e.isUpstreamResponse()),
+                            e.isUpstreamResponse());
                 }
                 return;
             }
@@ -180,9 +182,9 @@ public class ClaudeRelayService {
                 }
                 if (!httpResponse.isCommitted()) {
                     boolean upstream = !(e instanceof BusinessException) || classifyError.isUpstreamResponse();
-                    RelayServiceUtils.writeClaudeError(httpResponse, classifyError.getCode(),
+                    protocolAdapter.writeError(RelayProtocol.CLAUDE, httpResponse, classifyError.getCode(),
                             SseUtils.clientErrorMessage(classifyError.getMessage(),
-                                    classifyError.getEnglishMessage(), upstream));
+                                    classifyError.getEnglishMessage(), upstream), upstream);
                 }
                 return;
             }
@@ -215,7 +217,8 @@ public class ClaudeRelayService {
                         ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
                 log.warn("渠道 {} Claude 流式请求失败: {} - {}", channel.getId(), code, errorBody);
                 if (SseUtils.isEndUserRelayPath()) {
-                    RelayServiceUtils.writeClaudeError(httpResponse, code, SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE);
+                    protocolAdapter.writeError(RelayProtocol.CLAUDE, httpResponse, code,
+                            SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
                 } else {
                     httpResponse.setStatus(code);
                     httpResponse.setCharacterEncoding("UTF-8");
@@ -255,15 +258,6 @@ public class ClaudeRelayService {
         String openAiBody = ProtocolConverter.convertClaudeToOpenAiBody(requestBody);
         openAiBody = support.injectStreamOptions(openAiBody, "/v1/chat/completions");
 
-        SseUtils.setSseHeaders(httpResponse);
-        var writer = httpResponse.getWriter();
-        String msgId = "msg_" + System.currentTimeMillis();
-        writer.write("data: {\"type\":\"message_start\",\"message\":{\"id\":\"" + msgId + "\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"" + model + "\",\"stop_reason\":null,\"stop_sequence\":null}}");
-        writer.write("\n\n");
-        writer.write("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}");
-        writer.write("\n\n");
-        writer.flush();
-
         long startTime = System.currentTimeMillis();
         int promptTokens = 0, completionTokens = 0, cachedTokens = 0;
         List<Map<String, Object>> toolCalls = new ArrayList<>();
@@ -275,10 +269,16 @@ public class ClaudeRelayService {
             log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
             if (code != 200) {
                 log.warn("渠道 {} OpenAI-as-Claude 流式请求失败: {}", channel.getId(), code);
-                writer.write("data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"上游错误\"}}\n\n");
-                writer.flush();
+                protocolAdapter.writeError(RelayProtocol.CLAUDE, httpResponse, code,
+                        SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
                 return;
             }
+            SseUtils.setSseHeaders(httpResponse);
+            var writer = httpResponse.getWriter();
+            String msgId = "msg_" + System.currentTimeMillis();
+            writer.write("data: {\"type\":\"message_start\",\"message\":{\"id\":\"" + msgId + "\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"" + model + "\",\"stop_reason\":null,\"stop_sequence\":null}}\n\n");
+            writer.write("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n");
+            writer.flush();
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
@@ -335,6 +335,7 @@ public class ClaudeRelayService {
             if (conn != null) conn.disconnect();
         }
 
+        var writer = httpResponse.getWriter();
         writer.write("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");
         if (!toolCalls.isEmpty()) {
             int tcIndex = 1;
@@ -373,15 +374,6 @@ public class ClaudeRelayService {
         }
 
         String geminiBody = ProtocolConverter.convertClaudeToGeminiRequest(requestBody);
-        SseUtils.setSseHeaders(httpResponse);
-        var writer = httpResponse.getWriter();
-        String msgId = "msg_" + System.currentTimeMillis();
-        writer.write("data: {\"type\":\"message_start\",\"message\":{\"id\":\"" + msgId + "\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"" + model + "\",\"stop_reason\":null,\"stop_sequence\":null}}");
-        writer.write("\n\n");
-        writer.write("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}");
-        writer.write("\n\n");
-        writer.flush();
-
         long startTime = System.currentTimeMillis();
         int promptTokens = 0, completionTokens = 0;
 
@@ -403,10 +395,16 @@ public class ClaudeRelayService {
 
             int code = conn.getResponseCode();
             if (code != 200) {
-                writer.write("data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"上游错误\"}}\n\n");
-                writer.flush();
+                protocolAdapter.writeError(RelayProtocol.CLAUDE, httpResponse, code,
+                        SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
                 return;
             }
+            SseUtils.setSseHeaders(httpResponse);
+            var writer = httpResponse.getWriter();
+            String msgId = "msg_" + System.currentTimeMillis();
+            writer.write("data: {\"type\":\"message_start\",\"message\":{\"id\":\"" + msgId + "\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"" + model + "\",\"stop_reason\":null,\"stop_sequence\":null}}\n\n");
+            writer.write("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n");
+            writer.flush();
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
@@ -453,6 +451,7 @@ public class ClaudeRelayService {
             if (conn != null) conn.disconnect();
         }
 
+        var writer = httpResponse.getWriter();
         writer.write("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n");
         writer.write("data: {\"type\":\"message_stop\"}\n\n");
         writer.write("data: [DONE]\n\n");
