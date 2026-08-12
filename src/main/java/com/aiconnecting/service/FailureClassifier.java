@@ -66,8 +66,8 @@ final class FailureClassifier {
         ParsedError parsed = parse(errorBody);
         if (parsed != null) {
             // Recognized structured fields are authoritative. Message substring matching remains a
-            // compatibility fallback only when neither code nor type has a known classification.
-            Kind structuredKind = classifyStructuredFields(parsed.code(), parsed.type());
+            // compatibility fallback only when code/type/param do not provide a known classification.
+            Kind structuredKind = classifyStructuredFields(parsed.code(), parsed.type(), parsed.param());
             if (structuredKind != null) {
                 return new Classification(structuredKind != Kind.FAST_FAIL, structuredKind, retryAfterSeconds);
             }
@@ -127,7 +127,8 @@ final class FailureClassifier {
             JsonNode error = root.path("error");
             JsonNode source = error.isObject() ? error : root;
             return new ParsedError(normalize(source.path("code").asText(null)),
-                    normalize(source.path("type").asText(null)), source.path("message").asText(null));
+                    normalize(source.path("type").asText(null)),
+                    normalize(source.path("param").asText(null)), source.path("message").asText(null));
         } catch (Exception ignored) {
             return null;
         }
@@ -138,19 +139,21 @@ final class FailureClassifier {
         String normalized = normalize(message);
         if (normalized.contains("context_length_exceeded") || normalized.contains("request_too_large")
                 || normalized.contains("content_filter") || normalized.contains("moderation")
-                || normalized.contains("policy_violation")) return Kind.FAST_FAIL;
+                || normalized.contains("policy_violation")
+                || normalized.contains("unable_to_generate_this_content")) return Kind.FAST_FAIL;
         if (normalized.contains("model_not_found") || normalized.contains("model_decommissioned")) return Kind.MODEL_NOT_FOUND;
         if (normalized.contains("insufficient_quota") || normalized.contains("quota_exceeded")) return Kind.QUOTA;
         if (normalized.contains("rate_limit_exceeded") || normalized.contains("rate_limit")) return Kind.RATE_LIMIT;
         return null;
     }
 
-    private static Kind classifyStructuredFields(String code, String type) {
+    private static Kind classifyStructuredFields(String code, String type, String param) {
         Set<String> values = new java.util.HashSet<>();
         values.add(code);
         values.add(type);
         if (values.contains("context_length_exceeded") || values.contains("request_too_large")
-                || values.stream().anyMatch(POLICY::contains)) return Kind.FAST_FAIL;
+                || values.stream().anyMatch(POLICY::contains)
+                || ("invalid_request_error".equals(type) && "prompt".equals(param))) return Kind.FAST_FAIL;
         if (values.stream().anyMatch(MODEL_NOT_FOUND::contains)) return Kind.MODEL_NOT_FOUND;
         if (values.stream().anyMatch(QUOTA::contains)) return Kind.QUOTA;
         if (values.stream().anyMatch(RATE_LIMIT::contains)) return Kind.RATE_LIMIT;
@@ -163,7 +166,7 @@ final class FailureClassifier {
         String lower = message.toLowerCase(Locale.ROOT);
         if (lower.contains("context_length_exceeded") || lower.contains("request_too_large")
                 || lower.contains("content_filter") || lower.contains("moderation")
-                || lower.contains("policy")) return Kind.FAST_FAIL;
+                || lower.contains("policy") || lower.contains("unable to generate this content")) return Kind.FAST_FAIL;
         if (lower.contains("model_not_found") || lower.contains("model_decommissioned")) return Kind.MODEL_NOT_FOUND;
         if (lower.contains("insufficient_quota") || lower.contains("insufficient_user_quota") || lower.contains("quota")) return Kind.QUOTA;
         if (lower.contains("rate_limit") || lower.contains("overloaded")) return Kind.RATE_LIMIT;
@@ -174,5 +177,5 @@ final class FailureClassifier {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT).replace('-', '_').replace(' ', '_');
     }
 
-    private record ParsedError(String code, String type, String message) {}
+    private record ParsedError(String code, String type, String param, String message) {}
 }

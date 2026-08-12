@@ -302,6 +302,11 @@ public class OpenAiRelayService {
                 lastFailure = e;
                 lastError = e.getMessage();
                 log.error("渠道 {} 媒体请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
+                // 内容审核、上下文超限、请求过大等不可切换错误与文本/模型组路径保持一致：
+                // 原样立即返回，既不尝试其它渠道，也不写模型冷却或渠道熔断。
+                if (!FailureClassifier.isSwitchable(e)) {
+                    throw e;
+                }
                 support.dispatchRelayFailure(channel.getId(), modelConfigId, e, () ->
                         support.channelHealthTracker.recordFailure(channel.getId(),
                                 ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage()));
