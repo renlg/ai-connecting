@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
+import com.aiconnecting.common.OpenAiUrlUtils;
 import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.dto.ChannelRequest;
 import com.aiconnecting.entity.Channel;
@@ -1017,7 +1018,7 @@ public class ChannelService {
      */
     private Map<String, Object> doTestChat(String baseUrl, String apiKey, String model,
                                             String message, long startTime, boolean isClaude) throws IOException {
-        String url = baseUrl.replaceAll("/+$", "") + "/v1/chat/completions";
+        String url = OpenAiUrlUtils.chatCompletionsUrl(baseUrl);
         String jsonBody = objectMapper.writeValueAsString(Map.of(
                 "model", model,
                 "messages", List.of(Map.of("role", "user", "content", message != null ? message : "hi")),
@@ -1102,11 +1103,7 @@ public class ChannelService {
      */
     private void doTestChatStream(String baseUrl, String apiKey, String model,
                                    String message, HttpServletResponse response, boolean isClaude) throws Exception {
-        String base = baseUrl.replaceAll("/+$", "");
-        if (!base.endsWith("/v1")) {
-            base = base + "/v1";
-        }
-        String url = base + "/chat/completions";
+        String url = OpenAiUrlUtils.chatCompletionsUrl(baseUrl);
         log.info("{}流式请求: url={}, model={}", isClaude ? "Claude(转OpenAI) " : "", url, model);
         String jsonBody = objectMapper.writeValueAsString(Map.of(
                 "model", model,

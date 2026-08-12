@@ -3,6 +3,7 @@ package com.aiconnecting.service;
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.common.MediaDurationLimits;
+import com.aiconnecting.common.OpenAiUrlUtils;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.ModelGroup;
@@ -514,7 +515,7 @@ public class RelaySupport {
     /** @param readTimeoutMs 覆盖默认 120s 读超时（毫秒），语义同 {@link #forwardRequest(Channel, String, String, Long)} */
     HttpURLConnection createSseConnection(Channel channel, String path, String requestBody, Long readTimeoutMs) throws IOException {
         captureChannelModel(requestBody);
-        String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
+        String url = upstreamUrl(channel.getBaseUrl(), path);
         log.info("流式请求: url={}, channel={}", maskApiKey(url), channel.getId());
         java.net.URL urlObj = new java.net.URL(url);
         HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
@@ -609,7 +610,7 @@ public class RelaySupport {
      */
     String forwardRequest(Channel channel, String path, String requestBody, Long readTimeoutMs) {
         captureChannelModel(requestBody);
-        String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
+        String url = upstreamUrl(channel.getBaseUrl(), path);
 
         RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
         Request.Builder requestBuilder = new Request.Builder()
@@ -641,6 +642,13 @@ public class RelaySupport {
             throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
                     "Channel request failed: " + e.getMessage(), e, null, null, true);
         }
+    }
+
+    private String upstreamUrl(String baseUrl, String path) {
+        if ("/v1/chat/completions".equals(path)) {
+            return OpenAiUrlUtils.chatCompletionsUrl(baseUrl);
+        }
+        return baseUrl.replaceAll("/+$", "") + path;
     }
 
     /**

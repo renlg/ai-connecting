@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.common.OpenAiUrlUtils;
 import com.aiconnecting.common.RedisDistributedLock;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
@@ -142,7 +143,7 @@ public class ChannelProbeTask {
                 // 改用最小化的 POST chat/completions 请求做连通性探测
                 log.info("渠道 {} GET /v1/models 返回 HTTP {}（端点不支持），改用 POST chat/completions 探测",
                         channelId, response.code());
-                probeViaChatCompletions(channel, base);
+                probeViaChatCompletions(channel);
             } else {
                 String body = response.body() != null ? response.body().string() : "";
                 String errorMsg = String.format("HTTP %d: %s", response.code(),
@@ -158,7 +159,7 @@ public class ChannelProbeTask {
      * 针对不支持 GET /v1/models 的 openai 兼容上游（如 Cloudflare Workers AI），
      * 用最小化的 chat/completions 请求探测连通性
      */
-    private void probeViaChatCompletions(Channel channel, String base) {
+    private void probeViaChatCompletions(Channel channel) {
         Long channelId = channel.getId();
         String modelName = resolveProbeModelName(channel);
 
@@ -167,7 +168,7 @@ public class ChannelProbeTask {
                 modelName);
         RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
         Request request = new Request.Builder()
-                .url(base + "/chat/completions")
+                .url(OpenAiUrlUtils.chatCompletionsUrl(channel.getBaseUrl()))
                 .addHeader("Authorization", "Bearer " + channel.getApiKey())
                 .addHeader("Content-Type", "application/json")
                 .post(body)
