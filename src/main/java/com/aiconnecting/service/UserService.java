@@ -184,12 +184,12 @@ public class UserService {
         }
         User inviter = userRepository.findByInviteCode(request.getInviteCode().trim())
                 .orElseThrow(() -> new BusinessException("邀请码无效", "Invalid invitation code"));
-        boolean adminInviteCode = Integer.valueOf(5).equals(inviter.getLevel());
+        boolean adminInviteCode = "admin".equals(inviter.getRole());
+        if (!java.util.Objects.equals(inviter.getStatus(), 1)) {
+            throw new BusinessException("邀请码无效", "Invalid invitation code");
+        }
         if (!adminInviteCode && Boolean.TRUE.equals(inviter.getInviteCodeUsed())) {
             throw new BusinessException("邀请码已被使用", "Invitation code has already been used");
-        }
-        if (inviter.getStatus() != 1) {
-            throw new BusinessException("邀请码无效", "Invalid invitation code");
         }
         if (!adminInviteCode && userRepository.consumeInviteCode(inviter.getId()) == 0) {
             throw new BusinessException("邀请码已被使用", "Invitation code has already been used");

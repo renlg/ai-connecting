@@ -208,6 +208,13 @@ public class ChannelRouter {
                 .toList();
     }
 
+    /** Uses the same two-minute per-model cache as channel selection. */
+    public boolean isPassthroughOnlyModel(String channelModelId) {
+        List<Channel> channels = getCachedChannelList(channelModelId).channels();
+        return !channels.isEmpty() && channels.stream()
+                .allMatch(channel -> "custom".equalsIgnoreCase(channel.getType()));
+    }
+
     /**
      * 获取所有已缓存渠道的当前 SWRR currentWeight 快照（供健康看板展示，非跨实例聚合）
      */

@@ -18,7 +18,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
     /** 原子消耗普通用户的邀请码，返回 0 表示已被其他注册请求消耗。 */
     @Modifying
     @Query("UPDATE User u SET u.inviteCodeUsed = true " +
-            "WHERE u.id = :userId AND u.level <> 5 AND (u.inviteCodeUsed = false OR u.inviteCodeUsed IS NULL)")
+            "WHERE u.id = :userId AND u.role <> 'admin' AND (u.inviteCodeUsed = false OR u.inviteCodeUsed IS NULL)")
     int consumeInviteCode(@Param("userId") Long userId);
 
     @Modifying

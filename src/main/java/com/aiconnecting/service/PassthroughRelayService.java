@@ -87,7 +87,7 @@ public class PassthroughRelayService {
         FailureLogContext.initialize(request, requestedModel, protocol(request.getRequestURI()));
         String canonicalModel = support.resolveModelName(requestedModel);
         String channelModelId = support.resolveToChannelModelId(canonicalModel);
-        if (!channelService.isPassthroughOnlyModel(channelModelId)) {
+        if (!support.channelRouter.isPassthroughOnlyModel(channelModelId)) {
             return false;
         }
         if (request.getRequestURI() != null && request.getRequestURI().startsWith("/v1/models/")) {
@@ -118,6 +118,10 @@ public class PassthroughRelayService {
             }
             if (!"custom".equalsIgnoreCase(channel.getType())) {
                 throw modelNotFound(canonicalModel);
+            }
+            if (support.isChannelRateLimited(channel)) {
+                throw new BusinessException(429, "请求过于频繁，请稍后重试",
+                        "Too many requests, please try again later");
             }
             attempted.add(channel.getId());
             String upstreamModel = mappedModel(channel, canonicalModel);

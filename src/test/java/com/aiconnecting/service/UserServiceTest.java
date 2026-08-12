@@ -36,13 +36,13 @@ class UserServiceTest {
 
     @BeforeEach
     void setUp() {
-        when(passwordEncoder.encode(any())).thenReturn("encoded");
-        when(userRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(passwordEncoder.encode(any())).thenReturn("encoded");
+        lenient().when(userRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test
-    void levelFiveInviteCodeCanBeUsedUnlimitedTimes() {
-        User admin = inviter(1L, 5, "ADMIN123");
+    void adminInviteCodeCanBeUsedUnlimitedTimesRegardlessOfLevel() {
+        User admin = inviter(1L, 2, "admin", "ADMIN123");
         when(userRepository.findByInviteCode("ADMIN123")).thenReturn(Optional.of(admin));
 
         userService.register(request("first", "ADMIN123"));
@@ -68,20 +68,49 @@ class UserServiceTest {
     }
 
     @Test
-    void consumedFlagDoesNotRestrictLevelFiveInviteCode() {
-        User admin = inviter(1L, 5, "ADMIN123");
+    void consumedFlagDoesNotRestrictAdminInviteCode() {
+        User admin = inviter(1L, 2, "admin", "ADMIN123");
         admin.setInviteCodeUsed(true);
         when(userRepository.findByInviteCode("ADMIN123")).thenReturn(Optional.of(admin));
 
         assertDoesNotThrow(() -> userService.register(request("newuser", "ADMIN123")));
     }
 
+    @Test
+    void levelFiveRegularUserInviteIsStillSingleUse() {
+        User regular = inviter(3L, 5, "user", "LEVEL5");
+        when(userRepository.findByInviteCode("LEVEL5")).thenReturn(Optional.of(regular));
+        when(userRepository.consumeInviteCode(3L)).thenReturn(1);
+
+        userService.register(request("first", "LEVEL5"));
+
+        verify(userRepository).consumeInviteCode(3L);
+    }
+
+    @Test
+    void disabledInviterIsRejectedBeforeConsumedFlag() {
+        User disabled = inviter(4L, 1, "user", "DISABLED");
+        disabled.setStatus(0);
+        disabled.setInviteCodeUsed(true);
+        when(userRepository.findByInviteCode("DISABLED")).thenReturn(Optional.of(disabled));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> userService.register(request("newuser", "DISABLED")));
+
+        assertEquals("邀请码无效", error.getMessage());
+        verify(userRepository, never()).consumeInviteCode(any());
+    }
+
     private User inviter(Long id, int level, String code) {
+        return inviter(id, level, level == 5 ? "admin" : "user", code);
+    }
+
+    private User inviter(Long id, int level, String role, String code) {
         return User.builder()
                 .id(id)
                 .username("inviter" + id)
                 .password("encoded")
-                .role(level == 5 ? "admin" : "user")
+                .role(role)
                 .status(1)
                 .level(level)
                 .inviteCode(code)

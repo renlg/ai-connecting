@@ -62,8 +62,6 @@ CREATE TABLE IF NOT EXISTS channels (
     updated_at DATETIME(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-ALTER TABLE channels ADD COLUMN IF NOT EXISTS model_mapping TEXT;
-
 -- 模型配置表
 CREATE TABLE IF NOT EXISTS model_configs (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

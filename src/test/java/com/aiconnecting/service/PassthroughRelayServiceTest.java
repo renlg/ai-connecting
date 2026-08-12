@@ -166,11 +166,12 @@ class PassthroughRelayServiceTest {
             doReturn("7").when(support).resolveToChannelModelId("platform-model");
             doReturn(new RelaySupport.RelayContext(token, "7", 1, user, config))
                     .when(support).validateAndPrepare("client-key", "platform-model", "text");
-            when(channels.isPassthroughOnlyModel("7")).thenReturn(true);
+            when(router.isPassthroughOnlyModel("7")).thenReturn(true);
             Channel channel = Channel.builder().id(9L).type("custom")
                     .baseUrl("https://upstream.example").apiKey("channel-key")
                     .modelMapping("{\"platform-model\":\"vendor-model\"}").build();
             when(router.selectChannel("7", Set.of(), 1)).thenReturn(channel);
+            doReturn(false).when(support).isChannelRateLimited(channel);
             PassthroughRelayService relay = new PassthroughRelayService(support, channels, mapper, calls);
             MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/vendor");
             request.setQueryString("x=1");
@@ -190,6 +191,7 @@ class PassthroughRelayServiceTest {
             assertEquals(418, response.getStatus());
             assertEquals("yes", response.getHeader("X-Upstream"));
             assertArrayEquals(responseBytes, response.getContentAsByteArray());
+            verify(support).isChannelRateLimited(channel);
     }
 
     @Test
@@ -204,7 +206,7 @@ class PassthroughRelayServiceTest {
             doReturn("7").when(support).resolveToChannelModelId("platform-model");
             doReturn(new RelaySupport.RelayContext(Token.builder().id(1L).build(), "7", 1, null, null))
                     .when(support).validateAndPrepare("client", "platform-model", "text");
-            when(channels.isPassthroughOnlyModel("7")).thenReturn(true);
+            when(router.isPassthroughOnlyModel("7")).thenReturn(true);
             when(router.selectChannel("7", Set.of(), 1)).thenReturn(Channel.builder().id(9L).type("custom")
                     .baseUrl("https://upstream.example").apiKey("key")
                     .modelMapping("{}").build());
@@ -218,5 +220,35 @@ class PassthroughRelayServiceTest {
 
             assertEquals(404, error.getCode());
             verifyNoInteractions(calls);
+    }
+
+    @Test
+    void channelRateLimitReturns429BeforeUpstreamCall() throws Exception {
+        okhttp3.Call.Factory calls = mock(okhttp3.Call.Factory.class);
+        ChannelRouter router = mock(ChannelRouter.class);
+        ChannelService channels = mock(ChannelService.class);
+        RelaySupport support = spy(new RelaySupport(channels, router, mock(ChannelHealthTracker.class),
+                mock(TokenService.class), mock(UsageLogService.class), mock(ModelConfigService.class),
+                mock(ModelGroupService.class), mock(UserService.class), mock(VideoTaskUsageLogService.class)));
+        doReturn("platform-model").when(support).resolveModelName("platform-model");
+        doReturn("7").when(support).resolveToChannelModelId("platform-model");
+        doReturn(new RelaySupport.RelayContext(Token.builder().id(1L).build(), "7", 1, null, null))
+                .when(support).validateAndPrepare("client", "platform-model", "text");
+        when(router.isPassthroughOnlyModel("7")).thenReturn(true);
+        Channel channel = Channel.builder().id(9L).type("custom")
+                .baseUrl("https://upstream.example").apiKey("key")
+                .modelMapping("{\"platform-model\":\"upstream\"}").build();
+        when(router.selectChannel("7", Set.of(), 1)).thenReturn(channel);
+        doReturn(true).when(support).isChannelRateLimited(channel);
+        PassthroughRelayService relay = new PassthroughRelayService(support, channels, mapper, calls);
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/vendor");
+        request.addHeader("Authorization", "Bearer client");
+
+        BusinessException error = assertThrows(BusinessException.class, () -> relay.tryPassthrough(
+                "{\"model\":\"platform-model\"}", request, new MockHttpServletResponse()));
+
+        assertEquals(429, error.getCode());
+        assertFalse(error.isUpstreamResponse());
+        verifyNoInteractions(calls);
     }
 }

@@ -6,6 +6,7 @@ import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.ModelGroup;
 import com.aiconnecting.entity.ModelGroupMember;
 import com.aiconnecting.repository.ModelConfigRepository;
+import com.aiconnecting.repository.ChannelRepository;
 import com.aiconnecting.repository.ModelGroupMemberRepository;
 import com.aiconnecting.repository.ModelGroupRepository;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,7 @@ public class ModelGroupService {
     private final ModelGroupRepository modelGroupRepository;
     private final ModelGroupMemberRepository modelGroupMemberRepository;
     private final ModelConfigRepository modelConfigRepository;
+    private final ChannelRepository channelRepository;
     private final CacheInvalidationService cacheInvalidationService;
 
     static final Set<String> VALID_TYPES = Set.of("text", "image", "video", "audio");
@@ -246,6 +248,12 @@ public class ModelGroupService {
             if (!configType.equals(groupType)) {
                 throw new BusinessException("成员模型类型 (" + configType + ") 与模型组类型 (" + groupType + ") 不一致",
                         "Member model type (" + configType + ") does not match model group type (" + groupType + ")");
+            }
+            if (!"text".equals(configType) && channelRepository
+                    .findChannelsByModel("%," + input.modelConfigId() + ",%")
+                    .stream().anyMatch(channel -> "custom".equalsIgnoreCase(channel.getType()))) {
+                throw new BusinessException("custom 透传渠道仅支持文本模型",
+                        "Custom passthrough channels only support text models");
             }
             modelGroupMemberRepository.save(ModelGroupMember.builder()
                     .groupId(groupId)

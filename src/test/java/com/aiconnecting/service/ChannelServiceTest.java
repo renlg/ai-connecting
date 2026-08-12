@@ -26,8 +26,8 @@ class ChannelServiceTest {
         modelConfigService = mock(ModelConfigService.class);
         service = new ChannelService(repository);
         ReflectionTestUtils.setField(service, "modelConfigService", modelConfigService);
-        model = ModelConfig.builder().id(7L).name("platform-model").build();
-        when(repository.findAll()).thenReturn(List.of());
+        model = ModelConfig.builder().id(7L).name("platform-model").type("text").build();
+        when(repository.findChannelsByModel(anyString())).thenReturn(List.of());
         when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(modelConfigService.getById(7L)).thenReturn(model);
         when(modelConfigService.findByName("platform-model")).thenReturn(List.of(model));
@@ -49,7 +49,7 @@ class ChannelServiceTest {
 
     @Test
     void sameModelCannotBeBoundToCustomAndNormalChannels() {
-        when(repository.findAll()).thenReturn(List.of(Channel.builder()
+        when(repository.findChannelsByModel("%,7,%")).thenReturn(List.of(Channel.builder()
                 .id(2L).type("openai").modelIds("7").build()));
         assertThrows(BusinessException.class, () -> service.create(
                 request("custom", "7", "{\"platform-model\":\"upstream\"}")));
@@ -59,6 +59,29 @@ class ChannelServiceTest {
     void validCustomMappingIsStored() {
         Channel saved = service.create(request("custom", "7", "{\"platform-model\":\"upstream\"}"));
         assertEquals("{\"platform-model\":\"upstream\"}", saved.getModelMapping());
+    }
+
+    @Test
+    void customRejectsMediaModelButAcceptsTextModel() {
+        model.setType("image");
+        BusinessException error = assertThrows(BusinessException.class, () -> service.create(
+                request("custom", "7", "{\"platform-model\":\"upstream\"}")));
+        assertEquals("custom 透传渠道仅支持文本模型", error.getMessage());
+
+        model.setType("text");
+        assertDoesNotThrow(() -> service.create(
+                request("custom", "7", "{\"platform-model\":\"upstream\"}")));
+    }
+
+    @Test
+    void passthroughOnlyLookupUsesTargetedQueryAndNeverFindAll() {
+        when(repository.findChannelsByModel("%,7,%")).thenReturn(List.of(
+                Channel.builder().id(1L).type("custom").modelIds("7").build()));
+
+        assertTrue(service.isPassthroughOnlyModel("7"));
+
+        verify(repository).findChannelsByModel("%,7,%");
+        verify(repository, never()).findAll();
     }
 
     private ChannelRequest request(String type, String modelIds, String mapping) {

@@ -56,7 +56,7 @@ public class User {
     @Column(unique = true, length = 16)
     private String inviteCode;
 
-    /** 普通用户的邀请码是否已被使用；5 级管理员邀请码不受此字段限制 */
+    /** 普通用户的邀请码是否已被使用；管理员邀请码不受此字段限制 */
     @Builder.Default
     @Column(nullable = false, columnDefinition = "BOOLEAN DEFAULT FALSE")
     private Boolean inviteCodeUsed = false;

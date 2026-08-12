@@ -290,6 +290,12 @@ public class ChannelService {
                 }
                 boundModels.put(config.getName(), config);
             }
+            boolean containsMediaModel = boundModels.values().stream()
+                    .anyMatch(config -> !"text".equals(normalizedModelType(config)));
+            if (containsMediaModel) {
+                throw new BusinessException("custom 透传渠道仅支持文本模型",
+                        "Custom passthrough channels only support text models");
+            }
             java.util.Iterator<Map.Entry<String, JsonNode>> fields = mapping.fields();
             Set<String> keys = new java.util.LinkedHashSet<>();
             while (fields.hasNext()) {
@@ -315,16 +321,28 @@ public class ChannelService {
             }
         }
 
-        for (Channel other : channelRepository.findAll()) {
-            if (channelId != null && channelId.equals(other.getId())) continue;
-            Set<String> overlap = new java.util.HashSet<>(boundIds);
-            overlap.retainAll(splitModelIds(other.getModelIds()));
-            if (!overlap.isEmpty() && ("custom".equalsIgnoreCase(type)
-                    != "custom".equalsIgnoreCase(other.getType()))) {
-                throw new BusinessException("同一模型不能同时绑定透传渠道和普通渠道",
-                        "A model cannot be bound to both passthrough and normal channels");
+        for (String modelId : boundIds) {
+            for (Channel other : findChannelsByModel(modelId)) {
+                if (channelId != null && channelId.equals(other.getId())) continue;
+                if ("custom".equalsIgnoreCase(type) != "custom".equalsIgnoreCase(other.getType())) {
+                    throw new BusinessException("同一模型不能同时绑定透传渠道和普通渠道",
+                            "A model cannot be bound to both passthrough and normal channels");
+                }
             }
         }
+    }
+
+    static String normalizedModelType(ModelConfig config) {
+        return config.getType() == null || config.getType().isBlank() ? "text" : config.getType();
+    }
+
+    public boolean hasCustomChannelForModel(String modelId) {
+        return findChannelsByModel(modelId).stream()
+                .anyMatch(channel -> "custom".equalsIgnoreCase(channel.getType()));
+    }
+
+    private List<Channel> findChannelsByModel(String modelId) {
+        return channelRepository.findChannelsByModel("%," + modelId + ",%");
     }
 
     private Set<String> splitModelIds(String modelIds) {
@@ -334,13 +352,9 @@ public class ChannelService {
     }
 
     public boolean isPassthroughOnlyModel(String modelId) {
-        boolean custom = false;
-        for (Channel channel : channelRepository.findAll()) {
-            if (!splitModelIds(channel.getModelIds()).contains(modelId)) continue;
-            if (!"custom".equalsIgnoreCase(channel.getType())) return false;
-            custom = true;
-        }
-        return custom;
+        List<Channel> channels = findChannelsByModel(modelId);
+        return !channels.isEmpty() && channels.stream()
+                .allMatch(channel -> "custom".equalsIgnoreCase(channel.getType()));
     }
 
     public void delete(Long id) {
