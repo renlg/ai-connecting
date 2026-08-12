@@ -8,6 +8,7 @@ import com.aiconnecting.entity.User;
 import com.aiconnecting.service.ModelConfigService;
 import com.aiconnecting.service.ModelGroupRoutingService;
 import com.aiconnecting.service.ModelGroupService;
+import com.aiconnecting.service.PassthroughRelayService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.UserService;
@@ -32,6 +33,7 @@ import java.util.*;
 public class RelayController {
 
     private final RelayService relayService;
+    private final PassthroughRelayService passthroughRelayService;
     private final TokenService tokenService;
     private final ModelConfigService modelConfigService;
     private final ModelGroupService modelGroupService;
@@ -47,6 +49,7 @@ public class RelayController {
                                   @RequestBody String requestBody,
                                   HttpServletRequest request,
                                   HttpServletResponse response) throws IOException {
+        if (passthroughRelayService.tryPassthrough(requestBody, request, response)) return null;
         return handleRelayRequest(authHeader, requestBody, "/v1/chat/completions", request, response);
     }
 
@@ -60,6 +63,7 @@ public class RelayController {
                                   @RequestBody String requestBody,
                                   HttpServletRequest request,
                                   HttpServletResponse response) throws IOException {
+        if (passthroughRelayService.tryPassthrough(requestBody, request, response)) return null;
         // 支持 Bearer Token 和 x-api-key 两种认证方式
         String tokenKey;
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
@@ -98,6 +102,7 @@ public class RelayController {
                               @RequestBody String requestBody,
                               HttpServletRequest request,
                               HttpServletResponse response) throws IOException {
+        if (passthroughRelayService.tryPassthrough(requestBody, request, response)) return null;
         return handleRelayRequest(authHeader, requestBody, "/v1/completions", request, response);
     }
 
@@ -107,8 +112,10 @@ public class RelayController {
     @PostMapping("/v1/embeddings")
     public Object embeddings(@RequestHeader(value = "Authorization", required = false) String authHeader,
                              @RequestBody String requestBody,
-                             HttpServletRequest request) throws IOException {
-        return handleRelayRequest(authHeader, requestBody, "/v1/embeddings", request, null);
+                             HttpServletRequest request,
+                             HttpServletResponse response) throws IOException {
+        if (passthroughRelayService.tryPassthrough(requestBody, request, response)) return null;
+        return handleRelayRequest(authHeader, requestBody, "/v1/embeddings", request, response);
     }
 
     /**
@@ -117,7 +124,9 @@ public class RelayController {
     @PostMapping("/v1/images/generations")
     public Object imageGenerations(@RequestHeader(value = "Authorization", required = false) String authHeader,
                                    @RequestBody String requestBody,
-                                   HttpServletRequest request) throws IOException {
+                                   HttpServletRequest request,
+                                   HttpServletResponse response) throws IOException {
+        if (passthroughRelayService.tryPassthrough(requestBody, request, response)) return null;
         String tokenKey = extractTokenKey(authHeader);
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "dall-e";
@@ -139,7 +148,9 @@ public class RelayController {
     @PostMapping({"/v1/videos", "/v1/videos/generations"})
     public Object videoGenerations(@RequestHeader(value = "Authorization", required = false) String authHeader,
                                    @RequestBody String requestBody,
-                                   HttpServletRequest request) throws IOException {
+                                   HttpServletRequest request,
+                                   HttpServletResponse response) throws IOException {
+        if (passthroughRelayService.tryPassthrough(requestBody, request, response)) return null;
         String tokenKey = extractTokenKey(authHeader);
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "";
@@ -177,6 +188,7 @@ public class RelayController {
                             @RequestBody String requestBody,
                             HttpServletRequest request,
                             HttpServletResponse response) throws IOException {
+        if (passthroughRelayService.tryPassthrough(requestBody, request, response)) return;
         String tokenKey = extractTokenKey(authHeader);
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "";
@@ -323,6 +335,16 @@ public class RelayController {
             log.warn("媒体响应非 JSON，按原文透传");
             return result;
         }
+    }
+
+    /** JSON-only vendor extension fallback; specific relay mappings above continue to take precedence. */
+    @PostMapping(value = "/v1/**", consumes = "application/json")
+    public Object vendorPassthrough(@RequestBody String requestBody,
+                                    HttpServletRequest request,
+                                    HttpServletResponse response) throws IOException {
+        if (passthroughRelayService.tryPassthrough(requestBody, request, response)) return null;
+        String model = passthroughRelayService.extractTopLevelModel(requestBody);
+        throw new BusinessException(404, "模型不存在: " + model, "Model not found: " + model);
     }
 
     private String extractTokenKey(String authHeader) {

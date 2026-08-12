@@ -5,6 +5,7 @@ import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.dto.ChannelRequest;
 import com.aiconnecting.entity.Channel;
+import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.repository.ChannelRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -211,12 +212,14 @@ public class ChannelService {
 
     public Channel create(ChannelRequest request) {
         validateSupportedLevels(request.getSupportedLevels());
+        validateModelMapping(null, request.getType(), request.getModelIds(), request.getModelMapping());
         Channel channel = Channel.builder()
                 .name(request.getName())
                 .type(request.getType())
                 .baseUrl(request.getBaseUrl())
                 .apiKey(request.getApiKey())
                 .modelIds(request.getModelIds())
+                .modelMapping(request.getModelMapping())
                 .status(request.getStatus() != null ? request.getStatus() : 1)
                 .priority(request.getPriority() != null ? request.getPriority() : 0)
                 .rateLimit(request.getRateLimit() != null ? request.getRateLimit() : 0)
@@ -232,6 +235,10 @@ public class ChannelService {
     public Channel update(Long id, ChannelRequest request) {
         validateSupportedLevels(request.getSupportedLevels());
         Channel channel = getById(id);
+        String proposedType = request.getType() != null ? request.getType() : channel.getType();
+        String proposedModelIds = request.getModelIds() != null ? request.getModelIds() : channel.getModelIds();
+        String proposedMapping = request.getModelMapping() != null ? request.getModelMapping() : channel.getModelMapping();
+        validateModelMapping(id, proposedType, proposedModelIds, proposedMapping);
         if (request.getName() != null) channel.setName(request.getName());
         if (request.getType() != null) channel.setType(request.getType());
         if (request.getBaseUrl() != null) channel.setBaseUrl(request.getBaseUrl());
@@ -239,6 +246,9 @@ public class ChannelService {
             channel.setApiKey(request.getApiKey());
         }
         if (request.getModelIds() != null) channel.setModelIds(request.getModelIds());
+        if (request.getModelMapping() != null || !"custom".equalsIgnoreCase(proposedType)) {
+            channel.setModelMapping(request.getModelMapping());
+        }
         if (request.getStatus() != null) channel.setStatus(request.getStatus());
         if (request.getPriority() != null) channel.setPriority(request.getPriority());
         if (request.getRateLimit() != null) channel.setRateLimit(request.getRateLimit());
@@ -246,6 +256,91 @@ public class ChannelService {
         Channel saved = channelRepository.save(channel);
         publishChannelInvalidation();
         return saved;
+    }
+
+    private void validateModelMapping(Long channelId, String type, String modelIds, String modelMapping) {
+        Set<String> boundIds = splitModelIds(modelIds);
+        if ("custom".equalsIgnoreCase(type)) {
+            if (boundIds.isEmpty()) {
+                throw new BusinessException("透传渠道必须绑定至少一个平台模型",
+                        "Passthrough channels must bind at least one platform model");
+            }
+            if (modelMapping == null || modelMapping.isBlank()) {
+                throw new BusinessException("透传渠道必须配置模型映射", "Passthrough channels require a model mapping");
+            }
+            JsonNode mapping;
+            try {
+                mapping = objectMapper.readTree(modelMapping);
+            } catch (Exception e) {
+                throw new BusinessException("模型映射必须是有效的 JSON 对象", "Model mapping must be a valid JSON object");
+            }
+            if (mapping == null || !mapping.isObject()) {
+                throw new BusinessException("模型映射必须是 JSON 对象", "Model mapping must be a JSON object");
+            }
+            if (modelConfigService == null) {
+                throw new BusinessException("模型服务不可用", "Model service unavailable");
+            }
+            Map<String, ModelConfig> boundModels = new LinkedHashMap<>();
+            for (String id : boundIds) {
+                ModelConfig config;
+                try {
+                    config = modelConfigService.getById(Long.valueOf(id));
+                } catch (Exception e) {
+                    throw new BusinessException("渠道绑定了不存在的模型: " + id, "Channel binds an unknown model: " + id);
+                }
+                boundModels.put(config.getName(), config);
+            }
+            java.util.Iterator<Map.Entry<String, JsonNode>> fields = mapping.fields();
+            Set<String> keys = new java.util.LinkedHashSet<>();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> entry = fields.next();
+                JsonNode value = entry.getValue();
+                if (!value.isTextual() || value.textValue().isBlank()) {
+                    throw new BusinessException("模型映射值必须是非空字符串: " + entry.getKey(),
+                            "Model mapping values must be non-empty strings: " + entry.getKey());
+                }
+                if (modelConfigService.findByName(entry.getKey()).isEmpty()) {
+                    throw new BusinessException("模型映射包含不存在的平台模型: " + entry.getKey(),
+                            "Model mapping contains an unknown platform model: " + entry.getKey());
+                }
+                if (!boundModels.containsKey(entry.getKey())) {
+                    throw new BusinessException("模型映射与渠道绑定模型不一致: " + entry.getKey(),
+                            "Model mapping does not match the channel's bound models: " + entry.getKey());
+                }
+                keys.add(entry.getKey());
+            }
+            if (!keys.equals(boundModels.keySet())) {
+                throw new BusinessException("每个渠道绑定模型都必须配置上游模型名",
+                        "Every bound model must have an upstream model name");
+            }
+        }
+
+        for (Channel other : channelRepository.findAll()) {
+            if (channelId != null && channelId.equals(other.getId())) continue;
+            Set<String> overlap = new java.util.HashSet<>(boundIds);
+            overlap.retainAll(splitModelIds(other.getModelIds()));
+            if (!overlap.isEmpty() && ("custom".equalsIgnoreCase(type)
+                    != "custom".equalsIgnoreCase(other.getType()))) {
+                throw new BusinessException("同一模型不能同时绑定透传渠道和普通渠道",
+                        "A model cannot be bound to both passthrough and normal channels");
+            }
+        }
+    }
+
+    private Set<String> splitModelIds(String modelIds) {
+        if (modelIds == null || modelIds.isBlank()) return Set.of();
+        return Arrays.stream(modelIds.split(",")).map(String::trim)
+                .filter(s -> !s.isEmpty()).collect(Collectors.toSet());
+    }
+
+    public boolean isPassthroughOnlyModel(String modelId) {
+        boolean custom = false;
+        for (Channel channel : channelRepository.findAll()) {
+            if (!splitModelIds(channel.getModelIds()).contains(modelId)) continue;
+            if (!"custom".equalsIgnoreCase(channel.getType())) return false;
+            custom = true;
+        }
+        return custom;
     }
 
     public void delete(Long id) {

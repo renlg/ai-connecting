@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS "channels" (
     models VARCHAR(2000),
     model_ids VARCHAR(2000),
     modelIds VARCHAR(2000),
+    model_mapping TEXT,
     priority INTEGER NOT NULL,
     rate_limit INTEGER NOT NULL,
     status INTEGER NOT NULL,

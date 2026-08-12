@@ -35,7 +35,7 @@ public class UsageLog {
     @Column(length = 100)
     private String model;
 
-    /** 实际调用的上游模型名（仅模型组请求填写，非组请求为空）；仅供内部记录，不参与任何统计展示 */
+    /** 实际调用的上游模型名（模型组或透传请求填写）；仅供内部记录，不参与任何统计展示 */
     @Column(length = 100)
     private String actualModel;
 

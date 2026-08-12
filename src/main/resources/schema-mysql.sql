@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS channels (
     base_url VARCHAR(500) NOT NULL,
     api_key VARCHAR(1000) NOT NULL,
     model_ids VARCHAR(2000),
+    model_mapping TEXT,
     supported_levels VARCHAR(50),
     status INT NOT NULL,
     priority INT NOT NULL,
@@ -60,6 +61,8 @@ CREATE TABLE IF NOT EXISTS channels (
     created_at DATETIME(6) NOT NULL,
     updated_at DATETIME(6)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS model_mapping TEXT;
 
 -- 模型配置表
 CREATE TABLE IF NOT EXISTS model_configs (

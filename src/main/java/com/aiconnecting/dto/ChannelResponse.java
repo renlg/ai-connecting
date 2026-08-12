@@ -19,6 +19,7 @@ public class ChannelResponse {
     private String apiKey;       // masked: sk-abc...xyz
     private String baseUrl;
     private String modelIds;
+    private String modelMapping;
     private String supportedLevels;
     private Integer status;
     private Integer priority;
@@ -35,6 +36,7 @@ public class ChannelResponse {
             .apiKey(maskApiKey(channel.getApiKey()))
             .baseUrl(channel.getBaseUrl())
             .modelIds(channel.getModelIds())
+            .modelMapping(channel.getModelMapping())
             .supportedLevels(channel.getSupportedLevels())
             .status(channel.getStatus())
             .priority(channel.getPriority())

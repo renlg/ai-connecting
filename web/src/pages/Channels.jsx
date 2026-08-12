@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Tooltip, Checkbox, Image, Spin } from 'antd'
+import { Table, Button, Modal, Form, Input, InputNumber, Select, AutoComplete, Space, Tag, message, Popconfirm, Switch, Tooltip, Checkbox, Image, Spin } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined, CopyOutlined, SearchOutlined } from '@ant-design/icons'
 import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, testChannelMedia, pollChannelTestVideo, downloadChannelTestVideo, getChannelHealth, unblockChannel, getChannelApiKey } from '../api'
 
@@ -64,9 +64,12 @@ export default function Channels() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
+  const channelType = Form.useWatch('type', form)
+  const selectedModelIds = Form.useWatch('modelIds', form) || []
   const [modelOptions, setModelOptions] = useState([])
   const [allLocalModels, setAllLocalModels] = useState([])
   const [fetchingModels, setFetchingModels] = useState(false)
+  const [upstreamModelSuggestions, setUpstreamModelSuggestions] = useState([])
   const [testModalOpen, setTestModalOpen] = useState(false)
   const [testMessage, setTestMessage] = useState('')
   const [testModel, setTestModel] = useState('')
@@ -189,8 +192,13 @@ export default function Channels() {
       const res = await fetchChannelModels({ ...values, apiKey })
       if (res.code === 200) {
         const upstreamModels = res.data || []
+        setUpstreamModelSuggestions(upstreamModels)
         if (upstreamModels.length === 0) {
           message.info('该上游不支持获取模型列表,请手动填写模型 ID')
+          return
+        }
+        if (values.type === 'custom') {
+          message.success(`已加载 ${upstreamModels.length} 个上游模型作为映射输入建议`)
           return
         }
         // 用上游模型名和本地模型列表按 name 匹配
@@ -387,6 +395,16 @@ export default function Channels() {
 
   const handleSave = async () => {
     const values = await form.validateFields()
+    if (values.type === 'custom') {
+      const mapping = values.modelMapping || {}
+      const selected = Array.isArray(values.modelIds) ? values.modelIds : []
+      values.modelMapping = JSON.stringify(Object.fromEntries(selected.map(id => {
+        const model = allLocalModels.find(item => String(item.id) === String(id))
+        return [model?.name, String(mapping[model?.name] || '').trim()]
+      }).filter(([name]) => name)))
+    } else {
+      values.modelMapping = null
+    }
     // 多选模型ID转逗号分隔字符串
     if (values.modelIds && Array.isArray(values.modelIds)) {
       values.modelIds = values.modelIds.join(',')
@@ -513,6 +531,9 @@ export default function Channels() {
             // 重置为该渠道自身对应的本地模型列表，清除上一次为其他渠道"获取模型"后残留的窄化选项
             setModelOptions(buildBaseModelOptions(allLocalModels))
             const formValues = { ...record, apiKey: undefined }
+            if (formValues.modelMapping && typeof formValues.modelMapping === 'string') {
+              try { formValues.modelMapping = JSON.parse(formValues.modelMapping) } catch { formValues.modelMapping = {} }
+            }
             if (formValues.modelIds && typeof formValues.modelIds === 'string') {
               // 将逗号分隔的模型ID转换为数组
               formValues.modelIds = formValues.modelIds.split(',').map(id => id.trim()).filter(id => id)
@@ -589,7 +610,9 @@ export default function Channels() {
               modelIds.forEach(id => {
                 const matched = allLocalModels.find(m => String(m.id) === String(id))
                 if (matched) {
-                  const sendValue = matched.displayName || matched.name
+                  const sendValue = channelType === 'custom'
+                    ? (form.getFieldValue(['modelMapping', matched.name]) || matched.name)
+                    : (matched.displayName || matched.name)
                   opts.push({ value: sendValue, label: matched.displayName ? `${matched.name}（${matched.displayName}）` : matched.name, type: matched.type || 'text' })
                 }
               })
@@ -622,19 +645,19 @@ export default function Channels() {
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="渠道名称" /></Form.Item>
           <Form.Item name="type" label="类型" rules={[{ required: true }]}>
-            <Select placeholder="选择类型" options={[{ value: 'openai', label: 'OpenAI' }, { value: 'azure', label: 'Azure' }, { value: 'claude', label: 'Claude' }, { value: 'gemini', label: 'Gemini' }, { value: 'custom', label: '自定义' }]} />
+            <Select onChange={value => { if (value === 'custom') form.setFieldValue('modelIds', []) }} placeholder="选择类型" options={[{ value: 'openai', label: 'OpenAI' }, { value: 'azure', label: 'Azure' }, { value: 'claude', label: 'Claude' }, { value: 'gemini', label: 'Gemini' }, { value: 'custom', label: '自定义（透传）' }]} />
           </Form.Item>
           <Form.Item name="baseUrl" label="Base URL" rules={[{ required: true }]}><Input placeholder="https://api.openai.com" /></Form.Item>
           <Form.Item name="apiKey" label="API Key" rules={editing ? [] : [{ required: true }]}>
             <Input.Password placeholder={editing ? '留空则不修改' : 'sk-xxx'} />
           </Form.Item>
-          <Form.Item name="modelIds" label={
-            <span>支持模型 <Button size="small" type="dashed" icon={<ApiOutlined />} loading={fetchingModels} onClick={handleFetchModels}>获取模型</Button></span>
+          <Form.Item name="modelIds" rules={[{ required: true, message: '请选择支持模型' }]} label={
+            <span>支持模型 {channelType !== 'custom' && <Button size="small" type="dashed" icon={<ApiOutlined />} loading={fetchingModels} onClick={handleFetchModels}>获取模型</Button>}</span>
           }>
             <Select
-              mode="tags"
-              placeholder="选择或输入模型名称"
-              options={modelOptions}
+              mode={channelType === 'custom' ? 'multiple' : 'tags'}
+              placeholder={channelType === 'custom' ? '选择平台模型' : '选择或输入模型名称'}
+              options={channelType === 'custom' ? buildBaseModelOptions(allLocalModels) : modelOptions}
               tokenSeparators={[',']}
               style={{ width: '100%' }}
               // 允许用户输入不在 options 中的值（用于手动输入上游模型名）
@@ -644,6 +667,25 @@ export default function Channels() {
               }
             />
           </Form.Item>
+          {channelType === 'custom' && (
+            <Form.Item label={<span>模型映射 <Button size="small" type="dashed" icon={<ApiOutlined />} loading={fetchingModels} onClick={handleFetchModels}>获取上游模型建议</Button></span>}>
+              <div style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: '4px 12px' }}>
+                {(Array.isArray(selectedModelIds) ? selectedModelIds : []).map(id => {
+                  const model = allLocalModels.find(item => String(item.id) === String(id))
+                  if (!model) return null
+                  return (
+                    <div key={id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'center', padding: '8px 0' }}>
+                      <Input value={model.name} readOnly />
+                      <Form.Item name={['modelMapping', model.name]} noStyle rules={[{ required: true, whitespace: true, message: '请输入上游模型名' }]}>
+                        <AutoComplete placeholder="上游模型名" options={upstreamModelSuggestions.map(name => ({ value: name }))} />
+                      </Form.Item>
+                    </div>
+                  )
+                })}
+                {selectedModelIds.length === 0 && <span style={{ color: '#999' }}>请先选择平台模型</span>}
+              </div>
+            </Form.Item>
+          )}
           <Form.Item name="supportedLevels" label="支持等级" initialValue={['1', '2', '3', '4', '5']}>
             <Select
               mode="multiple"

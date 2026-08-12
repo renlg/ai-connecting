@@ -1325,6 +1325,25 @@ public class RelaySupport {
         usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(), totalTokens, token.getUserId());
     }
 
+    void recordPassthroughUsage(Token token, Channel channel, String platformModel, String upstreamModel,
+                                int promptTokens, int completionTokens, int totalTokens, int cachedTokens,
+                                int cacheCreationTokens, int cacheReadTokens, long duration,
+                                HttpServletRequest httpRequest, String path) {
+        BigDecimal creditCost = usageLogService.calculateCreditCost(
+                platformModel, promptTokens, completionTokens, cachedTokens);
+        UsageLog usageLog = UsageLog.builder()
+                .tokenId(token.getId()).channelId(channel.getId())
+                .model(platformModel).actualModel(upstreamModel)
+                .promptTokens(promptTokens).completionTokens(completionTokens).totalTokens(totalTokens)
+                .promptTokensCacheHit(cachedTokens)
+                .cachedTokensCacheCreation(cacheCreationTokens)
+                .cachedTokensCacheRead(cacheReadTokens)
+                .creditCost(creditCost).ip(getClientIp(httpRequest)).duration(duration)
+                .requestPath(path).build();
+        usageLogService.recordUsageAndQuotas(
+                usageLog, token.getId(), channel.getId(), totalTokens, token.getUserId());
+    }
+
     String getClientIp(HttpServletRequest request) {
         if (request == null) return "";
         String ip = request.getHeader("X-Forwarded-For");

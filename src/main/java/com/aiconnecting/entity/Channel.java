@@ -41,6 +41,10 @@ public class Channel {
     @Column(length = 2000)
     private String modelIds;
 
+    /** 透传渠道的平台模型名到上游模型名映射（JSON object） */
+    @Column(columnDefinition = "TEXT")
+    private String modelMapping;
+
     /** 支持的用户等级列表, 逗号分隔, 例如 "1,2,3" */
     @Column(length = 50)
     private String supportedLevels;

@@ -37,10 +37,11 @@ public class GlobalExceptionHandler {
         // 管理后台/自测接口（/api/**，如渠道测试）继续返回详细错误
         // 请求尚未建立 SSE 响应时，本地 404 必须保留标准 HTTP 状态与 JSON 错误体；
         // 这使流式请求的模型/模型组权限拒绝与非流式请求不可区分。
-        if (isSseRequest(request) && e.getCode() == 404 && !e.isUpstreamResponse()) {
+        if (isSseRequest(request) && !e.isUpstreamResponse()
+                && (e.getCode() == 404 || Boolean.TRUE.equals(request.getAttribute("passthrough.local-json-error")))) {
             String message = e.getEnglishMessage() != null
                     ? e.getEnglishMessage() : SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE;
-            response.setStatus(HttpStatus.NOT_FOUND.value());
+            response.setStatus(httpStatus.value());
             response.setContentType("application/json");
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
             objectMapper.writeValue(response.getWriter(), ApiResponse.<Void>builder()

@@ -9,6 +9,7 @@ public class ChannelRequest {
     private String baseUrl;
     private String apiKey;
     private String modelIds;
+    private String modelMapping;
     private Integer status;
     private Integer priority;
     private Integer rateLimit;

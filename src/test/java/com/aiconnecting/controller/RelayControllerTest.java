@@ -11,6 +11,7 @@ import com.aiconnecting.repository.UserRepository;
 import com.aiconnecting.service.ModelConfigService;
 import com.aiconnecting.service.ModelGroupService;
 import com.aiconnecting.service.ModelGroupRoutingService;
+import com.aiconnecting.service.PassthroughRelayService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.UserService;
@@ -31,6 +32,7 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -47,6 +49,9 @@ class RelayControllerTest {
 
     @MockBean
     private RelayService relayService;
+
+    @MockBean
+    private PassthroughRelayService passthroughRelayService;
 
     @MockBean
     private TokenService tokenService;
@@ -79,6 +84,52 @@ class RelayControllerTest {
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
     // ==================== Chat Completions ====================
+
+    @Test
+    void passthroughRunsBeforeNormalDisplayNameRewrite() throws Exception {
+        when(passthroughRelayService.tryPassthrough(anyString(), any(), any())).thenReturn(true);
+
+        mockMvc.perform(post("/v1/chat/completions")
+                        .header("Authorization", "Bearer sk-test")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\":\"Display Name\",\"messages\":[]}"))
+                .andExpect(status().isOk());
+
+        verify(passthroughRelayService).tryPassthrough(
+                eq("{\"model\":\"Display Name\",\"messages\":[]}"), any(), any());
+        verifyNoInteractions(relayService);
+    }
+
+    @Test
+    void arbitraryVendorPostUsesPassthroughFallbackWithOriginalQuery() throws Exception {
+        when(passthroughRelayService.tryPassthrough(anyString(), any(), any())).thenAnswer(invocation -> {
+            jakarta.servlet.http.HttpServletRequest request = invocation.getArgument(1);
+            assertEquals("/v1/vendor/path", request.getRequestURI());
+            assertEquals("x=1", request.getQueryString());
+            return true;
+        });
+
+        mockMvc.perform(post("/v1/vendor/path?x=1")
+                        .header("Authorization", "Bearer sk-test")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\":\"vendor-model\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void malformedOrMissingTopLevelModelReturns400BeforeNormalRelay() throws Exception {
+        when(passthroughRelayService.tryPassthrough(anyString(), any(), any()))
+                .thenThrow(new BusinessException(400, "请求格式错误", "Request must contain a model"));
+
+        mockMvc.perform(post("/v1/completions")
+                        .header("Authorization", "Bearer sk-test")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("not-json"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400));
+
+        verifyNoInteractions(relayService);
+    }
 
     @Test
     void chatCompletions_success() throws Exception {
