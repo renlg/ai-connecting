@@ -155,6 +155,21 @@ CREATE INDEX idx_usage_logs_created_at ON usage_logs (created_at);
 CREATE INDEX idx_usage_logs_token_created ON usage_logs (token_id, created_at);
 CREATE INDEX idx_usage_logs_model_created ON usage_logs (model, created_at);
 
+-- 终端用户请求失败日志（仅保留 7 天）
+CREATE TABLE IF NOT EXISTS failure_logs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    trace_id VARCHAR(64) NOT NULL,
+    user_error VARCHAR(2000) NOT NULL,
+    channel_error VARCHAR(2000),
+    http_status INT NOT NULL,
+    model_name VARCHAR(100),
+    channel_model_name VARCHAR(100),
+    protocol VARCHAR(20),
+    created_at BIGINT NOT NULL,
+    KEY idx_failure_logs_trace_id (trace_id),
+    KEY idx_failure_logs_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 使用统计汇总表（15分钟预聚合）
 CREATE TABLE IF NOT EXISTS usage_stats (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

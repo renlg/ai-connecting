@@ -3,6 +3,7 @@ package com.aiconnecting.common;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.aiconnecting.service.RelayProtocol;
 import com.aiconnecting.service.RelayProtocolAdapter;
+import com.aiconnecting.service.FailureLogService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.ConstraintViolation;
@@ -12,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -30,6 +32,9 @@ public class GlobalExceptionHandler {
 
     private final ObjectMapper objectMapper;
 
+    @Autowired(required = false)
+    private FailureLogService failureLogService;
+
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<?> handleBusinessException(BusinessException e, HttpServletRequest request,
                                                      HttpServletResponse response) throws IOException {
@@ -45,6 +50,7 @@ public class GlobalExceptionHandler {
             }
             String message = e.isUpstreamResponse() || e.getEnglishMessage() == null
                     ? SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE : e.getEnglishMessage();
+            record(request, httpStatus.value(), message, channelError(e));
             protocolAdapter().writeSseError(protocol(request), response, httpStatus.value(), message,
                     e.isUpstreamResponse());
             return null;
@@ -53,6 +59,7 @@ public class GlobalExceptionHandler {
             String message = e.isUpstreamResponse() || e.getEnglishMessage() == null
                     ? SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE
                     : e.getEnglishMessage();
+            record(request, httpStatus.value(), message, channelError(e));
             return ResponseEntity.status(httpStatus).body(protocolAdapter().errorEnvelope(
                     protocol(request), httpStatus.value(), message, e.isUpstreamResponse()));
         }
@@ -153,10 +160,12 @@ public class GlobalExceptionHandler {
                 response.setStatus(500);
                 SseUtils.setSseHeaders(response);
             }
+            record(request, 500, message, null);
             protocolAdapter().writeSseError(protocol(request), response, 500, message, false);
             return null;
         }
         if (isEndUserRelayPath(request)) {
+            record(request, 500, message, null);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(protocolAdapter().errorEnvelope(protocol(request), 500, message, false));
         }
@@ -187,6 +196,7 @@ public class GlobalExceptionHandler {
 
     private ResponseEntity<?> errorResponse(HttpServletRequest request, int status, String message) {
         if (isEndUserRelayPath(request)) {
+            record(request, status, message, null);
             return ResponseEntity.status(status).body(
                     protocolAdapter().errorEnvelope(protocol(request), status, message, false));
         }
@@ -195,5 +205,19 @@ public class GlobalExceptionHandler {
 
     private String localized(HttpServletRequest request, String english, String chinese) {
         return isEndUserRelayPath(request) ? english : chinese;
+    }
+
+    private String channelError(BusinessException e) {
+        if (!e.isUpstreamResponse()) return null;
+        if (e.getUpstreamResponseBody() != null) {
+            return "Upstream API error: " + e.getCode() + " - " + e.getUpstreamResponseBody();
+        }
+        return e.getMessage();
+    }
+
+    private void record(HttpServletRequest request, int status, String userError, String channelError) {
+        if (failureLogService != null) {
+            failureLogService.record(request, status, userError, channelError);
+        }
     }
 }

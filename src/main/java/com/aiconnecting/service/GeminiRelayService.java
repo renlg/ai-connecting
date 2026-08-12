@@ -226,6 +226,7 @@ public class GeminiRelayService {
             if (code != 200) {
                 String errorBody = conn.getErrorStream() != null
                         ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
+                FailureLogContext.setChannelError(code, errorBody);
                 if (SseUtils.isEndUserRelayPath()) {
                     protocolAdapter.writeError(RelayProtocol.GEMINI, httpResponse, code,
                             SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);

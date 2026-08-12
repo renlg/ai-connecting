@@ -148,6 +148,7 @@ export const updateUserStatus = (id, status) => api.put(`/api/admin/users/${id}/
 export const resetUserPassword = (id) => api.put(`/api/admin/users/${id}/reset-password`);
 export const updateUserCredits = (id, credits) => api.put(`/api/admin/users/${id}/credits`, { credits });
 export const updateUserLevel = (id, level) => api.put(`/api/admin/users/${id}/level`, { level });
+export const getFailureLogs = (params) => api.get('/api/admin/failure-logs', { params });
 
 // Announcements
 export const getLatestAnnouncements = (limit = 5) => api.get('/api/announcements/latest', { params: { limit } });

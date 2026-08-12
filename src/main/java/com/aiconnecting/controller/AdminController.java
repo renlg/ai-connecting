@@ -16,6 +16,7 @@ import com.aiconnecting.entity.OperationLog;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.Announcement;
+import com.aiconnecting.entity.FailureLog;
 import com.aiconnecting.service.DashboardService;
 import com.aiconnecting.service.UserService;
 import com.aiconnecting.service.UsageLogService;
@@ -24,6 +25,7 @@ import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.ChannelHealthTracker;
 import com.aiconnecting.service.OperationLogService;
 import com.aiconnecting.service.StatsAggregationService;
+import com.aiconnecting.service.FailureLogService;
 import com.aiconnecting.repository.AnnouncementRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -52,6 +54,7 @@ public class AdminController {
     private final AnnouncementRepository announcementRepository;
     private final OperationLogService operationLogService;
     private final StatsAggregationService statsAggregationService;
+    private final FailureLogService failureLogService;
 
     /**
      * 仪表盘统计 - admin 看全局，普通用户看自己的数据
@@ -146,6 +149,22 @@ public class AdminController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.success(operationLogService.getLogs(page, size));
+    }
+
+    /** 终端用户请求失败日志，支持分页及组合筛选。 */
+    @GetMapping("/failure-logs")
+    public ApiResponse<Page<FailureLog>> getFailureLogs(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String traceId,
+            @RequestParam(defaultValue = "false") boolean exactTraceId,
+            @RequestParam(required = false) Long startTime,
+            @RequestParam(required = false) Long endTime,
+            @RequestParam(required = false) String modelName,
+            @RequestParam(required = false) String channelModelName,
+            @RequestParam(required = false) Integer httpStatus) {
+        return ApiResponse.success(failureLogService.search(page, size, traceId, exactTraceId, startTime, endTime,
+                modelName, channelModelName, httpStatus));
     }
 
     /**

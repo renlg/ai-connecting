@@ -292,6 +292,7 @@ public class ModelGroupFailoverExecutor {
                                 "Passthrough model-group request is missing its response context");
                     }
                     String upstreamModel = passthroughRelayService.mappedModel(channel, memberModel);
+                    FailureLogContext.setChannelModel(upstreamModel);
                     String passthroughBody = request.protocol() == RelayProtocol.GEMINI
                             ? requestBody : passthroughRelayService.rewriteTopLevelModelVerbatim(
                                     requestBody, upstreamModel);
@@ -560,6 +561,7 @@ public class ModelGroupFailoverExecutor {
             if (isCustomChannel(channel)) {
                 try {
                     String upstreamModel = passthroughRelayService.mappedModel(channel, memberModel);
+                    FailureLogContext.setChannelModel(upstreamModel);
                     String passthroughBody = request.protocol() == RelayProtocol.GEMINI
                             ? requestBody : passthroughRelayService.rewriteTopLevelModelVerbatim(
                                     requestBody, upstreamModel);
@@ -617,6 +619,7 @@ public class ModelGroupFailoverExecutor {
                 if (code != 200) {
                     String errorBody = conn.getErrorStream() != null
                             ? new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8) : "";
+                    FailureLogContext.setChannelError(code, errorBody);
                     lastError = "HTTP " + code + " - " + errorBody;
                     lastErrorUpstream = true;
                     BusinessException upstreamError = upstreamFailure(code, errorBody,
@@ -987,6 +990,7 @@ public class ModelGroupFailoverExecutor {
                 }
                 long timeoutMs = remainingBudgetMs(deadline);
                 if (timeoutMs <= 0) break;
+                FailureLogContext.setChannelModel(memberModel);
                 RelaySupport.BinaryResponse response = support.forwardMultipartRequest(channel, path, mb.build(), timeoutMs);
                 if (!rawPassThrough && !isValidTranscriptionJson(response.body())) {
                     throw new BusinessException(502, "上游返回无法解析的转写结果",

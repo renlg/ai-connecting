@@ -215,6 +215,7 @@ public class ClaudeRelayService {
             if (code != 200) {
                 String errorBody = conn.getErrorStream() != null
                         ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
+                FailureLogContext.setChannelError(code, errorBody);
                 log.warn("渠道 {} Claude 流式请求失败: {} - {}", channel.getId(), code, errorBody);
                 if (SseUtils.isEndUserRelayPath()) {
                     protocolAdapter.writeError(RelayProtocol.CLAUDE, httpResponse, code,

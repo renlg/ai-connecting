@@ -5,6 +5,7 @@ import com.aiconnecting.dto.CouponRedemptionDTO;
 import com.aiconnecting.entity.Coupon;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.User;
+import com.aiconnecting.entity.FailureLog;
 import com.aiconnecting.service.CouponService;
 import com.aiconnecting.service.DashboardService;
 import com.aiconnecting.service.StatsAggregationService;
@@ -15,6 +16,7 @@ import com.aiconnecting.service.UserService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.OperationLogService;
+import com.aiconnecting.service.FailureLogService;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -66,6 +68,7 @@ class AdminControllerTest {
     @MockBean private JwtAuthenticationFilter jwtAuthenticationFilter;
     @MockBean private OperationLogService operationLogService;
     @MockBean private StatsAggregationService statsAggregationService;
+    @MockBean private FailureLogService failureLogService;
 
     private User adminUser;
     private User regularUser;
@@ -212,6 +215,29 @@ class AdminControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.content").isArray());
+    }
+
+    @Test
+    void getFailureLogsForwardsPaginationAndFilters() throws Exception {
+        setAuthentication(adminUser);
+        FailureLog failure = FailureLog.builder().id(7L).traceId("trace-abc")
+                .userError("failed").httpStatus(502).createdAt(1_700_000_000_000L).build();
+        when(failureLogService.search(1, 10, "trace-abc", true, 100L, 200L,
+                "requested", "upstream", 502)).thenReturn(new PageImpl<>(List.of(failure)));
+
+        mockMvc.perform(get("/api/admin/failure-logs")
+                        .param("page", "1").param("size", "10")
+                        .param("traceId", "trace-abc")
+                        .param("exactTraceId", "true")
+                        .param("startTime", "100").param("endTime", "200")
+                        .param("modelName", "requested")
+                        .param("channelModelName", "upstream")
+                        .param("httpStatus", "502"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].traceId").value("trace-abc"))
+                .andExpect(jsonPath("$.data.content[0].httpStatus").value(502));
+        verify(failureLogService).search(1, 10, "trace-abc", true, 100L, 200L,
+                "requested", "upstream", 502);
     }
 
     // ==================== Coupons ====================

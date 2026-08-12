@@ -19,6 +19,7 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -42,6 +43,9 @@ public class PassthroughRelayService {
     private final ChannelService channelService;
     private final ObjectMapper objectMapper;
     private final okhttp3.Call.Factory callFactory;
+
+    @Autowired(required = false)
+    private FailureLogService failureLogService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public PassthroughRelayService(RelaySupport support, ChannelService channelService, ObjectMapper objectMapper) {
@@ -80,6 +84,7 @@ public class PassthroughRelayService {
     public boolean tryPassthroughForModel(String rawBody, String requestedModel,
                                           HttpServletRequest request,
                                           HttpServletResponse servletResponse) throws IOException {
+        FailureLogContext.initialize(request, requestedModel, protocol(request.getRequestURI()));
         String canonicalModel = support.resolveModelName(requestedModel);
         String channelModelId = support.resolveToChannelModelId(canonicalModel);
         if (!channelService.isPassthroughOnlyModel(channelModelId)) {
@@ -116,6 +121,7 @@ public class PassthroughRelayService {
             }
             attempted.add(channel.getId());
             String upstreamModel = mappedModel(channel, canonicalModel);
+            FailureLogContext.setChannelModel(upstreamModel);
             String mappedPath = mappedGeminiPath(request.getRequestURI(), upstreamModel);
             String rewrittenBody = mappedPath != null
                     ? rawBody : rewriteTopLevelModelVerbatim(rawBody, upstreamModel);
@@ -134,6 +140,11 @@ public class PassthroughRelayService {
             }
 
             try (upstreamResponse) {
+                String failureBody = null;
+                if (!upstreamResponse.isSuccessful()) {
+                    failureBody = upstreamResponse.peekBody(FailureLogService.MAX_ERROR_LENGTH).string();
+                    FailureLogContext.setChannelError(upstreamResponse.code(), failureBody);
+                }
                 UsageObserver observer = new UsageObserver(
                         upstreamResponse.header("Content-Type"), objectMapper);
                 try {
@@ -165,10 +176,25 @@ public class PassthroughRelayService {
                                 channel.getId(), canonicalModel, billingError);
                     }
                 }
+                if (!upstreamResponse.isSuccessful() && failureLogService != null) {
+                    failureLogService.record(request, upstreamResponse.code(),
+                            failureBody == null || failureBody.isBlank()
+                                    ? "Upstream API error" : failureBody,
+                            "Upstream API error: " + upstreamResponse.code() + " - " + failureBody);
+                }
                 return true;
             }
         }
+        FailureLogContext.setChannelError(lastConnectionFailure != null
+                ? "Upstream connection failed: " + lastConnectionFailure.getMessage()
+                : "Upstream connection failed");
         throw new BusinessException(502, "渠道连接失败", "Upstream connection failed", lastConnectionFailure);
+    }
+
+    private RelayProtocol protocol(String uri) {
+        if ("/v1/messages".equals(uri)) return RelayProtocol.CLAUDE;
+        if (uri != null && uri.startsWith("/v1/models/") && uri.contains("Content")) return RelayProtocol.GEMINI;
+        return RelayProtocol.OPENAI;
     }
 
     public String extractTopLevelModel(String rawBody) {

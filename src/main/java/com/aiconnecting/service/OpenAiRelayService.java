@@ -819,7 +819,10 @@ public class OpenAiRelayService {
         long startTime = System.currentTimeMillis();
         ChannelResult<RelaySupport.BinaryResponse> result;
         try {
-            result = forwardWithRetry(ctx, channel -> support.forwardMultipartRequest(channel, path, multipartBody));
+            result = forwardWithRetry(ctx, channel -> {
+                FailureLogContext.setChannelModel(model);
+                return support.forwardMultipartRequest(channel, path, multipartBody);
+            });
         } catch (RuntimeException e) {
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null
                     && ctx.modelConfig().getFallbackGroupId() != null
@@ -987,6 +990,7 @@ public class OpenAiRelayService {
                 if (code != 200) {
                     String errorBody = conn.getErrorStream() != null
                             ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
+                    FailureLogContext.setChannelError(code, errorBody);
                     lastError = "HTTP " + code + " - " + errorBody;
                     lastFailure = BusinessException.upstream(code, "上游 API 错误: " + errorBody,
                             "Upstream API error: " + errorBody, errorBody,

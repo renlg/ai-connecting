@@ -4,6 +4,8 @@ import brave.Span;
 import brave.Tracing;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+import com.aiconnecting.service.FailureLogContext;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -46,7 +48,11 @@ public class TracingConfig {
             HttpServletResponse httpResponse = (HttpServletResponse) response;
             Span currentSpan = tracing.tracer().currentSpan();
             if (currentSpan != null) {
-                httpResponse.setHeader("X-Trace-Id", currentSpan.context().traceIdString());
+                String traceId = currentSpan.context().traceIdString();
+                httpResponse.setHeader("X-Trace-Id", traceId);
+                if (request instanceof HttpServletRequest httpRequest) {
+                    httpRequest.setAttribute(FailureLogContext.TRACE_ID, traceId);
+                }
             }
             chain.doFilter(request, response);
         }

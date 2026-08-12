@@ -12,6 +12,8 @@ import com.aiconnecting.service.PassthroughRelayService;
 import com.aiconnecting.service.RelayService;
 import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.UserService;
+import com.aiconnecting.service.FailureLogContext;
+import com.aiconnecting.service.RelayProtocol;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
@@ -76,6 +78,7 @@ public class RelayController {
 
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.has("model") ? jsonBody.get("model").asText() : "";
+        FailureLogContext.initialize(request, model, RelayProtocol.CLAUDE);
         // 将 displayName 转换为实际模型名
         String resolvedModel = relayService.resolveModelName(model);
         if (!resolvedModel.equals(model)) {
@@ -130,6 +133,7 @@ public class RelayController {
         String tokenKey = extractTokenKey(authHeader);
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "dall-e";
+        FailureLogContext.initialize(request, model, RelayProtocol.OPENAI);
         String resolvedModel = relayService.resolveModelName(model);
         if (!resolvedModel.equals(model)) {
             ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
@@ -154,6 +158,7 @@ public class RelayController {
         String tokenKey = extractTokenKey(authHeader);
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "";
+        FailureLogContext.initialize(request, model, RelayProtocol.OPENAI);
         if (model.isEmpty()) {
             throw new BusinessException(400, "请求缺少 model 参数", "Missing model parameter");
         }
@@ -192,6 +197,7 @@ public class RelayController {
         String tokenKey = extractTokenKey(authHeader);
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.hasNonNull("model") ? jsonBody.get("model").asText() : "";
+        FailureLogContext.initialize(request, model, RelayProtocol.OPENAI);
         if (model.isEmpty()) {
             throw new BusinessException(400, "请求缺少 model 参数", "Missing model parameter");
         }
@@ -214,8 +220,9 @@ public class RelayController {
             @RequestPart("file") org.springframework.web.multipart.MultipartFile file,
             @RequestParam org.springframework.util.MultiValueMap<String, String> formFields,
             HttpServletRequest request) throws IOException {
-        String tokenKey = extractTokenKey(authHeader);
         String model = formFields.getFirst("model");
+        FailureLogContext.initialize(request, model, RelayProtocol.OPENAI);
+        String tokenKey = extractTokenKey(authHeader);
         if (model == null || model.isBlank()) {
             throw new BusinessException(400, "请求缺少 model 参数", "Missing model parameter");
         }
@@ -290,6 +297,7 @@ public class RelayController {
                                         @RequestBody String requestBody,
                                         HttpServletRequest request,
                                         HttpServletResponse response) throws IOException {
+        FailureLogContext.initialize(request, model, RelayProtocol.GEMINI);
         String tokenKey = extractTokenKey(authHeader);
         if (passthroughRelayService.tryPassthroughForModel(requestBody, model, request, response)) return null;
         String resolvedModel = relayService.resolveModelName(model);
@@ -314,6 +322,7 @@ public class RelayController {
                                               @RequestBody String requestBody,
                                               HttpServletRequest request,
                                               HttpServletResponse response) throws IOException {
+        FailureLogContext.initialize(request, model, RelayProtocol.GEMINI);
         String tokenKey = extractTokenKey(authHeader);
         if (passthroughRelayService.tryPassthroughForModel(requestBody, model, request, response)) return null;
         String resolvedModel = relayService.resolveModelName(model);
@@ -347,6 +356,7 @@ public class RelayController {
                                     HttpServletResponse response) throws IOException {
         if (passthroughRelayService.tryPassthrough(requestBody, request, response)) return null;
         String model = passthroughRelayService.extractTopLevelModel(requestBody);
+        FailureLogContext.initialize(request, model, RelayProtocol.OPENAI);
         throw new BusinessException(404, "模型不存在: " + model, "Model not found: " + model);
     }
 
@@ -366,6 +376,7 @@ public class RelayController {
         String tokenKey = extractTokenKey(authHeader);
         JsonNode jsonBody = objectMapper.readTree(requestBody);
         String model = jsonBody.has("model") ? jsonBody.get("model").asText() : "";
+        FailureLogContext.initialize(request, model, RelayProtocol.OPENAI);
 
         // 将 displayName 转换为实际模型名
         String resolvedModel = relayService.resolveModelName(model);

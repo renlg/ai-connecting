@@ -8,6 +8,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -20,6 +23,9 @@ import java.util.ArrayList;
 public class RelayProtocolAdapter {
 
     private final ObjectMapper objectMapper;
+
+    @Autowired(required = false)
+    private FailureLogService failureLogService;
 
     public UnifiedRelayRequest adaptRequest(RelayProtocol protocol, String path, String body, String pathModel) {
         try {
@@ -140,6 +146,7 @@ public class RelayProtocolAdapter {
 
     public void writeError(RelayProtocol protocol, HttpServletResponse response, int status,
                            String message, boolean upstream) throws IOException {
+        recordDirectFailure(status, message);
         response.setStatus(status);
         response.setCharacterEncoding("UTF-8");
         response.setContentType("application/json;charset=UTF-8");
@@ -199,6 +206,7 @@ public class RelayProtocolAdapter {
 
     public void writeSseError(RelayProtocol protocol, HttpServletResponse response, int status,
                               String message, boolean upstream) throws IOException {
+        recordDirectFailure(status, message);
         response.setCharacterEncoding("UTF-8");
         var writer = response.getWriter();
         if (protocol != RelayProtocol.GEMINI) writer.write("event: error\n");
@@ -206,6 +214,14 @@ public class RelayProtocolAdapter {
         writer.write(objectMapper.writeValueAsString(errorEnvelope(protocol, status, message, upstream)));
         writer.write("\n\n");
         writer.flush();
+    }
+
+    private void recordDirectFailure(int status, String message) {
+        if (failureLogService == null) return;
+        var attributes = RequestContextHolder.getRequestAttributes();
+        if (attributes instanceof ServletRequestAttributes servlet) {
+            failureLogService.record(servlet.getRequest(), status, message, null);
+        }
     }
 
     /** Synthetic lifecycle prefix is needed only when a non-Claude upstream is exposed as Claude. */

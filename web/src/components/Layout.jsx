@@ -4,7 +4,7 @@ import { Layout, Menu, Avatar, Dropdown, Space, theme, Modal, Input, message, Al
 import {
   DashboardOutlined, ApiOutlined, KeyOutlined,
   UserOutlined, TeamOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
-  RobotOutlined, GiftOutlined, CopyOutlined
+  RobotOutlined, GiftOutlined, CopyOutlined, BugOutlined
 } from '@ant-design/icons'
 import { redeemCoupon, getLatestAnnouncements, getInviteCode } from '../api'
 
@@ -68,6 +68,7 @@ export default function AppLayout() {
       { key: '/users', icon: <TeamOutlined />, label: '用户管理' },
       { key: '/coupons', icon: <GiftOutlined />, label: '积分券管理' },
       { key: '/announcements', icon: <DashboardOutlined />, label: '公告管理' },
+      { key: '/failure-logs', icon: <BugOutlined />, label: '失败日志' },
     ] : []),
     { key: '/profile', icon: <UserOutlined />, label: '个人中心' },
   ]

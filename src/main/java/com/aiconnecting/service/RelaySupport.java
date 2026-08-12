@@ -513,6 +513,7 @@ public class RelaySupport {
 
     /** @param readTimeoutMs 覆盖默认 120s 读超时（毫秒），语义同 {@link #forwardRequest(Channel, String, String, Long)} */
     HttpURLConnection createSseConnection(Channel channel, String path, String requestBody, Long readTimeoutMs) throws IOException {
+        captureChannelModel(requestBody);
         String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
         log.info("流式请求: url={}, channel={}", maskApiKey(url), channel.getId());
         java.net.URL urlObj = new java.net.URL(url);
@@ -607,6 +608,7 @@ public class RelaySupport {
      *                       超时使用，避免固定 120s 超时叠加多次尝试导致总耗时远超预算；为 null 时使用默认超时
      */
     String forwardRequest(Channel channel, String path, String requestBody, Long readTimeoutMs) {
+        captureChannelModel(requestBody);
         String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
 
         RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
@@ -623,6 +625,7 @@ public class RelaySupport {
 
             if (!response.isSuccessful()) {
                 log.error("Upstream API error: {} - {}", response.code(), responseBody);
+                FailureLogContext.setChannelError(response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
                         "Upstream API error: " + responseBody, responseBody,
                         parseRetryAfterSeconds(response, responseBody));
@@ -655,6 +658,7 @@ public class RelaySupport {
             String responseBody = response.body() != null ? response.body().string() : "";
             if (!response.isSuccessful()) {
                 log.error("Upstream API error: {} - {}", response.code(), responseBody);
+                FailureLogContext.setChannelError(response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
                         "Upstream API error: " + responseBody, responseBody,
                         parseRetryAfterSeconds(response, responseBody));
@@ -683,6 +687,7 @@ public class RelaySupport {
 
     /** @param readTimeoutMs 覆盖默认读超时（毫秒），语义同 {@link #forwardRequest(Channel, String, String, Long)} */
     BinaryResponse forwardBinaryRequest(Channel channel, String path, String requestBody, Long readTimeoutMs) {
+        captureChannelModel(requestBody);
         String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
         RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
         Request.Builder requestBuilder = new Request.Builder()
@@ -725,6 +730,7 @@ public class RelaySupport {
             if (!response.isSuccessful()) {
                 String error = new String(bytes, StandardCharsets.UTF_8);
                 log.error("Upstream API error: {} - {}", response.code(), error);
+                FailureLogContext.setChannelError(response.code(), error);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + error,
                         "Upstream API error: " + error, error, parseRetryAfterSeconds(response, error));
             }
@@ -763,6 +769,7 @@ public class RelaySupport {
 
     /** @param readTimeoutMs remaining model-group wall-clock budget, or null for the normal timeout */
     String forwardClaudeRequest(Channel channel, String requestBody, Long readTimeoutMs) {
+        captureChannelModel(requestBody);
         if (isChannelRateLimited(channel)) {
             throw new BusinessException(429, "请求过于频繁，请稍后重试", "Too many requests, please try again later");
         }
@@ -780,6 +787,7 @@ public class RelaySupport {
             String responseBody = response.body() != null ? response.body().string() : "";
             if (!response.isSuccessful()) {
                 log.error("Claude upstream API error: {} - {}", response.code(), responseBody);
+                FailureLogContext.setChannelError(response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
                         "Upstream API error: " + responseBody, responseBody,
                         parseRetryAfterSeconds(response, responseBody));
@@ -811,6 +819,7 @@ public class RelaySupport {
         } catch (Exception e) {
             log.warn("解析 Gemini 请求 model 失败，使用默认值");
         }
+        FailureLogContext.setChannelModel(model);
 
         String url = channel.getBaseUrl().replaceAll("/+$", "")
                 + "/v1/models/" + model + ":generateContent";
@@ -826,6 +835,7 @@ public class RelaySupport {
             String responseBody = response.body() != null ? response.body().string() : "";
             if (!response.isSuccessful()) {
                 log.error("Gemini upstream API error: {} - {}", response.code(), responseBody);
+                FailureLogContext.setChannelError(response.code(), responseBody);
                 throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
                         "Upstream API error: " + responseBody, responseBody,
                         parseRetryAfterSeconds(response, responseBody));
@@ -858,6 +868,18 @@ public class RelaySupport {
         seconds = parseEpochSeconds(rateLimitReset);
         if (seconds != null) return seconds;
         return parseJsonResetHint(responseBody);
+    }
+
+    private void captureChannelModel(String requestBody) {
+        if (requestBody == null || requestBody.isBlank()) return;
+        try {
+            JsonNode body = objectMapper.readTree(requestBody);
+            if (body.hasNonNull("model")) {
+                FailureLogContext.setChannelModel(body.get("model").asText());
+            }
+        } catch (Exception ignored) {
+            // Request validation owns malformed JSON handling; failure logging must never affect it.
+        }
     }
 
     private static Long parseRetryAfterValue(String value) {

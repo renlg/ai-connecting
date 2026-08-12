@@ -11,6 +11,7 @@ import Models from './pages/Models'
 import ModelGroups from './pages/ModelGroups'
 import Coupons from './pages/Coupons'
 import Announcements from './pages/Announcements'
+import FailureLogs from './pages/FailureLogs'
 import NotFound from './pages/NotFound'
 
 function PrivateRoute({ children }) {
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="model-groups" element={<ModelGroups />} />
           <Route path="coupons" element={<Coupons />} />
           <Route path="announcements" element={<Announcements />} />
+          <Route path="failure-logs" element={<FailureLogs />} />
           <Route path="*" element={<NotFound />} />
         </Route>
         <Route path="*" element={<NotFound />} />
