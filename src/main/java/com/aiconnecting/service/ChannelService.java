@@ -1204,7 +1204,7 @@ public class ChannelService {
         validateBaseUrlForSsrf(baseUrl);
 
         if ("gemini".equalsIgnoreCase(type)) {
-            String url = baseUrl.replaceAll("/+$", "") + "/v1beta/models?key=" + apiKey;
+            String url = OpenAiUrlUtils.modelsUrl(baseUrl, "v1beta") + "?key=" + apiKey;
             Request.Builder reqBuilder = new Request.Builder().url(url).get();
             try (Response response = httpClient.newCall(reqBuilder.build()).execute()) {
                 if (!response.isSuccessful()) {
@@ -1235,7 +1235,7 @@ public class ChannelService {
             }
         }
 
-        String url = baseUrl.replaceAll("/+$", "") + "/v1/models";
+        String url = OpenAiUrlUtils.modelsUrl(baseUrl);
         Request.Builder reqBuilder = new Request.Builder().url(url).get();
 
         // 根据渠道类型设置认证头

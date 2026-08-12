@@ -18,4 +18,24 @@ class OpenAiUrlUtilsTest {
     void buildsChatCompletionsUrl(String baseUrl, String expected) {
         assertEquals(expected, OpenAiUrlUtils.chatCompletionsUrl(baseUrl));
     }
+
+    @ParameterizedTest
+    @CsvSource({
+            "https://api.example.com, https://api.example.com/v1/models",
+            "https://api.example.com/v1, https://api.example.com/v1/models",
+            "https://open.bigmodel.cn/api/paas/v4/, https://open.bigmodel.cn/api/paas/v4/models"
+    })
+    void buildsModelsUrl(String baseUrl, String expected) {
+        assertEquals(expected, OpenAiUrlUtils.modelsUrl(baseUrl));
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "https://generativelanguage.googleapis.com, https://generativelanguage.googleapis.com/v1beta/models",
+            "https://generativelanguage.googleapis.com/v1beta/, https://generativelanguage.googleapis.com/v1beta/models",
+            "https://generativelanguage.googleapis.com/v4/, https://generativelanguage.googleapis.com/v4/models"
+    })
+    void buildsGeminiModelsUrl(String baseUrl, String expected) {
+        assertEquals(expected, OpenAiUrlUtils.modelsUrl(baseUrl, "v1beta"));
+    }
 }

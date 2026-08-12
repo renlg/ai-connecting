@@ -119,18 +119,18 @@ public class ChannelProbeTask {
 
         Request.Builder reqBuilder = new Request.Builder().get();
         boolean isOpenaiType = false;
-        String base = channel.getBaseUrl().replaceAll("/+$", "");
 
         if ("gemini".equalsIgnoreCase(channel.getType())) {
             // Gemini 使用 v1beta/models 端点，密钥通过 query 参数传递，不使用 Authorization 头
-            reqBuilder.url(base + "/v1beta/models?key=" + channel.getApiKey());
+            reqBuilder.url(OpenAiUrlUtils.modelsUrl(channel.getBaseUrl(), "v1beta")
+                    + "?key=" + channel.getApiKey());
         } else if ("claude".equalsIgnoreCase(channel.getType()) || "anthropic".equalsIgnoreCase(channel.getType())) {
-            reqBuilder.url(base + "/v1/models");
+            reqBuilder.url(OpenAiUrlUtils.modelsUrl(channel.getBaseUrl()));
             reqBuilder.addHeader("x-api-key", channel.getApiKey());
             reqBuilder.addHeader("anthropic-version", "2023-06-01");
         } else {
             isOpenaiType = true;
-            reqBuilder.url(base + "/v1/models");
+            reqBuilder.url(OpenAiUrlUtils.modelsUrl(channel.getBaseUrl()));
             reqBuilder.addHeader("Authorization", "Bearer " + channel.getApiKey());
         }
 
