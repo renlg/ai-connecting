@@ -7,6 +7,8 @@ import java.util.List;
 
 public interface CouponRedemptionLogRepository extends JpaRepository<CouponRedemptionLog, Long> {
 
+    boolean existsByCouponIdAndUserId(Long couponId, Long userId);
+
     long countByUserIdAndRedeemedAtBetween(Long userId, LocalDateTime start, LocalDateTime end);
 
     List<CouponRedemptionLog> findByCouponIdOrderByRedeemedAtDesc(Long couponId);

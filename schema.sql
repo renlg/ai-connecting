@@ -170,8 +170,13 @@ CREATE TABLE IF NOT EXISTS "coupon_redemption_logs" (
     id INTEGER PRIMARY KEY,
     coupon_id BIGINT NOT NULL,
     user_id BIGINT NOT NULL,
-    redeemed_at TIMESTAMP NOT NULL
+    redeemed_at TIMESTAMP NOT NULL,
+    CONSTRAINT uk_coupon_redemption_coupon_user UNIQUE (coupon_id, user_id)
 );
+
+-- 为存量 SQLite 数据库补齐约束；SQLite 3.26+ 支持 IF NOT EXISTS。
+CREATE UNIQUE INDEX IF NOT EXISTS uk_coupon_redemption_coupon_user
+    ON coupon_redemption_logs (coupon_id, user_id);
 
 -- 操作日志表（管理后台审计日志）
 CREATE TABLE IF NOT EXISTS "operation_logs" (

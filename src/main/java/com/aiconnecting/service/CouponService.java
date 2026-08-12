@@ -10,6 +10,7 @@ import com.aiconnecting.repository.CouponRedemptionLogRepository;
 import com.aiconnecting.repository.CouponRepository;
 import com.aiconnecting.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +34,9 @@ public class CouponService {
 
     private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final String ALREADY_REDEEMED_MESSAGE = "该兑换码已使用过";
+    private static final String ALREADY_REDEEMED_MESSAGE_EN =
+            "This coupon code has already been redeemed by this user";
 
     public Coupon generateCoupon(User admin, BigDecimal credits, Integer maxUses, LocalDateTime expiryDate) {
         if (!"admin".equalsIgnoreCase(admin.getRole())) {
@@ -64,6 +68,11 @@ public class CouponService {
             throw new BusinessException("该兑换码已被禁用", "This redemption code is disabled");
         }
 
+        // 友好路径：在变更兑换次数和积分前拒绝同一用户重复兑换。
+        if (redemptionLogRepository.existsByCouponIdAndUserId(coupon.getId(), user.getId())) {
+            throw alreadyRedeemedException();
+        }
+
         if (coupon.getUsedCount() >= coupon.getMaxUses()) {
             throw new BusinessException("该兑换码已达到使用次数上限", "This redemption code has reached its usage limit");
         }
@@ -80,6 +89,18 @@ public class CouponService {
             throw new BusinessException("今日兑换次数已达上限", "Today’s redemption limit has been reached");
         }
 
+        // 先用唯一约束抢占 (coupon_id, user_id)。并发请求中只有一个能成功；flush 让约束异常
+        // 在本事务内被捕获并翻译，后续 used_count/credits 变更尚未发生。
+        CouponRedemptionLog log = CouponRedemptionLog.builder()
+                .userId(user.getId())
+                .couponId(coupon.getId())
+                .build();
+        try {
+            redemptionLogRepository.saveAndFlush(log);
+        } catch (DataIntegrityViolationException e) {
+            throw alreadyRedeemedException(e);
+        }
+
         // 原子递增使用次数（WHERE 条件保证不超限，返回 0 表示已达上限）
         int affected = couponRepository.incrementUsedCount(coupon.getId());
         if (affected == 0) {
@@ -91,13 +112,6 @@ public class CouponService {
 
         userRepository.addCredits(user.getId(), coupon.getCredits());
         cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + user.getId());
-
-        // 记录兑换日志
-        CouponRedemptionLog log = CouponRedemptionLog.builder()
-                .userId(user.getId())
-                .couponId(coupon.getId())
-                .build();
-        redemptionLogRepository.save(log);
 
         return updated;
     }
@@ -145,5 +159,13 @@ public class CouponService {
             sb.append(CHARS.charAt(RANDOM.nextInt(CHARS.length())));
         }
         return sb.toString();
+    }
+
+    private BusinessException alreadyRedeemedException() {
+        return new BusinessException(ALREADY_REDEEMED_MESSAGE, ALREADY_REDEEMED_MESSAGE_EN);
+    }
+
+    private BusinessException alreadyRedeemedException(DataIntegrityViolationException cause) {
+        return new BusinessException(400, ALREADY_REDEEMED_MESSAGE, ALREADY_REDEEMED_MESSAGE_EN, cause);
     }
 }

@@ -221,7 +221,8 @@ CREATE TABLE IF NOT EXISTS coupon_redemption_logs (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT NOT NULL,
     coupon_id BIGINT NOT NULL,
-    redeemed_at DATETIME(6) NOT NULL
+    redeemed_at DATETIME(6) NOT NULL,
+    UNIQUE KEY uk_coupon_redemption_coupon_user (coupon_id, user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 操作日志表（管理后台审计日志）

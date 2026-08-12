@@ -8,7 +8,10 @@ import java.time.LocalDateTime;
  * 积分券兑换记录
  */
 @Entity
-@Table(name = "coupon_redemption_logs")
+@Table(name = "coupon_redemption_logs",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_coupon_redemption_coupon_user",
+                columnNames = {"coupon_id", "user_id"}))
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
