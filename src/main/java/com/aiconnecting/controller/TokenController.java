@@ -404,6 +404,8 @@ public class TokenController {
                         .map(ModelGroupService.MemberView::modelConfig)
                         .filter(model -> model.getStatus() != null && model.getStatus() == 1)
                         .filter(model -> isAdmin || !Boolean.TRUE.equals(model.getAdminOnly()))
+                        .filter(model -> isAdmin || com.aiconnecting.common.LevelUtils.isAllowed(
+                                model.getSupportedLevels(), user.getLevel()))
                         .count();
                 if (availableMembers == 0) continue;
                 Map<String, Object> item = new LinkedHashMap<>();

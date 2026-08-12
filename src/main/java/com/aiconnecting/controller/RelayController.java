@@ -251,7 +251,7 @@ public class RelayController {
             if (!isAdmin && !com.aiconnecting.common.LevelUtils.isAllowed(group.getSupportedLevels(), tokenUser.getLevel())) {
                 continue;
             }
-            if (!modelGroupRoutingService.hasAvailableMember(group, isAdmin)) {
+            if (!modelGroupRoutingService.hasAvailableMember(group, isAdmin, tokenUser.getLevel())) {
                 continue;
             }
             Map<String, Object> modelObj = new LinkedHashMap<>();

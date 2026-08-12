@@ -56,6 +56,11 @@ public class User {
     @Column(unique = true, length = 16)
     private String inviteCode;
 
+    /** 普通用户的邀请码是否已被使用；5 级管理员邀请码不受此字段限制 */
+    @Builder.Default
+    @Column(nullable = false, columnDefinition = "BOOLEAN DEFAULT FALSE")
+    private Boolean inviteCodeUsed = false;
+
     /** 用户等级: 1-5，决定可使用哪些渠道 */
     @Column(nullable = false)
     private Integer level;
@@ -75,6 +80,7 @@ public class User {
         if (credits == null) credits = BigDecimal.ZERO;
         if (status == null) status = 1;
         if (level == null) level = 1;
+        if (inviteCodeUsed == null) inviteCodeUsed = false;
     }
 
     @PreUpdate

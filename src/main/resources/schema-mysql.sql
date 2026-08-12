@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
     used_quota BIGINT NOT NULL,
     credits DECIMAL(19,4) NOT NULL DEFAULT 0,
     invite_code VARCHAR(16),
+    invite_code_used BOOLEAN NOT NULL DEFAULT FALSE,
     level INT NOT NULL DEFAULT 1,
     created_at DATETIME(6) NOT NULL,
     updated_at DATETIME(6),

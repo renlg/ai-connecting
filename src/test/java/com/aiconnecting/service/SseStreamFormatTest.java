@@ -1,16 +1,9 @@
 package com.aiconnecting.service;
 
-import com.sun.net.httpserver.HttpServer;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import java.io.*;
-import java.net.InetSocketAddress;
-import java.net.URL;
-import java.net.HttpURLConnection;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -18,28 +11,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * SSE 流式转发格式测试
- * 用本地 HTTP 服务器模拟上游 API 的 SSE 响应，
+ * 用内存字符流模拟上游 API 的 SSE 响应，
  * 验证 RelayService 转发给客户端的 SSE 格式是否正确。
  */
 class SseStreamFormatTest {
-
-    private HttpServer mockUpstreamServer;
-    private int port;
-
-    @BeforeEach
-    void startMockServer() throws IOException {
-        mockUpstreamServer = HttpServer.create(new InetSocketAddress(0), 0);
-        port = mockUpstreamServer.getAddress().getPort();
-        mockUpstreamServer.setExecutor(null);
-        mockUpstreamServer.start();
-    }
-
-    @AfterEach
-    void stopMockServer() {
-        if (mockUpstreamServer != null) {
-            mockUpstreamServer.stop(0);
-        }
-    }
 
     /**
      * 测试1: 验证上游标准 SSE 格式经过 readLine + write 转发后的输出
@@ -61,34 +36,13 @@ class SseStreamFormatTest {
                 "data: [DONE]\n" +
                 "\n";
 
-        mockUpstreamServer.createContext("/v1/chat/completions", exchange -> {
-            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
-            exchange.sendResponseHeaders(200, 0);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(upstreamSse.getBytes(StandardCharsets.UTF_8));
-                os.flush();
-            }
-            exchange.close();
-        });
-
         // 模拟 RelayService 的流式转发逻辑
         MockHttpServletResponse mockResponse = new MockHttpServletResponse();
         mockResponse.setContentType("text/event-stream");
         mockResponse.setCharacterEncoding("UTF-8");
 
-        java.net.URL urlObj = new java.net.URL("http://localhost:" + port + "/v1/chat/completions");
-        HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Connection", "close");
-        conn.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
-        conn.getOutputStream().flush();
-
-        assertEquals(200, conn.getResponseCode());
-
         // 使用与 RelayService 相同的逻辑读取和写入
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = upstream(upstreamSse)) {
             var writer = mockResponse.getWriter();
             String line;
             while ((line = reader.readLine()) != null) {
@@ -101,8 +55,6 @@ class SseStreamFormatTest {
                 writer.flush();
             }
         }
-        conn.disconnect();
-
         String output = mockResponse.getContentAsString();
         System.out.println("=== OpenAI SSE 输出 (可见转义) ===");
         System.out.println(output.replace("\n", "\\n\n"));
@@ -147,32 +99,11 @@ class SseStreamFormatTest {
                 "data: {\"type\":\"message_stop\"}\n" +
                 "\n";
 
-        mockUpstreamServer.createContext("/v1/messages", exchange -> {
-            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
-            exchange.sendResponseHeaders(200, 0);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(upstreamSse.getBytes(StandardCharsets.UTF_8));
-                os.flush();
-            }
-            exchange.close();
-        });
-
         MockHttpServletResponse mockResponse = new MockHttpServletResponse();
         mockResponse.setContentType("text/event-stream");
         mockResponse.setCharacterEncoding("UTF-8");
 
-        java.net.URL urlObj = new java.net.URL("http://localhost:" + port + "/v1/messages");
-        HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Connection", "close");
-        conn.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
-        conn.getOutputStream().flush();
-
-        assertEquals(200, conn.getResponseCode());
-
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = upstream(upstreamSse)) {
             var writer = mockResponse.getWriter();
             String line;
             while ((line = reader.readLine()) != null) {
@@ -185,8 +116,6 @@ class SseStreamFormatTest {
                 writer.flush();
             }
         }
-        conn.disconnect();
-
         String output = mockResponse.getContentAsString();
         System.out.println("=== Claude SSE 输出 (可见转义) ===");
         System.out.println(output.replace("\n", "\\n\n"));
@@ -226,28 +155,9 @@ class SseStreamFormatTest {
                 "data: [DONE]\n" +
                 "\n";
 
-        mockUpstreamServer.createContext("/old", exchange -> {
-            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
-            exchange.sendResponseHeaders(200, 0);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(upstreamSse.getBytes(StandardCharsets.UTF_8));
-                os.flush();
-            }
-            exchange.close();
-        });
-
         // 旧逻辑: 每行都 write(line + "\n\n")
         MockHttpServletResponse oldResponse = new MockHttpServletResponse();
-        java.net.URL urlObj = new java.net.URL("http://localhost:" + port + "/old");
-        HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Connection", "close");
-        conn.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
-        conn.getOutputStream().flush();
-
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = upstream(upstreamSse)) {
             var writer = oldResponse.getWriter();
             String line;
             while ((line = reader.readLine()) != null) {
@@ -257,8 +167,6 @@ class SseStreamFormatTest {
                 writer.flush();
             }
         }
-        conn.disconnect();
-
         String oldOutput = oldResponse.getContentAsString();
         System.out.println("=== 旧逻辑输出 (可见转义) ===");
         System.out.println(oldOutput.replace("\n", "\\n\n"));
@@ -293,28 +201,9 @@ class SseStreamFormatTest {
                 "data: [DONE]\n" +
                 "\n";
 
-        mockUpstreamServer.createContext("/new", exchange -> {
-            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
-            exchange.sendResponseHeaders(200, 0);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(upstreamSse.getBytes(StandardCharsets.UTF_8));
-                os.flush();
-            }
-            exchange.close();
-        });
-
         // 新逻辑
         MockHttpServletResponse newResponse = new MockHttpServletResponse();
-        java.net.URL urlObj = new java.net.URL("http://localhost:" + port + "/new");
-        HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Connection", "close");
-        conn.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
-        conn.getOutputStream().flush();
-
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = upstream(upstreamSse)) {
             var writer = newResponse.getWriter();
             String line;
             while ((line = reader.readLine()) != null) {
@@ -328,8 +217,6 @@ class SseStreamFormatTest {
                 writer.flush();
             }
         }
-        conn.disconnect();
-
         String newOutput = newResponse.getContentAsString();
         System.out.println("=== 新逻辑输出 (可见转义) ===");
         System.out.println(newOutput.replace("\n", "\\n\n"));
@@ -364,28 +251,9 @@ class SseStreamFormatTest {
                 "data: [DONE]\n" +
                 "\n";
 
-        mockUpstreamServer.createContext("/es", exchange -> {
-            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
-            exchange.sendResponseHeaders(200, 0);
-            try (OutputStream os = exchange.getResponseBody()) {
-                os.write(upstreamSse.getBytes(StandardCharsets.UTF_8));
-                os.flush();
-            }
-            exchange.close();
-        });
-
         // 用新逻辑转发
         MockHttpServletResponse response = new MockHttpServletResponse();
-        java.net.URL urlObj = new java.net.URL("http://localhost:" + port + "/es");
-        HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Connection", "close");
-        conn.getOutputStream().write("{}".getBytes(StandardCharsets.UTF_8));
-        conn.getOutputStream().flush();
-
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = upstream(upstreamSse)) {
             var writer = response.getWriter();
             String line;
             while ((line = reader.readLine()) != null) {
@@ -398,8 +266,6 @@ class SseStreamFormatTest {
                 writer.flush();
             }
         }
-        conn.disconnect();
-
         String output = response.getContentAsString();
 
         // 模拟 EventSource 解析: 按 \n\n 分割事件，每个事件内找 data: 行
@@ -423,5 +289,9 @@ class SseStreamFormatTest {
         assertTrue(parsedDataLines.get(0).contains("\"A\""), "第1个data应包含A");
         assertTrue(parsedDataLines.get(1).contains("\"B\""), "第2个data应包含B");
         assertEquals("[DONE]", parsedDataLines.get(2), "最后data应是[DONE]");
+    }
+
+    private BufferedReader upstream(String content) {
+        return new BufferedReader(new StringReader(content));
     }
 }

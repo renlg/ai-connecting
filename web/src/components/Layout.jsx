@@ -22,6 +22,8 @@ export default function AppLayout() {
   const [selectedAnnouncement, setSelectedAnnouncement] = useState(null)
   const [inviteCodeModalOpen, setInviteCodeModalOpen] = useState(false)
   const [inviteCode, setInviteCode] = useState('')
+  const [inviteCodeUnlimited, setInviteCodeUnlimited] = useState(false)
+  const [inviteCodeUsed, setInviteCodeUsed] = useState(false)
   const [inviteCodeLoading, setInviteCodeLoading] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
@@ -109,6 +111,8 @@ export default function AppLayout() {
       const res = await getInviteCode()
       if (res.code === 200) {
         setInviteCode(res.data.inviteCode)
+        setInviteCodeUnlimited(Boolean(res.data.unlimited))
+        setInviteCodeUsed(Boolean(res.data.used))
       }
     } catch (err) {
       message.error(err?.message || '获取邀请码失败')
@@ -245,7 +249,9 @@ export default function AppLayout() {
         width={400}
       >
         <div style={{ textAlign: 'center', padding: '20px 0' }}>
-          <p style={{ marginBottom: 16, color: '#666' }}>分享你的邀请码，邀请好友注册使用</p>
+          <p style={{ marginBottom: 16, color: '#666' }}>
+            {inviteCodeUnlimited ? '管理员邀请码，可无限次使用' : '普通邀请码，仅限成功邀请 1 人'}
+          </p>
           {inviteCodeLoading ? (
             <p>加载中...</p>
           ) : (
@@ -258,11 +264,16 @@ export default function AppLayout() {
               gap: 12,
             }}>
               <Text strong style={{ fontSize: 24, letterSpacing: 2 }}>{inviteCode}</Text>
-              <CopyOutlined
-                style={{ fontSize: 20, cursor: 'pointer', color: '#1890ff' }}
-                onClick={copyInviteCode}
-              />
+              {!inviteCodeUsed && (
+                <CopyOutlined
+                  style={{ fontSize: 20, cursor: 'pointer', color: '#1890ff' }}
+                  onClick={copyInviteCode}
+                />
+              )}
             </div>
+          )}
+          {!inviteCodeLoading && inviteCodeUsed && (
+            <Alert style={{ marginTop: 16 }} type="info" showIcon message="该邀请码已使用" />
           )}
         </div>
       </Modal>

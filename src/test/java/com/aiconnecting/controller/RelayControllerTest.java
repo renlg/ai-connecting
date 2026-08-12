@@ -193,7 +193,7 @@ class RelayControllerTest {
     }
 
     @Test
-    void chatCompletions_streamingValidationError_returnsSseWithoutTraceId() throws Exception {
+    void chatCompletions_streamingModelNotFound_returnsJson404WithoutTraceId() throws Exception {
         when(relayService.resolveModelName("free1"))
                 .thenThrow(new BusinessException(404, "模型不存在: free1", "Model not found: free1"));
 
@@ -204,9 +204,57 @@ class RelayControllerTest {
                         .accept(MediaType.TEXT_EVENT_STREAM)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isOk())
-                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
-                .andExpect(content().string("event: error\ndata: {\"error\":{\"message\":\"Model not found: free1\"}}\n\n"));
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message").value("Model not found: free1"))
+                .andExpect(jsonPath("$.traceId").doesNotExist());
+    }
+
+    @Test
+    void chatCompletions_directGroupUnsupportedLevel_returnsModelNotFoundShape() throws Exception {
+        when(relayService.resolveModelName("bailian-good")).thenReturn("bailian-good");
+        when(relayService.relayRequest(eq("sk-level-one"), eq("/v1/chat/completions"),
+                anyString(), eq("bailian-good"), any()))
+                .thenThrow(new BusinessException(404,
+                        "模型组不存在或未启用: bailian-good",
+                        "Model group not found or disabled: bailian-good"));
+
+        String body = "{\"model\":\"bailian-good\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}";
+
+        mockMvc.perform(post("/v1/chat/completions")
+                        .header("Authorization", "Bearer sk-level-one")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message")
+                        .value("Model group not found or disabled: bailian-good"))
+                .andExpect(jsonPath("$.traceId").doesNotExist());
+    }
+
+    @Test
+    void chatCompletions_streamingDirectGroupUnsupportedLevel_returnsSameJson404Shape() throws Exception {
+        when(relayService.resolveModelName("bailian-good")).thenReturn("bailian-good");
+        doThrow(new BusinessException(404,
+                "模型组不存在或未启用: bailian-good",
+                "Model group not found or disabled: bailian-good"))
+                .when(relayService).relayStreamRequest(eq("sk-level-one"), eq("/v1/chat/completions"),
+                        anyString(), eq("bailian-good"), any(), any());
+
+        String body = "{\"model\":\"bailian-good\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}";
+
+        mockMvc.perform(post("/v1/chat/completions")
+                        .header("Authorization", "Bearer sk-level-one")
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value(404))
+                .andExpect(jsonPath("$.message")
+                        .value("Model group not found or disabled: bailian-good"))
+                .andExpect(jsonPath("$.traceId").doesNotExist());
     }
 
     @Test

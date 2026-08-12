@@ -1,9 +1,11 @@
 package com.aiconnecting.common;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,11 +18,15 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.stream.Collectors;
 
 @RestControllerAdvice
+@RequiredArgsConstructor
 @Slf4j
 public class GlobalExceptionHandler {
+
+    private final ObjectMapper objectMapper;
 
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e, HttpServletRequest request,
@@ -29,6 +35,20 @@ public class GlobalExceptionHandler {
         // 终端用户中转接口（/v1/**）：真实上游错误隐藏细节，仅返回通用错误 + traceId；
         // 本地业务错误（模型不存在、Token 无效、余额不足等）返回具体错误信息；
         // 管理后台/自测接口（/api/**，如渠道测试）继续返回详细错误
+        // 请求尚未建立 SSE 响应时，本地 404 必须保留标准 HTTP 状态与 JSON 错误体；
+        // 这使流式请求的模型/模型组权限拒绝与非流式请求不可区分。
+        if (isSseRequest(request) && e.getCode() == 404 && !e.isUpstreamResponse()) {
+            String message = e.getEnglishMessage() != null
+                    ? e.getEnglishMessage() : SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE;
+            response.setStatus(HttpStatus.NOT_FOUND.value());
+            response.setContentType("application/json");
+            response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+            objectMapper.writeValue(response.getWriter(), ApiResponse.<Void>builder()
+                    .code(e.getCode())
+                    .message(message)
+                    .build());
+            return null;
+        }
         if (isSseRequest(request)) {
             if (!response.isCommitted()) {
                 SseUtils.setSseHeaders(response);

@@ -196,7 +196,9 @@ public class ModelGroupFailoverExecutor {
         String groupName = group.getName();
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
-        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
+        checkGroupLevel(group, ctx.userLevel(), isAdmin);
+        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
+                group, isAdmin, ctx.userLevel());
         if (candidates.isEmpty()) {
             throw new BusinessException(503, "模型组无可用成员: " + groupName,
                     "No available members in model group: " + groupName);
@@ -331,7 +333,9 @@ public class ModelGroupFailoverExecutor {
         String groupName = group.getName();
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
-        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
+        checkGroupLevel(group, ctx.userLevel(), isAdmin);
+        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
+                group, isAdmin, ctx.userLevel());
         if (candidates.isEmpty()) {
             RelayServiceUtils.writeOpenAiError(httpResponse, 503,
                     SseUtils.clientErrorMessage("模型组无可用成员: " + groupName,
@@ -521,12 +525,14 @@ public class ModelGroupFailoverExecutor {
                                     HttpServletRequest httpRequest) {
         ModelGroup group = requireGroup(groupName, "image");
         RelaySupport.RelayContext ctx = support.prepareGroupContext(tokenKey, groupName);
-        checkGroupAdminOnly(group, "admin".equals(ctx.user().getRole()));
+        boolean isAdmin = "admin".equals(ctx.user().getRole());
+        checkGroupAdminOnly(group, isAdmin);
+        checkGroupLevel(group, ctx.userLevel(), isAdmin);
         RelaySupport.MediaParams params = support.parseMediaParams(requestBody);
         BigDecimal creditCost = billingService.calculateImageCreditCost(group, params.size(), params.n());
 
-        boolean isAdmin = "admin".equals(ctx.user().getRole());
-        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
+        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
+                group, isAdmin, ctx.userLevel());
         if (candidates.isEmpty()) {
             throw new BusinessException(503, "模型组无可用成员: " + groupName,
                     "No available members in model group: " + groupName);
@@ -570,7 +576,9 @@ public class ModelGroupFailoverExecutor {
     void relayAudioSpeechWithContext(RelaySupport.RelayContext ctx, ModelGroup group, String requestBody,
                                      HttpServletRequest httpRequest, HttpServletResponse httpResponse) throws IOException {
         String groupName = group.getName();
-        checkGroupAdminOnly(group, "admin".equals(ctx.user().getRole()));
+        boolean isAdmin = "admin".equals(ctx.user().getRole());
+        checkGroupAdminOnly(group, isAdmin);
+        checkGroupLevel(group, ctx.userLevel(), isAdmin);
         JsonNode body = support.objectMapper.readTree(requestBody);
         if (!body.isObject()) {
             throw new BusinessException(400, "请求体必须是 JSON 对象", "Request body must be a JSON object");
@@ -594,8 +602,8 @@ public class ModelGroupFailoverExecutor {
         upstreamBody.remove("duration");
         upstreamBody.remove("seconds");
 
-        boolean isAdmin = "admin".equals(ctx.user().getRole());
-        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
+        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
+                group, isAdmin, ctx.userLevel());
         if (candidates.isEmpty()) {
             throw new BusinessException(503, "模型组无可用成员: " + groupName,
                     "No available members in model group: " + groupName);
@@ -650,9 +658,11 @@ public class ModelGroupFailoverExecutor {
                                                                       HttpServletRequest httpRequest) {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
+        checkGroupLevel(group, ctx.userLevel(), isAdmin);
         BigDecimal creditCost = billingService.calculateAudioCreditCost(group, quality, seconds);
         RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
-        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
+        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
+                group, isAdmin, ctx.userLevel());
         if (candidates.isEmpty()) {
             support.refundMediaCharge(ctx, charge);
             throw new BusinessException(503, "模型组无可用成员: " + group.getName(),
@@ -756,13 +766,15 @@ public class ModelGroupFailoverExecutor {
                                     HttpServletRequest httpRequest) {
         ModelGroup group = requireGroup(groupName, "video");
         RelaySupport.RelayContext ctx = support.prepareGroupContext(tokenKey, groupName);
-        checkGroupAdminOnly(group, "admin".equals(ctx.user().getRole()));
+        boolean isAdmin = "admin".equals(ctx.user().getRole());
+        checkGroupAdminOnly(group, isAdmin);
+        checkGroupLevel(group, ctx.userLevel(), isAdmin);
         RelaySupport.MediaParams params = support.parseMediaParams(requestBody);
         BigDecimal unitPrice = billingService.resolveVideoUnitPrice(group, params.size());
         BigDecimal creditCost = billingService.calculateVideoCreditCost(group, params.size(), params.durationSeconds());
 
-        boolean isAdmin = "admin".equals(ctx.user().getRole());
-        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(group, isAdmin);
+        List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
+                group, isAdmin, ctx.userLevel());
         if (candidates.isEmpty()) {
             throw new BusinessException(503, "模型组无可用成员: " + groupName,
                     "No available members in model group: " + groupName);

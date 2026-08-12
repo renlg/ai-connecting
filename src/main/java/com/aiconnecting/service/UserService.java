@@ -69,7 +69,14 @@ public class UserService {
 
     @PostConstruct
     public void initAdmin() {
-        if (userRepository.existsByUsername("admin")) {
+        User existingAdmin = userRepository.findByUsername("admin").orElse(null);
+        if (existingAdmin != null) {
+            if (!Integer.valueOf(5).equals(existingAdmin.getLevel())) {
+                existingAdmin.setLevel(5);
+                userRepository.save(existingAdmin);
+                cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + existingAdmin.getId());
+                log.info("admin 用户等级已校正为 5");
+            }
             log.info("admin 用户已存在，跳过初始化");
             return;
         }
@@ -81,6 +88,7 @@ public class UserService {
                 .quota(-1L)
                 .usedQuota(0L)
                 .status(1)
+                .level(5)
                 .build();
         try {
             User saved = userRepository.save(admin);
@@ -164,6 +172,7 @@ public class UserService {
         redisTemplate.delete("login_fail:" + username);
     }
 
+    @Transactional
     public User register(RegisterRequest request) {
         if (userRepository.existsByUsername(request.getUsername())) {
             throw new BusinessException("用户名已存在", "Username already exists");
@@ -173,8 +182,17 @@ public class UserService {
         if (request.getInviteCode() == null || request.getInviteCode().isBlank()) {
             throw new BusinessException("邀请码不能为空", "Invitation code cannot be empty");
         }
-        if (!userRepository.existsByInviteCode(request.getInviteCode().trim())) {
+        User inviter = userRepository.findByInviteCode(request.getInviteCode().trim())
+                .orElseThrow(() -> new BusinessException("邀请码无效", "Invalid invitation code"));
+        boolean adminInviteCode = Integer.valueOf(5).equals(inviter.getLevel());
+        if (!adminInviteCode && Boolean.TRUE.equals(inviter.getInviteCodeUsed())) {
+            throw new BusinessException("邀请码已被使用", "Invitation code has already been used");
+        }
+        if (inviter.getStatus() != 1) {
             throw new BusinessException("邀请码无效", "Invalid invitation code");
+        }
+        if (!adminInviteCode && userRepository.consumeInviteCode(inviter.getId()) == 0) {
+            throw new BusinessException("邀请码已被使用", "Invitation code has already been used");
         }
 
         User user = User.builder()
@@ -190,6 +208,9 @@ public class UserService {
                 .build();
 
         User saved = userRepository.save(user);
+        if (!adminInviteCode) {
+            cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + inviter.getId());
+        }
         cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + saved.getId());
         return saved;
     }
@@ -380,6 +401,17 @@ public class UserService {
     public String getInviteCode(Long userId) {
         User user = getById(userId);
         return user.getInviteCode();
+    }
+
+    /** 返回邀请码的使用规则和当前状态，供个人中心展示。 */
+    public Map<String, Object> getInviteCodeInfo(Long userId) {
+        User user = getById(userId);
+        boolean unlimited = Integer.valueOf(5).equals(user.getLevel());
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("inviteCode", user.getInviteCode());
+        result.put("unlimited", unlimited);
+        result.put("used", !unlimited && Boolean.TRUE.equals(user.getInviteCodeUsed()));
+        return result;
     }
 
     private static final String INVITE_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";

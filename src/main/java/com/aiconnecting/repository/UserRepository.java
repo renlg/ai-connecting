@@ -15,6 +15,12 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByInviteCode(String inviteCode);
     boolean existsByInviteCode(String inviteCode);
 
+    /** 原子消耗普通用户的邀请码，返回 0 表示已被其他注册请求消耗。 */
+    @Modifying
+    @Query("UPDATE User u SET u.inviteCodeUsed = true " +
+            "WHERE u.id = :userId AND u.level <> 5 AND (u.inviteCodeUsed = false OR u.inviteCodeUsed IS NULL)")
+    int consumeInviteCode(@Param("userId") Long userId);
+
     @Modifying
     @Query("UPDATE User u SET u.credits = CASE WHEN u.credits - :amount < 0 THEN 0 ELSE u.credits - :amount END WHERE u.id = :userId")
     void deductCredits(@Param("userId") Long userId, @Param("amount") BigDecimal amount);

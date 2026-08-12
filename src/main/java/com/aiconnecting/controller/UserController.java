@@ -53,10 +53,7 @@ public class UserController {
     }
 
     @GetMapping("/invite-code")
-    public ApiResponse<Map<String, String>> getInviteCode(@AuthenticationPrincipal User user) {
-        String code = userService.getInviteCode(user.getId());
-        Map<String, String> result = new HashMap<>();
-        result.put("inviteCode", code);
-        return ApiResponse.success(result);
+    public ApiResponse<Map<String, Object>> getInviteCode(@AuthenticationPrincipal User user) {
+        return ApiResponse.success(userService.getInviteCodeInfo(user.getId()));
     }
 }

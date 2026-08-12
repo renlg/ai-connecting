@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.common.LevelUtils;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.ModelGroup;
 import lombok.RequiredArgsConstructor;
@@ -26,14 +27,16 @@ public class ModelGroupRoutingService {
     public record Candidate(ModelConfig modelConfig, String channelModelId) {}
 
     /**
-     * 返回该组按策略排序后的可用成员候选列表（已过滤禁用模型；非管理员额外过滤 adminOnly 成员，
-     * 故障转移场景下不因转入组而向普通用户暴露仅管理员可用的成员模型）
+     * 返回该组按策略排序后的可用成员候选列表（已过滤禁用模型；非管理员额外过滤 adminOnly
+     * 以及 supportedLevels 不包含当前用户等级的成员）。故障转移场景下不因转入组而向普通用户
+     * 暴露无权使用的成员模型。
      */
-    public List<Candidate> resolveOrderedCandidates(ModelGroup group, boolean isAdmin) {
+    public List<Candidate> resolveOrderedCandidates(ModelGroup group, boolean isAdmin, Integer userLevel) {
         List<ModelGroupService.MemberView> views = modelGroupService.listMemberViews(group.getId());
         List<ModelGroupService.MemberView> eligible = views.stream()
                 .filter(v -> v.modelConfig().getStatus() != null && v.modelConfig().getStatus() == 1)
                 .filter(v -> isAdmin || !Boolean.TRUE.equals(v.modelConfig().getAdminOnly()))
+                .filter(v -> isAdmin || LevelUtils.isAllowed(v.modelConfig().getSupportedLevels(), userLevel))
                 .toList();
         if (eligible.isEmpty()) {
             return List.of();
@@ -51,8 +54,8 @@ public class ModelGroupRoutingService {
     }
 
     /** 该组是否至少有一个可用（启用状态）成员，供 /v1/models 与 token 模型列表判断组是否可展示 */
-    public boolean hasAvailableMember(ModelGroup group, boolean isAdmin) {
-        return !resolveOrderedCandidates(group, isAdmin).isEmpty();
+    public boolean hasAvailableMember(ModelGroup group, boolean isAdmin, Integer userLevel) {
+        return !resolveOrderedCandidates(group, isAdmin, userLevel).isEmpty();
     }
 
     private List<ModelGroupService.MemberView> rotate(Long groupId, List<ModelGroupService.MemberView> members) {
