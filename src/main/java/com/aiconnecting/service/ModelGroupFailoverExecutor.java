@@ -18,6 +18,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MultiValueMap;
+import okhttp3.Request;
+import okhttp3.Response;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -45,6 +47,7 @@ public class ModelGroupFailoverExecutor {
     private final UsageLogService usageLogService;
     private final VideoTaskRepository videoTaskRepository;
     private final VideoTaskUsageLogService videoTaskUsageLogService;
+    private final PassthroughRelayService passthroughRelayService;
 
     /** 总耗时预算（毫秒），介于业务约定的 120-150s 之间 */
     private static final long WALL_CLOCK_BUDGET_MS = 130_000L;
@@ -180,10 +183,15 @@ public class ModelGroupFailoverExecutor {
 
     public String relayRequest(String tokenKey, String path, String requestBody, String groupName,
                                HttpServletRequest httpRequest) {
+        return relayRequest(tokenKey, path, requestBody, groupName, httpRequest, null);
+    }
+
+    public String relayRequest(String tokenKey, String path, String requestBody, String groupName,
+                               HttpServletRequest httpRequest, HttpServletResponse httpResponse) {
         ModelGroup group = requireGroup(groupName, "text");
         RelaySupport.RelayContext ctx = support.prepareGroupContext(tokenKey, groupName);
         checkGroupAdminOnly(group, "admin".equals(ctx.user().getRole()));
-        return relayRequestWithContext(ctx, group, path, requestBody, httpRequest);
+        return relayRequestWithContext(ctx, group, path, requestBody, httpRequest, httpResponse);
     }
 
     /**
@@ -193,6 +201,12 @@ public class ModelGroupFailoverExecutor {
      */
     String relayRequestWithContext(RelaySupport.RelayContext ctx, ModelGroup group, String path,
                                    String requestBody, HttpServletRequest httpRequest) {
+        return relayRequestWithContext(ctx, group, path, requestBody, httpRequest, null);
+    }
+
+    String relayRequestWithContext(RelaySupport.RelayContext ctx, ModelGroup group, String path,
+                                   String requestBody, HttpServletRequest httpRequest,
+                                   HttpServletResponse httpResponse) {
         String groupName = group.getName();
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
@@ -236,12 +250,36 @@ public class ModelGroupFailoverExecutor {
             }
 
             String memberModel = candidate.modelConfig().getName();
-            String upstreamBody = rewriteModelField(requestBody, memberModel);
             attempts++;
             try {
-                String response;
                 long attemptTimeoutMs = remainingBudgetMs(deadline);
                 if (attemptTimeoutMs <= 0) break;
+                if (isCustomChannel(channel)) {
+                    if (httpResponse == null) {
+                        throw new BusinessException(500, "透传模型组请求缺少响应上下文",
+                                "Passthrough model-group request is missing its response context");
+                    }
+                    String upstreamModel = passthroughRelayService.mappedModel(channel, memberModel);
+                    String passthroughBody = passthroughRelayService.rewriteTopLevelModelVerbatim(
+                            requestBody, upstreamModel);
+                    Request upstreamRequest = passthroughRelayService.buildPassthroughRequest(
+                            channel, httpRequest, passthroughBody);
+                    Response upstreamResponse;
+                    try {
+                        upstreamResponse = passthroughRelayService.executePassthrough(upstreamRequest, attemptTimeoutMs);
+                    } catch (IOException connectionFailure) {
+                        throw new PassthroughConnectionException(connectionFailure);
+                    }
+                    if (copyGroupPassthroughResponse(ctx, group, channel, modelConfigId, upstreamModel,
+                            upstreamResponse, startTime, httpRequest, httpResponse, path)) {
+                        return null;
+                    }
+                    lastFailure = new BusinessException(502, "渠道连接失败", "Upstream connection failed");
+                    continue;
+                }
+
+                String response;
+                String upstreamBody = rewriteModelField(requestBody, memberModel);
                 if (support.isGeminiTypeChannel(channel)) {
                     String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(upstreamBody);
                     response = support.forwardGeminiRequest(channel, geminiBody, attemptTimeoutMs);
@@ -254,6 +292,14 @@ public class ModelGroupFailoverExecutor {
                 support.channelHealthTracker.recordSuccess(channel.getId());
                 modelHealthTracker.recordSuccess(channel.getId(), modelConfigId);
                 return response;
+            } catch (PassthroughConnectionException e) {
+                lastFailure = new BusinessException(502, "渠道连接失败: " + e.getCause().getMessage(),
+                        "Upstream connection failed: " + e.getCause().getMessage(), e.getCause());
+                log.warn("模型组 {} 透传成员 {} (渠道 {}) 连接失败 (尝试 {}/{}): {}",
+                        groupName, memberModel, channel.getId(), attempts, maxAttempts, e.getCause().getMessage());
+                support.channelHealthTracker.recordFailure(channel.getId(),
+                        ChannelHealthTracker.ErrorCategory.fromException(e.getCause()), e.getCause().getMessage());
+                if (remainingBudgetMs(deadline) <= 0) break;
             } catch (BusinessException e) {
                 lastFailure = e;
                 log.error("模型组 {} 成员 {} (渠道 {}) 请求失败 (尝试 {}/{}): {}",
@@ -268,6 +314,84 @@ public class ModelGroupFailoverExecutor {
         throw lastFailure != null
                 ? wrapFailure(lastFailure, exhaustedGroupMessage(groupName))
                 : new BusinessException(502, exhaustedGroupMessage(groupName), exhaustedGroupEnglishMessage(groupName));
+    }
+
+    private boolean isCustomChannel(Channel channel) {
+        return "custom".equalsIgnoreCase(channel.getType());
+    }
+
+    private boolean copyGroupPassthroughResponse(RelaySupport.RelayContext ctx, ModelGroup group,
+                                                 Channel channel, Long modelConfigId, String upstreamModel,
+                                                 Response upstreamResponse, long startTime,
+                                                 HttpServletRequest httpRequest,
+                                                 HttpServletResponse httpResponse, String path) {
+        try (upstreamResponse) {
+            PassthroughRelayService.UsageObserver observer = new PassthroughRelayService.UsageObserver(
+                    upstreamResponse.header("Content-Type"), support.objectMapper);
+            boolean completed = false;
+            try {
+                passthroughRelayService.copyUpstreamResponse(upstreamResponse, httpResponse, observer);
+                completed = true;
+            } catch (IOException streamFailure) {
+                if (!observer.bytesObserved() && !httpResponse.isCommitted()) {
+                    httpResponse.reset();
+                    support.channelHealthTracker.recordFailure(channel.getId(),
+                            ChannelHealthTracker.ErrorCategory.fromException(streamFailure), streamFailure.getMessage());
+                    return false;
+                }
+                log.warn("模型组透传响应流中断，已输出字节后不再切换: group={}, channel={}, path={}, error={}",
+                        group.getName(), channel.getId(), path, streamFailure.getMessage());
+            } finally {
+                if (completed || observer.bytesObserved()) {
+                    PassthroughRelayService.Usage usage = observer.finish();
+                    try {
+                        recordGroupPassthroughUsage(ctx.token(), channel, group, upstreamModel, usage,
+                                System.currentTimeMillis() - startTime, httpRequest, path);
+                    } catch (Exception billingError) {
+                        log.error("模型组透传用量记录失败（响应不受影响）: group={}, channel={}, model={}",
+                                group.getName(), channel.getId(), upstreamModel, billingError);
+                    }
+                }
+            }
+            if (upstreamResponse.isSuccessful()) {
+                support.channelHealthTracker.recordSuccess(channel.getId());
+                modelHealthTracker.recordSuccess(channel.getId(), modelConfigId);
+            } else {
+                support.channelHealthTracker.recordFailure(channel.getId(),
+                        ChannelHealthTracker.ErrorCategory.fromStatusCode(upstreamResponse.code()),
+                        "HTTP " + upstreamResponse.code());
+            }
+            return true;
+        }
+    }
+
+    private void recordGroupPassthroughUsage(Token token, Channel channel, ModelGroup group,
+                                             String actualModel, PassthroughRelayService.Usage usage,
+                                             long duration, HttpServletRequest httpRequest, String path) {
+        BigDecimal creditCost = billingService.calculateTextCreditCost(
+                group, usage.promptTokens(), usage.completionTokens(), usage.cachedTokens());
+        UsageLog usageLog = UsageLog.builder()
+                .tokenId(token.getId()).channelId(channel.getId())
+                .model(group.getName()).actualModel(actualModel)
+                .promptTokens(usage.promptTokens()).completionTokens(usage.completionTokens())
+                .totalTokens(usage.totalTokens()).promptTokensCacheHit(usage.cachedTokens())
+                .cachedTokensCacheCreation(usage.cacheCreationTokens())
+                .cachedTokensCacheRead(usage.cacheReadTokens())
+                .creditCost(creditCost).ip(support.getClientIp(httpRequest)).duration(duration)
+                .requestPath(path).build();
+        usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(),
+                usage.totalTokens(), token.getUserId());
+    }
+
+    private static final class PassthroughConnectionException extends RuntimeException {
+        private PassthroughConnectionException(IOException cause) {
+            super(cause);
+        }
+
+        @Override
+        public synchronized IOException getCause() {
+            return (IOException) super.getCause();
+        }
     }
 
     private void recordGroupTextUsage(Token token, Channel channel, ModelGroup group, String actualModel,
@@ -378,12 +502,43 @@ public class ModelGroupFailoverExecutor {
             }
 
             String memberModel = candidate.modelConfig().getName();
-            String modifiedBody = support.injectStreamOptions(rewriteModelField(requestBody, memberModel), path);
             attempts++;
 
-            HttpURLConnection conn;
             long attemptTimeoutMs = remainingBudgetMs(deadline);
             if (attemptTimeoutMs <= 0) break;
+
+            if (isCustomChannel(channel)) {
+                try {
+                    String upstreamModel = passthroughRelayService.mappedModel(channel, memberModel);
+                    String passthroughBody = passthroughRelayService.rewriteTopLevelModelVerbatim(
+                            requestBody, upstreamModel);
+                    Request upstreamRequest = passthroughRelayService.buildPassthroughRequest(
+                            channel, httpRequest, passthroughBody);
+                    Response upstreamResponse = passthroughRelayService.executePassthrough(
+                            upstreamRequest, attemptTimeoutMs);
+                    if (copyGroupPassthroughResponse(ctx, group, channel, modelConfigId, upstreamModel,
+                            upstreamResponse, startTime, httpRequest, httpResponse, path)) {
+                        return;
+                    }
+                    lastError = "上游响应在首字节前中断";
+                    lastErrorUpstream = true;
+                    continue;
+                } catch (BusinessException mappingError) {
+                    throw mappingError;
+                } catch (IOException connectionFailure) {
+                    lastError = connectionFailure.getMessage();
+                    lastErrorUpstream = true;
+                    support.channelHealthTracker.recordFailure(channel.getId(),
+                            ChannelHealthTracker.ErrorCategory.fromException(connectionFailure),
+                            connectionFailure.getMessage());
+                    if (remainingBudgetMs(deadline) <= 0) break;
+                    continue;
+                }
+            }
+
+            String modifiedBody = support.injectStreamOptions(rewriteModelField(requestBody, memberModel), path);
+
+            HttpURLConnection conn;
             try {
                 if (support.isGeminiTypeChannel(channel)) {
                     String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(modifiedBody);

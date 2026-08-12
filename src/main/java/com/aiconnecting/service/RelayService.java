@@ -31,10 +31,17 @@ public class RelayService {
 
     public String relayRequest(String tokenKey, String path, String requestBody,
                                String model, HttpServletRequest httpRequest) {
+        return relayRequest(tokenKey, path, requestBody, model, httpRequest, null);
+    }
+
+    public String relayRequest(String tokenKey, String path, String requestBody,
+                               String model, HttpServletRequest httpRequest,
+                               HttpServletResponse httpResponse) {
         if (isGroupModel(model)) {
-            return modelGroupFailoverExecutor.relayRequest(tokenKey, path, requestBody, model, httpRequest);
+            return modelGroupFailoverExecutor.relayRequest(
+                    tokenKey, path, requestBody, model, httpRequest, httpResponse);
         }
-        return openAiRelayService.relayRequest(tokenKey, path, requestBody, model, httpRequest);
+        return openAiRelayService.relayRequest(tokenKey, path, requestBody, model, httpRequest, httpResponse);
     }
 
     public void relayStreamRequest(String tokenKey, String path, String requestBody,

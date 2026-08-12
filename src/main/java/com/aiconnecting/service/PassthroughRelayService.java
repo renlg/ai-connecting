@@ -106,7 +106,7 @@ public class PassthroughRelayService {
 
             final Response upstreamResponse;
             try {
-                upstreamResponse = callFactory.newCall(upstreamRequest).execute();
+                upstreamResponse = executePassthrough(upstreamRequest);
             } catch (IOException e) {
                 lastConnectionFailure = e;
                 support.channelHealthTracker.recordFailure(channel.getId(),
@@ -258,7 +258,7 @@ public class PassthroughRelayService {
         }
     }
 
-    private String mappedModel(Channel channel, String canonicalModel) {
+    String mappedModel(Channel channel, String canonicalModel) {
         try {
             JsonNode mapping = objectMapper.readTree(channel.getModelMapping());
             JsonNode value = mapping != null ? mapping.get(canonicalModel) : null;
@@ -271,6 +271,16 @@ public class PassthroughRelayService {
         } catch (Exception e) {
             throw modelNotFound(canonicalModel);
         }
+    }
+
+    Response executePassthrough(Request request) throws IOException {
+        return callFactory.newCall(request).execute();
+    }
+
+    Response executePassthrough(Request request, long timeoutMs) throws IOException {
+        okhttp3.Call call = callFactory.newCall(request);
+        call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS);
+        return call.execute();
     }
 
     private String extractTokenKey(HttpServletRequest request) {
@@ -311,6 +321,7 @@ public class PassthroughRelayService {
         private final ByteArrayOutputStream pendingLine = new ByteArrayOutputStream();
         private final StringBuilder eventData = new StringBuilder();
         private Usage lastUsage = Usage.empty();
+        private long observedBytes;
 
         UsageObserver(String contentType, ObjectMapper mapper) {
             String normalized = contentType != null ? contentType.toLowerCase(Locale.ROOT) : "";
@@ -320,6 +331,7 @@ public class PassthroughRelayService {
         }
 
         void observe(byte[] bytes, int offset, int length) {
+            observedBytes += length;
             if (!sse) {
                 if (jsonResponse) json.write(bytes, offset, length);
                 return;
@@ -333,6 +345,10 @@ public class PassthroughRelayService {
                     pendingLine.write(bytes[i]);
                 }
             }
+        }
+
+        boolean bytesObserved() {
+            return observedBytes > 0;
         }
 
         Usage finish() {

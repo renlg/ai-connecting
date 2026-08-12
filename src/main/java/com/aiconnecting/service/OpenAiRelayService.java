@@ -66,6 +66,12 @@ public class OpenAiRelayService {
      */
     public String relayRequest(String tokenKey, String path, String requestBody,
                                String model, HttpServletRequest httpRequest) {
+        return relayRequest(tokenKey, path, requestBody, model, httpRequest, null);
+    }
+
+    public String relayRequest(String tokenKey, String path, String requestBody,
+                               String model, HttpServletRequest httpRequest,
+                               HttpServletResponse httpResponse) {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
         try {
             return relayRequestSingleModel(ctx, path, requestBody, model, httpRequest);
@@ -76,7 +82,8 @@ public class OpenAiRelayService {
                         ctx.modelConfig().getFallbackGroupId(), "text", "admin".equals(ctx.user().getRole()), ctx.userLevel());
                 if (fallbackGroup.isPresent()) {
                     log.warn("模型 {} 请求失败，转入故障转移组 {} 继续尝试: {}", model, fallbackGroup.get().getName(), e.getMessage());
-                    return modelGroupFailoverExecutor.relayRequestWithContext(ctx, fallbackGroup.get(), path, requestBody, httpRequest);
+                    return modelGroupFailoverExecutor.relayRequestWithContext(
+                            ctx, fallbackGroup.get(), path, requestBody, httpRequest, httpResponse);
                 }
             }
             throw e;

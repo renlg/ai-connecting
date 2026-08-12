@@ -18,6 +18,7 @@ import com.aiconnecting.service.UserService;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -82,6 +83,15 @@ class RelayControllerTest {
 
     @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @BeforeEach
+    void bridgeResponseAwareRelayOverloadToExistingStubs() {
+        lenient().when(relayService.relayRequest(
+                        anyString(), anyString(), anyString(), anyString(), any(), any()))
+                .thenAnswer(invocation -> relayService.relayRequest(
+                        invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
+                        invocation.getArgument(3), invocation.getArgument(4)));
+    }
 
     // ==================== Chat Completions ====================
 

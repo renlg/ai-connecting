@@ -379,7 +379,8 @@ public class RelayController {
             return null;
         }
 
-        String result = relayService.relayRequest(tokenKey, path, requestBody, model, request);
+        String result = relayService.relayRequest(tokenKey, path, requestBody, model, request, response);
+        if (result == null) return null;
         return objectMapper.readTree(result);
     }
 }
