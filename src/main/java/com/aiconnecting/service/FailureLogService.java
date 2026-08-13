@@ -51,7 +51,8 @@ public class FailureLogService {
     /** Copies all request data before dispatching, so servlet/request state is never read asynchronously. */
     public void record(HttpServletRequest request, int httpStatus, String userError, String channelError) {
         try {
-            if (request == null || request.getRequestURI() == null || !request.getRequestURI().startsWith("/v1/")) return;
+            if (request == null || request.getRequestURI() == null || !request.getRequestURI().startsWith("/v1/")
+                    || ("GET".equals(request.getMethod()) && request.getRequestURI().startsWith("/v1/models"))) return;
             synchronized (request) {
                 if (Boolean.TRUE.equals(request.getAttribute(FailureLogContext.RECORDED))) return;
                 request.setAttribute(FailureLogContext.RECORDED, Boolean.TRUE);
