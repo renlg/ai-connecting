@@ -417,6 +417,7 @@ public class UsageLogService {
                 return DashboardDailyStats.builder()
                         .dailyCredits(List.of())
                         .dailyTokensByModel(List.of())
+                        .dailyTokensByModelGroup(List.of())
                         .build();
             }
         }
@@ -444,6 +445,11 @@ public class UsageLogService {
         } else {
             tokenRows = usageLogRepository.findDailyTokenByModelByTokenIdsSince(tokenIds, since);
         }
+
+        // 模型组请求在 usage_logs.model 中记录公开组名，独立查询以免与单模型维度混合。
+        List<Object[]> modelGroupTokenRows = isAdmin
+                ? usageLogRepository.findDailyTokenByModelGroupSince(since)
+                : usageLogRepository.findDailyTokenByModelGroupByTokenIdsSince(tokenIds, since);
 
         // 每日按模型名统计积分消耗，再在服务层合并为按类型（text/image/video/audio）—— 用于每日消耗积分柱状图 tooltip
         List<Object[]> creditByModelRows = isAdmin
@@ -484,9 +490,25 @@ public class UsageLogService {
                 })
                 .toList();
 
+        List<DashboardDailyStats.DailyTokenByModelGroupStat> dailyTokensByModelGroup = modelGroupTokenRows.stream()
+                .map(row -> {
+                    long inputTokens = ((Number) row[2]).longValue();
+                    long cachedTokens = ((Number) row[3]).longValue();
+                    return DashboardDailyStats.DailyTokenByModelGroupStat.builder()
+                            .date((String) row[0])
+                            .displayName((String) row[1])
+                            .inputTokens(inputTokens)
+                            .cachedTokens(cachedTokens)
+                            .cacheMissTokens(inputTokens - cachedTokens)
+                            .totalTokens(((Number) row[4]).longValue())
+                            .build();
+                })
+                .toList();
+
         DashboardDailyStats stats = DashboardDailyStats.builder()
                 .dailyCredits(dailyCredits)
                 .dailyTokensByModel(dailyTokensByModel)
+                .dailyTokensByModelGroup(dailyTokensByModelGroup)
                 .build();
         CachedDailyStats fresh = new CachedDailyStats(stats, System.currentTimeMillis());
         if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.USAGE_STATS, usageGeneration)

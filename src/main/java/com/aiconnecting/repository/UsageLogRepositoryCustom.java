@@ -19,6 +19,10 @@ public interface UsageLogRepositoryCustom {
 
     List<Object[]> findDailyTokenByModelByTokenIdsSince(List<Long> tokenIds, LocalDateTime since);
 
+    List<Object[]> findDailyTokenByModelGroupSince(LocalDateTime since);
+
+    List<Object[]> findDailyTokenByModelGroupByTokenIdsSince(List<Long> tokenIds, LocalDateTime since);
+
     List<Object[]> findDailyCreditByModelSince(LocalDateTime since);
 
     List<Object[]> findDailyCreditByModelByTokenIdsSince(List<Long> tokenIds, LocalDateTime since);

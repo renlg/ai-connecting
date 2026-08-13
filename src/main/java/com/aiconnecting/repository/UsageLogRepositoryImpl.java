@@ -128,6 +128,42 @@ public class UsageLogRepositoryImpl implements UsageLogRepositoryCustom {
     }
 
     @Override
+    public List<Object[]> findDailyTokenByModelGroupSince(LocalDateTime since) {
+        boolean mysql = DbDialectUtil.isMysql(jdbcTemplate);
+        String sql = mysql
+                ? "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as date, model, "
+                        + "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) "
+                        + "FROM usage_logs WHERE created_at >= :since AND model IN (SELECT name FROM model_groups WHERE type = 'text') "
+                        + "GROUP BY date, model ORDER BY date ASC, model ASC"
+                : "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, "
+                        + "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) "
+                        + "FROM usage_logs WHERE created_at >= :since AND model IN (SELECT name FROM model_groups WHERE type = 'text') "
+                        + "GROUP BY date, model ORDER BY date ASC, model ASC";
+        MapSqlParameterSource params = new MapSqlParameterSource().addValue("since", sinceParam(mysql, since));
+        return query(sql, params);
+    }
+
+    @Override
+    public List<Object[]> findDailyTokenByModelGroupByTokenIdsSince(List<Long> tokenIds, LocalDateTime since) {
+        boolean mysql = DbDialectUtil.isMysql(jdbcTemplate);
+        String sql = mysql
+                ? "SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as date, model, "
+                        + "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) "
+                        + "FROM usage_logs WHERE token_id IN (:tokenIds) AND created_at >= :since "
+                        + "AND model IN (SELECT name FROM model_groups WHERE type = 'text') "
+                        + "GROUP BY date, model ORDER BY date ASC, model ASC"
+                : "SELECT DATE(datetime(created_at / 1000, 'unixepoch', '+8 hours')) as date, model, "
+                        + "COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(prompt_tokens_cache_hit), 0), COALESCE(SUM(total_tokens), 0) "
+                        + "FROM usage_logs WHERE token_id IN (:tokenIds) AND created_at >= :since "
+                        + "AND model IN (SELECT name FROM model_groups WHERE type = 'text') "
+                        + "GROUP BY date, model ORDER BY date ASC, model ASC";
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("tokenIds", tokenIds)
+                .addValue("since", sinceParam(mysql, since));
+        return query(sql, params);
+    }
+
+    @Override
     public List<Object[]> findDailyCreditByModelSince(LocalDateTime since) {
         boolean mysql = DbDialectUtil.isMysql(jdbcTemplate);
         String sql = mysql

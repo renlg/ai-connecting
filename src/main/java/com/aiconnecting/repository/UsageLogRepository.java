@@ -58,7 +58,7 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long>, Usage
             "AND model IN (SELECT name FROM model_configs WHERE type = 'text')", nativeQuery = true)
     List<Object[]> sumCacheTokensByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
-    // findDailyCreditCostByTokenIdsSince / findDailyTokenByModelSince / findDailyTokenByModelByTokenIdsSince
+    // findDailyCreditCostByTokenIdsSince / 按模型及模型组的每日 Token 查询
     // 同样使用 SQLite 专属的 datetime()/unixepoch 函数做按天分桶，已迁移到 UsageLogRepositoryImpl 按方言分支实现
 
     // 全局按模型名统计积分消耗（用于仪表盘"今日消耗积分"卡片 tooltip，按类型合并在服务层完成，

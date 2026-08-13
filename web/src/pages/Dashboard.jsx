@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Card, Row, Col, Statistic, Spin, message, Modal, Table, Tag, Segmented, Empty, Tooltip as AntTooltip } from 'antd'
 import { KeyOutlined, SendOutlined, NumberOutlined, DollarOutlined } from '@ant-design/icons'
 import { ApiOutlined, CloudServerOutlined, UserOutlined, WalletOutlined, StopOutlined } from '@ant-design/icons'
@@ -30,21 +30,50 @@ function CreditBarTooltip({ active, payload, label }) {
   )
 }
 
-function buildTokenChartData(data) {
-  if (!data || !data.dailyTokensByModel || data.dailyTokensByModel.length === 0) {
-    return { chartData: [], models: [] }
-  }
-  const models = [...new Set(data.dailyTokensByModel.map(d => d.displayName))]
-  const grouped = {}
-  data.dailyTokensByModel.forEach(item => {
-    if (!grouped[item.date]) grouped[item.date] = { date: item.date }
-    grouped[item.date][item.displayName + '_miss'] = item.cacheMissTokens
-    grouped[item.date][item.displayName + '_hit'] = item.cachedTokens
-  })
-  return {
-    chartData: Object.values(grouped).sort((a, b) => a.date.localeCompare(b.date)),
-    models,
-  }
+function DailyTokenCharts({ title, rows, loading, emptyText }) {
+  const names = [...new Set((rows || []).map(d => d.displayName))]
+  return (
+    <>
+      <h3 style={{ fontSize: 18, marginBottom: 12, marginTop: 32, color: '#595959', fontWeight: 600 }}>
+        {title}
+      </h3>
+      {loading ? (
+        <Spin style={{ display: 'block', margin: '40px auto' }} />
+      ) : names.length === 0 ? (
+        <Card style={{ borderRadius: 8 }}><Empty description={emptyText} /></Card>
+      ) : (
+        <Row gutter={[16, 16]}>
+          {names.map(displayName => {
+            const chartData = rows
+              .filter(d => d.displayName === displayName)
+              .map(d => ({ date: d.date, cacheMiss: d.cacheMissTokens, cacheHit: d.cachedTokens }))
+              .sort((a, b) => a.date.localeCompare(b.date))
+            return (
+              <Col xs={24} sm={24} md={12} key={displayName}>
+                <Card
+                  title={<span style={{ fontSize: 14 }}>{displayName}</span>}
+                  size="small"
+                  style={{ borderRadius: 8 }}
+                >
+                  <ResponsiveContainer width="100%" height={250}>
+                    <BarChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e1e0d9" />
+                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} />
+                      <Tooltip />
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      <Bar dataKey="cacheMiss" name="缓存未命中" fill={MISS_COLOR} stackId="a" barSize={20} />
+                      <Bar dataKey="cacheHit" name="缓存命中" fill={HIT_COLOR} stackId="a" barSize={20} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </Card>
+              </Col>
+            )
+          })}
+        </Row>
+      )}
+    </>
+  )
 }
 
 /** 每日统计按天数本地缓存的 TTL（毫秒），与后端每日统计缓存 TTL 保持一致量级 */
@@ -92,7 +121,6 @@ export default function Dashboard() {
     })
   }, [days])
 
-  const { chartData: tokenChartData, models } = useMemo(() => buildTokenChartData(dailyStats), [dailyStats])
   const creditChartData = dailyStats?.dailyCredits || []
 
   const handleBlockedClick = () => {
@@ -340,45 +368,19 @@ export default function Dashboard() {
         )}
       </Card>
 
-      {/* ── Section 5: 每日 Token 消耗（每个模型单独一个柱状图） ── */}
-      <h3 style={{ fontSize: 18, marginBottom: 12, marginTop: 32, color: '#595959', fontWeight: 600 }}>
-        🔤 每日 Token 消耗（按模型）
-      </h3>
-      {dailyStatsLoading ? (
-        <Spin style={{ display: 'block', margin: '40px auto' }} />
-      ) : models.length === 0 ? (
-        <Card style={{ borderRadius: 8 }}><Empty description="暂无 Token 数据" /></Card>
-      ) : (
-        <Row gutter={[16, 16]}>
-          {models.map(displayName => {
-            const rows = (dailyStats?.dailyTokensByModel || []).filter(d => d.displayName === displayName)
-            const modelData = rows
-              .map(d => ({ date: d.date, cacheMiss: d.cacheMissTokens, cacheHit: d.cachedTokens }))
-              .sort((a, b) => a.date.localeCompare(b.date))
-            return (
-              <Col xs={24} sm={24} md={12} key={displayName}>
-                <Card
-                  title={<span style={{ fontSize: 14 }}>{displayName}</span>}
-                  size="small"
-                  style={{ borderRadius: 8 }}
-                >
-                  <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={modelData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e1e0d9" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip />
-                      <Legend wrapperStyle={{ fontSize: 12 }} />
-                      <Bar dataKey="cacheMiss" name="缓存未命中" fill={MISS_COLOR} stackId="a" barSize={20} />
-                      <Bar dataKey="cacheHit" name="缓存命中" fill={HIT_COLOR} stackId="a" barSize={20} radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </Card>
-              </Col>
-            )
-          })}
-        </Row>
-      )}
+      {/* ── Section 5: 每日 Token 消耗（每个模型/模型组单独一个柱状图） ── */}
+      <DailyTokenCharts
+        title="🔤 每日 Token 消耗（按模型）"
+        rows={dailyStats?.dailyTokensByModel || []}
+        loading={dailyStatsLoading}
+        emptyText="暂无 Token 数据"
+      />
+      <DailyTokenCharts
+        title="🧩 每日 Token 消耗（按模型组）"
+        rows={dailyStats?.dailyTokensByModelGroup || []}
+        loading={dailyStatsLoading}
+        emptyText="暂无模型组 Token 数据"
+      />
 
       <Modal
         title="封禁渠道列表"
