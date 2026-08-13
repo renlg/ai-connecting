@@ -52,6 +52,30 @@ final class FailureClassifier {
         return new Classification(false, Kind.FAST_FAIL, null);
     }
 
+    /**
+     * Model groups fail over on every member failure. This deliberately does not change
+     * {@link #classify(BusinessException)}, which is also used by the single-model path.
+     */
+    static Classification classifyForGroup(BusinessException e) {
+        Classification classification = classify(e);
+        if (classification.kind() == Kind.FAST_FAIL) {
+            BusinessException upstream = findUpstreamResponse(e);
+            if (upstream != null && containsModelUnavailableCode(upstream.getUpstreamResponseBody())) {
+                return new Classification(true, Kind.MODEL_NOT_FOUND, classification.retryAfterSeconds());
+            }
+        }
+        return new Classification(true, classification.kind(), classification.retryAfterSeconds());
+    }
+
+    private static boolean containsModelUnavailableCode(String body) {
+        ParsedError parsed = parse(body);
+        if (parsed != null) {
+            return "modelnotopen".equals(parsed.code()) || "model_not_open".equals(parsed.code());
+        }
+        String normalized = normalize(body);
+        return normalized.contains("modelnotopen") || normalized.contains("model_not_open");
+    }
+
     static boolean isSwitchable(int code, String errorBody) {
         return classifyUpstream(code, errorBody, null).switchable();
     }

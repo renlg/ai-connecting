@@ -113,10 +113,6 @@ public class ModelGroupFailoverExecutor {
         return resolved;
     }
 
-    private boolean isFastFail(BusinessException e) {
-        return !FailureClassifier.isSwitchable(e);
-    }
-
     /**
      * 剩余总耗时预算（毫秒），作为本次尝试的读超时上限：固定 120s 读超时叠加多次尝试会让总耗时
      * 远超 {@link #WALL_CLOCK_BUDGET_MS}，因此每次尝试的超时必须收窄到"不超过剩余预算"
@@ -139,7 +135,7 @@ public class ModelGroupFailoverExecutor {
     }
 
     private void recordFailure(Channel channel, Long modelConfigId, BusinessException error) {
-        FailureClassifier.Classification classification = FailureClassifier.classify(error);
+        FailureClassifier.Classification classification = FailureClassifier.classifyForGroup(error);
         switch (classification.kind()) {
             case RATE_LIMIT -> modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
                     ModelHealthTracker.FailureType.RATE_LIMIT, classification.retryAfterSeconds());
@@ -147,9 +143,14 @@ public class ModelGroupFailoverExecutor {
                     ModelHealthTracker.FailureType.QUOTA, classification.retryAfterSeconds());
             case MODEL_NOT_FOUND -> modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
                     ModelHealthTracker.FailureType.MODEL_NOT_FOUND);
-            case CHANNEL -> support.channelHealthTracker.recordFailure(channel.getId(),
-                    ChannelHealthTracker.ErrorCategory.fromStatusCode(error.getCode()), error.getMessage());
-            case FAST_FAIL -> { }
+            case CHANNEL -> {
+                support.channelHealthTracker.recordFailure(channel.getId(),
+                        ChannelHealthTracker.ErrorCategory.fromStatusCode(error.getCode()), error.getMessage());
+                modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
+                        ModelHealthTracker.FailureType.MEMBER_FAILURE);
+            }
+            case FAST_FAIL -> modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
+                    ModelHealthTracker.FailureType.MEMBER_FAILURE);
         }
     }
 
@@ -307,6 +308,7 @@ public class ModelGroupFailoverExecutor {
                     } catch (IOException connectionFailure) {
                         throw new PassthroughConnectionException(connectionFailure);
                     }
+                    requireSuccessfulPassthrough(upstreamResponse);
                     if (copyGroupPassthroughResponse(ctx, group, channel, modelConfigId, upstreamModel,
                             upstreamResponse, startTime, httpRequest, httpResponse, path)) {
                         return null;
@@ -340,14 +342,13 @@ public class ModelGroupFailoverExecutor {
                         groupName, memberModel, channel.getId(), attempts, maxAttempts, e.getCause().getMessage());
                 support.channelHealthTracker.recordFailure(channel.getId(),
                         ChannelHealthTracker.ErrorCategory.fromException(e.getCause()), e.getCause().getMessage());
+                modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
+                        ModelHealthTracker.FailureType.MEMBER_FAILURE);
                 if (remainingBudgetMs(deadline) <= 0) break;
             } catch (BusinessException e) {
                 lastFailure = e;
                 log.error("模型组 {} 成员 {} (渠道 {}) 请求失败 (尝试 {}/{}): {}",
                         groupName, memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
-                if (isFastFail(e)) {
-                    throw e;
-                }
                 recordFailure(channel, modelConfigId, e);
                 if (remainingBudgetMs(deadline) <= 0) break;
             }
@@ -359,6 +360,23 @@ public class ModelGroupFailoverExecutor {
 
     private boolean isCustomChannel(Channel channel) {
         return "custom".equalsIgnoreCase(channel.getType());
+    }
+
+    private void requireSuccessfulPassthrough(Response response) {
+        if (response.isSuccessful()) {
+            return;
+        }
+        int code = response.code();
+        String body = "";
+        try (response) {
+            if (response.body() != null) {
+                body = response.body().string();
+            }
+        } catch (IOException e) {
+            log.warn("读取模型组透传错误响应失败: {}", e.getMessage());
+        }
+        FailureLogContext.setChannelError(code, body);
+        throw upstreamFailure(code, body, null);
     }
 
     private boolean copyGroupPassthroughResponse(RelaySupport.RelayContext ctx, ModelGroup group,
@@ -378,6 +396,8 @@ public class ModelGroupFailoverExecutor {
                     httpResponse.reset();
                     support.channelHealthTracker.recordFailure(channel.getId(),
                             ChannelHealthTracker.ErrorCategory.fromException(streamFailure), streamFailure.getMessage());
+                    modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
+                            ModelHealthTracker.FailureType.MEMBER_FAILURE);
                     return false;
                 }
                 log.warn("模型组透传响应流中断，已输出字节后不再切换: group={}, channel={}, path={}, error={}",
@@ -522,6 +542,7 @@ public class ModelGroupFailoverExecutor {
         long deadline = startTime + WALL_CLOCK_BUDGET_MS;
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
         String lastError = null;
+        int lastStatus = 502;
         boolean lastErrorUpstream = false;
         int attempts = 0;
         int spins = 0;
@@ -571,6 +592,7 @@ public class ModelGroupFailoverExecutor {
                             channel, httpRequest, passthroughBody, passthroughPath);
                     Response upstreamResponse = passthroughRelayService.executePassthrough(
                             upstreamRequest, attemptTimeoutMs);
+                    requireSuccessfulPassthrough(upstreamResponse);
                     if (copyGroupPassthroughResponse(ctx, group, channel, modelConfigId, upstreamModel,
                             upstreamResponse, startTime, httpRequest, httpResponse, path)) {
                         return;
@@ -578,14 +600,23 @@ public class ModelGroupFailoverExecutor {
                     lastError = "上游响应在首字节前中断";
                     lastErrorUpstream = true;
                     continue;
-                } catch (BusinessException mappingError) {
-                    throw mappingError;
+                } catch (BusinessException memberError) {
+                    lastError = memberError.getMessage();
+                    lastStatus = memberError.getCode();
+                    lastErrorUpstream = memberError.isUpstreamResponse();
+                    log.warn("模型组 {} 透传成员 {} (渠道 {}) 请求失败 (尝试 {}/{}): {}",
+                            groupName, memberModel, channel.getId(), attempts, maxAttempts, memberError.getMessage());
+                    recordFailure(channel, modelConfigId, memberError);
+                    if (remainingBudgetMs(deadline) <= 0) break;
+                    continue;
                 } catch (IOException connectionFailure) {
                     lastError = connectionFailure.getMessage();
                     lastErrorUpstream = true;
                     support.channelHealthTracker.recordFailure(channel.getId(),
                             ChannelHealthTracker.ErrorCategory.fromException(connectionFailure),
                             connectionFailure.getMessage());
+                    modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
+                            ModelHealthTracker.FailureType.MEMBER_FAILURE);
                     if (remainingBudgetMs(deadline) <= 0) break;
                     continue;
                 }
@@ -621,18 +652,13 @@ public class ModelGroupFailoverExecutor {
                             ? new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8) : "";
                     FailureLogContext.setChannelError(code, errorBody);
                     lastError = "HTTP " + code + " - " + errorBody;
+                    lastStatus = code;
                     lastErrorUpstream = true;
                     BusinessException upstreamError = upstreamFailure(code, errorBody,
                             RelaySupport.resolveCooldownSeconds(conn, errorBody));
                     log.warn("模型组 {} 成员 {} (渠道 {}) 上游返回 HTTP {}: {}",
                             groupName, memberModel, channel.getId(), code, truncate(errorBody));
                     conn.disconnect();
-                    if (!FailureClassifier.isSwitchable(upstreamError)) {
-                        adapter().writeError(request.protocol(), httpResponse, code,
-                                SseUtils.clientErrorMessage("上游返回错误: " + errorBody,
-                                        "Upstream returned an error: " + errorBody, true), true);
-                        return;
-                    }
                     recordFailure(channel, modelConfigId, upstreamError);
                     if (remainingBudgetMs(deadline) <= 0) break;
                     continue; // 首字节尚未发出，可以安全切换成员
@@ -691,7 +717,7 @@ public class ModelGroupFailoverExecutor {
         }
         if (!httpResponse.isCommitted()) {
             log.error("模型组 {} 流式请求所有成员均不可用，最后错误: {}", groupName, lastError);
-            adapter().writeError(request.protocol(), httpResponse, 502,
+            adapter().writeError(request.protocol(), httpResponse, lastStatus,
                     SseUtils.clientErrorMessage(exhaustedGroupMessage(groupName),
                             exhaustedGroupEnglishMessage(groupName), lastErrorUpstream), lastErrorUpstream);
         }
@@ -1008,10 +1034,6 @@ public class ModelGroupFailoverExecutor {
                 lastFailure = e;
                 log.error("模型组 {} 成员 {} (渠道 {}) 转写请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
-                if (isFastFail(e)) {
-                    support.refundMediaCharge(ctx, charge);
-                    throw e;
-                }
                 recordFailure(channel, modelConfigId, e);
                 if (remainingBudgetMs(deadline) <= 0) break;
             }
@@ -1211,9 +1233,6 @@ public class ModelGroupFailoverExecutor {
                 lastFailure = e;
                 log.error("模型组 {} 成员 {} (渠道 {}) 媒体请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
-                if (isFastFail(e)) {
-                    throw e;
-                }
                 recordFailure(channel, modelConfigId, e);
                 if (remainingBudgetMs(deadline) <= 0) break;
             } catch (RuntimeException e) {
@@ -1271,9 +1290,6 @@ public class ModelGroupFailoverExecutor {
                 lastFailure = e;
                 log.error("模型组 {} 成员 {} (渠道 {}) 二进制媒体请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
-                if (isFastFail(e)) {
-                    throw e;
-                }
                 recordFailure(channel, modelConfigId, e);
                 if (remainingBudgetMs(deadline) <= 0) break;
             } catch (RuntimeException e) {

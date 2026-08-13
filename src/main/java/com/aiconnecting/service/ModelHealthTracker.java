@@ -28,11 +28,13 @@ public class ModelHealthTracker {
     static final long QUOTA_COOLDOWN_MS = 60_000L;
     /** model_not_found 冷却 */
     static final long MODEL_NOT_FOUND_COOLDOWN_MS = 5 * 60_000L;
+    /** 其他成员级失败冷却，避免模型组在连续请求中反复选择同一失败成员 */
+    static final long MEMBER_FAILURE_COOLDOWN_MS = 30_000L;
 
     /** Redis key TTL 相对冷却时长的冗余秒数，避免刚好在冷却结束边界前 key 被系统提前清除 */
     private static final long TTL_SLACK_SECONDS = 60L;
 
-    public enum FailureType { RATE_LIMIT, QUOTA, MODEL_NOT_FOUND }
+    public enum FailureType { RATE_LIMIT, QUOTA, MODEL_NOT_FOUND, MEMBER_FAILURE }
 
     private record Key(Long channelId, Long modelConfigId) {}
 
@@ -77,6 +79,7 @@ public class ModelHealthTracker {
             case QUOTA -> (retryAfterSeconds != null && retryAfterSeconds > 0)
                     ? retryAfterSeconds * 1000L : QUOTA_COOLDOWN_MS;
             case MODEL_NOT_FOUND -> MODEL_NOT_FOUND_COOLDOWN_MS;
+            case MEMBER_FAILURE -> MEMBER_FAILURE_COOLDOWN_MS;
         };
         long until = System.currentTimeMillis() + cooldownMs;
 

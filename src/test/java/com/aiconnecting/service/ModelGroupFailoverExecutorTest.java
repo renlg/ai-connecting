@@ -70,7 +70,7 @@ class ModelGroupFailoverExecutorTest {
     void customMemberUsesMappedModelChannelAuthorizationAndVerbatimResponseWithGroupUsage() throws Exception {
         byte[] responseBytes = "{\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5},\"n\":1.00}"
                 .getBytes(StandardCharsets.UTF_8);
-        GroupFixture fixture = groupFixture("application/json", responseBytes, 418);
+        GroupFixture fixture = groupFixture("application/json", responseBytes, 200);
         MockHttpServletRequest request = request();
         MockHttpServletResponse response = new MockHttpServletResponse();
         String rawBody = "{ \"model\" : \"public-group\", \"temperature\":1.00 }";
@@ -85,7 +85,7 @@ class ModelGroupFailoverExecutorTest {
         assertThat(body.readUtf8()).isEqualTo(
                 "{ \"model\" : \"vendor-model\", \"temperature\":1.00 }");
         assertThat(sent.header("Authorization")).isEqualTo("Bearer channel-key");
-        assertThat(response.getStatus()).isEqualTo(418);
+        assertThat(response.getStatus()).isEqualTo(200);
         assertThat(response.getContentAsByteArray()).isEqualTo(responseBytes);
 
         org.mockito.ArgumentCaptor<com.aiconnecting.entity.UsageLog> usage =
@@ -233,6 +233,53 @@ class ModelGroupFailoverExecutorTest {
         verify(fixture.calls, never()).newCall(any());
     }
 
+    @Test
+    void fastFailModelNotOpenFromFirstMemberFailsOverToSecondMember() {
+        StandardGroupFixture fixture = standardGroupFixture();
+        BusinessException modelNotOpen = BusinessException.upstream(404,
+                "upstream error", "upstream error",
+                "{\"error\":{\"code\":\"ModelNotOpen\",\"message\":\"model is not open\"}}", null);
+        doThrow(modelNotOpen).when(fixture.support).forwardRequest(eq(fixture.firstChannel),
+                eq("/v1/chat/completions"), anyString(), anyLong());
+        doReturn("{\"usage\":{\"total_tokens\":0},\"result\":\"fallback\"}")
+                .when(fixture.support).forwardRequest(eq(fixture.secondChannel),
+                        eq("/v1/chat/completions"), anyString(), anyLong());
+
+        String result = fixture.executor.relayRequest("client-key", "/v1/chat/completions",
+                "{\"model\":\"public-group\"}", "public-group", request());
+
+        assertThat(result).contains("fallback");
+        verify(fixture.support).forwardRequest(eq(fixture.secondChannel),
+                eq("/v1/chat/completions"), eq("{\"model\":\"second-model\"}"), anyLong());
+        verify(fixture.modelHealth).recordFailure(91L, 11L,
+                ModelHealthTracker.FailureType.MODEL_NOT_FOUND);
+    }
+
+    @Test
+    void allFastFailMembersReturnLastErrorAfterAttemptsAreExhausted() {
+        StandardGroupFixture fixture = standardGroupFixture();
+        doThrow(BusinessException.upstream(404, "first", "first",
+                "{\"error\":{\"code\":\"ModelNotOpen\"}}", null))
+                .when(fixture.support).forwardRequest(eq(fixture.firstChannel),
+                        eq("/v1/chat/completions"), anyString(), anyLong());
+        doThrow(BusinessException.upstream(422, "second", "second",
+                "{\"error\":{\"code\":\"content_policy_violation\"}}", null))
+                .when(fixture.support).forwardRequest(eq(fixture.secondChannel),
+                        eq("/v1/chat/completions"), anyString(), anyLong());
+
+        assertThatThrownBy(() -> fixture.executor.relayRequest("client-key", "/v1/chat/completions",
+                "{\"model\":\"public-group\"}", "public-group", request()))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(422);
+                    assertThat(error.getMessage()).contains("所有成员均不可用");
+                    assertThat(error.isUpstreamResponse()).isTrue();
+                });
+        verify(fixture.support).forwardRequest(eq(fixture.firstChannel), anyString(), anyString(), anyLong());
+        verify(fixture.support).forwardRequest(eq(fixture.secondChannel), anyString(), anyString(), anyLong());
+        verify(fixture.modelHealth).recordFailure(92L, 12L,
+                ModelHealthTracker.FailureType.MEMBER_FAILURE);
+    }
+
     private MockHttpServletRequest request() {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/chat/completions");
         request.setContentType("application/json");
@@ -289,7 +336,48 @@ class ModelGroupFailoverExecutorTest {
         return new GroupFixture(executor, support, usageLogs, billing, calls, sentRequest, channel);
     }
 
+    private StandardGroupFixture standardGroupFixture() {
+        ChannelRouter router = mock(ChannelRouter.class);
+        ChannelHealthTracker channelHealth = mock(ChannelHealthTracker.class);
+        UsageLogService usageLogs = mock(UsageLogService.class);
+        RelaySupport support = spy(new RelaySupport(mock(ChannelService.class), router, channelHealth,
+                mock(TokenService.class), usageLogs, mock(ModelConfigService.class),
+                mock(ModelGroupService.class), mock(UserService.class), mock(VideoTaskUsageLogService.class)));
+        ModelGroupService groupService = mock(ModelGroupService.class);
+        ModelGroupRoutingService routing = mock(ModelGroupRoutingService.class);
+        ModelHealthTracker modelHealth = mock(ModelHealthTracker.class);
+        ModelGroup group = ModelGroup.builder().id(10L).name("public-group").type("text")
+                .strategy("priority").maxAttempts(2).enabled(true).build();
+        ModelConfig first = ModelConfig.builder().id(11L).name("first-model").status(1).build();
+        ModelConfig second = ModelConfig.builder().id(12L).name("second-model").status(1).build();
+        Channel firstChannel = Channel.builder().id(91L).type("openai").rateLimit(0).build();
+        Channel secondChannel = Channel.builder().id(92L).type("openai").rateLimit(0).build();
+        Token token = Token.builder().id(8L).userId(7L).build();
+        User user = User.builder().id(7L).role("user").level(1).build();
+
+        when(groupService.findByName("public-group")).thenReturn(Optional.of(group));
+        doReturn(new RelaySupport.RelayContext(token, null, 1, user, null))
+                .when(support).prepareGroupContext("client-key", "public-group");
+        when(routing.resolveOrderedCandidates(group, false, 1)).thenReturn(List.of(
+                new ModelGroupRoutingService.Candidate(first, "11"),
+                new ModelGroupRoutingService.Candidate(second, "12")));
+        when(router.selectChannel("11", Set.of(), 1)).thenReturn(firstChannel);
+        when(router.selectChannel("12", Set.of(), 1)).thenReturn(secondChannel);
+        doReturn(false).when(support).isChannelRateLimited(any(Channel.class));
+        when(modelHealth.isInCooldown(anyLong(), anyLong())).thenReturn(false);
+
+        ModelGroupFailoverExecutor executor = new ModelGroupFailoverExecutor(
+                support, groupService, routing, mock(ModelGroupBillingService.class), modelHealth, usageLogs,
+                mock(VideoTaskRepository.class), mock(VideoTaskUsageLogService.class),
+                mock(PassthroughRelayService.class));
+        return new StandardGroupFixture(executor, support, modelHealth, firstChannel, secondChannel);
+    }
+
     private record GroupFixture(ModelGroupFailoverExecutor executor, RelaySupport support,
                                 UsageLogService usageLogs, ModelGroupBillingService billing, Call.Factory calls,
                                 org.mockito.ArgumentCaptor<Request> sentRequest, Channel channel) {}
+
+    private record StandardGroupFixture(ModelGroupFailoverExecutor executor, RelaySupport support,
+                                        ModelHealthTracker modelHealth, Channel firstChannel,
+                                        Channel secondChannel) {}
 }
