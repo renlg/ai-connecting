@@ -645,17 +645,14 @@ public class RelaySupport {
     }
 
     private String upstreamUrl(String baseUrl, String path) {
-        if ("/v1/chat/completions".equals(path)) {
-            return OpenAiUrlUtils.chatCompletionsUrl(baseUrl);
-        }
-        return baseUrl.replaceAll("/+$", "") + path;
+        return OpenAiUrlUtils.endpointUrl(baseUrl, path);
     }
 
     /**
      * 以渠道自身凭据向上游转发 GET 请求（供视频任务状态轮询使用），不向客户端暴露渠道信息
      */
     String forwardGetRequest(Channel channel, String path) {
-        String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
+        String url = upstreamUrl(channel.getBaseUrl(), path);
 
         Request.Builder requestBuilder = new Request.Builder()
                 .url(url)
@@ -696,7 +693,7 @@ public class RelaySupport {
     /** @param readTimeoutMs 覆盖默认读超时（毫秒），语义同 {@link #forwardRequest(Channel, String, String, Long)} */
     BinaryResponse forwardBinaryRequest(Channel channel, String path, String requestBody, Long readTimeoutMs) {
         captureChannelModel(requestBody);
-        String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
+        String url = upstreamUrl(channel.getBaseUrl(), path);
         RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
         Request.Builder requestBuilder = new Request.Builder()
                 .url(url)
@@ -715,7 +712,7 @@ public class RelaySupport {
     }
 
     BinaryResponse forwardMultipartRequest(Channel channel, String path, MultipartBody multipartBody, Long timeoutMs) {
-        String url = channel.getBaseUrl().replaceAll("/+$", "") + path;
+        String url = upstreamUrl(channel.getBaseUrl(), path);
         Request.Builder requestBuilder = new Request.Builder()
                 .url(url)
                 .post(multipartBody);

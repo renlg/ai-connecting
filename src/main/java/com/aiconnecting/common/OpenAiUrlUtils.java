@@ -11,15 +11,25 @@ public final class OpenAiUrlUtils {
     }
 
     /**
+     * Builds an OpenAI-compatible endpoint URL. When the base URL already ends
+     * in a version segment, the conventional leading {@code /v1} is omitted
+     * from the endpoint path so the upstream version is preserved.
+     */
+    public static String endpointUrl(String baseUrl, String subPath) {
+        String base = baseUrl.replaceAll("/+$", "");
+        String path = subPath;
+        if (VERSION_SEGMENT.matcher(base).find() && path.matches("(?i)^/v1(?:/.*)?$")) {
+            path = path.substring(3);
+        }
+        return base + path;
+    }
+
+    /**
      * Builds the chat-completions endpoint without inserting {@code /v1} after an
      * upstream-specific version segment such as {@code /v1} or {@code /v4}.
      */
     public static String chatCompletionsUrl(String baseUrl) {
-        String base = baseUrl.replaceAll("/+$", "");
-        String path = VERSION_SEGMENT.matcher(base).find()
-                ? "/chat/completions"
-                : "/v1/chat/completions";
-        return base + path;
+        return endpointUrl(baseUrl, "/v1/chat/completions");
     }
 
     /**

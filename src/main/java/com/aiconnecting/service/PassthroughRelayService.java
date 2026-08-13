@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.OpenAiUrlUtils;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Token;
 import com.fasterxml.jackson.core.JsonParser;
@@ -268,8 +269,8 @@ public class PassthroughRelayService {
 
     public Request buildPassthroughRequest(Channel channel, HttpServletRequest originalRequest,
                                            String rewrittenBody, String overridePath) {
-        StringBuilder url = new StringBuilder(channel.getBaseUrl().replaceAll("/+$", ""))
-                .append(overridePath != null ? overridePath : originalRequest.getRequestURI());
+        String path = overridePath != null ? overridePath : originalRequest.getRequestURI();
+        StringBuilder url = new StringBuilder(OpenAiUrlUtils.endpointUrl(channel.getBaseUrl(), path));
         if (originalRequest.getQueryString() != null && !originalRequest.getQueryString().isEmpty()) {
             url.append(url.indexOf("?") >= 0 ? '&' : '?').append(originalRequest.getQueryString());
         }

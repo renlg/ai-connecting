@@ -69,6 +69,27 @@ class PassthroughRelayServiceTest {
     }
 
     @Test
+    void buildsRequestWithoutDuplicatingBaseUrlVersionSegment() {
+        Channel channel = Channel.builder().baseUrl("https://upstream.example/v1/").apiKey("secret").build();
+        MockHttpServletRequest servlet = new MockHttpServletRequest("POST", "/v1/images/edits");
+
+        Request request = service.buildPassthroughRequest(channel, servlet, "binary-safe-body");
+
+        assertEquals("https://upstream.example/v1/images/edits", request.url().toString());
+        assertEquals("binary-safe-body", new String(requestBodyBytes(request), StandardCharsets.UTF_8));
+    }
+
+    private byte[] requestBodyBytes(Request request) {
+        try {
+            okio.Buffer buffer = new okio.Buffer();
+            request.body().writeTo(buffer);
+            return buffer.readByteArray();
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    @Test
     void copiesUpstreamStatusHeadersAndBytesVerbatimAndObservesJsonUsage() throws Exception {
         byte[] bytes = "{\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":9}}"
                 .getBytes(StandardCharsets.UTF_8);

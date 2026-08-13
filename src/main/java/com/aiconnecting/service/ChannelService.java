@@ -895,7 +895,7 @@ public class ChannelService {
 
     private Request buildTestRequest(String baseUrl, String apiKey, String channelType,
                                      String path, String jsonBody, boolean get) {
-        Request.Builder builder = new Request.Builder().url(baseUrl.replaceAll("/+$", "") + path);
+        Request.Builder builder = new Request.Builder().url(OpenAiUrlUtils.endpointUrl(baseUrl, path));
         addAuthHeader(builder, apiKey, channelType);
         if (get) return builder.get().build();
         return builder.addHeader("Content-Type", "application/json")
