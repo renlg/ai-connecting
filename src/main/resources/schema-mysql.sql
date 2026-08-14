@@ -26,6 +26,28 @@ CREATE TABLE IF NOT EXISTS users (
     UNIQUE KEY uk_users_invite_code (invite_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- OAuth2 client registry. client_secret is plaintext for the current internal-only integration.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(100) NOT NULL,
+    client_secret VARCHAR(255) NOT NULL,
+    redirect_uri VARCHAR(1000) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at DATETIME(6) NOT NULL,
+    UNIQUE KEY uk_oauth_clients_client_id (client_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Short-lived, single-use OAuth2 authorization codes.
+CREATE TABLE IF NOT EXISTS oauth_codes (
+    code VARCHAR(64) PRIMARY KEY,
+    username VARCHAR(50) NOT NULL,
+    client_id VARCHAR(100) NOT NULL,
+    redirect_uri VARCHAR(1000) NOT NULL,
+    expires_at DATETIME(6) NOT NULL,
+    used BOOLEAN NOT NULL DEFAULT FALSE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Token 管理表
 CREATE TABLE IF NOT EXISTS tokens (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

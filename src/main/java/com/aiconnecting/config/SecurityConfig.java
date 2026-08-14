@@ -48,6 +48,7 @@ public class SecurityConfig {
                 // 因此必须将更具体的路径放在前面，更通用的路径放在后面
                 // 公开接口
                 .requestMatchers("/api/auth/**").permitAll()
+                .requestMatchers("/api/oauth/authorize", "/api/oauth/token", "/api/oauth/userinfo").permitAll()
                 .requestMatchers("/v1/chat/completions").permitAll()
                 .requestMatchers("/v1/completions").permitAll()
                 .requestMatchers("/v1/embeddings").permitAll()

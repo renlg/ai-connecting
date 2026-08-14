@@ -69,6 +69,11 @@ app:
   jwt:
     secret: ${JWT_SECRET}  # 必须通过环境变量设置，不提供默认值
     expiration: 86400000  # 24 hours in ms
+  oauth:
+    taiwei:
+      # Internal client registry currently stores this secret in plaintext; restrict database access accordingly.
+      secret: ${OAUTH_TAIWEI_SECRET:taiwei-secret-2026}
+      redirect-uri: ${OAUTH_TAIWEI_REDIRECT:http://127.0.0.1:8688/api/oauth/callback}
   admin:
     default-password: ${ADMIN_DEFAULT_PASSWORD}  # 必须通过环境变量设置
     reset-password: ${ADMIN_RESET_PASSWORD:}

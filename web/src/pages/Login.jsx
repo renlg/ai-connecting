@@ -10,6 +10,12 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
+  const oauthNext = () => {
+    const next = new URLSearchParams(window.location.search).get('next')
+    // Only honor the relay's own OAuth continuation path; avoid turning login into an open redirect.
+    return next?.startsWith('/api/oauth/authorize?') ? next : null
+  }
+
   const handleLogin = async (values) => {
     setLoading(true)
     try {
@@ -18,7 +24,12 @@ export default function Login() {
         localStorage.setItem('token', res.data.token)
         localStorage.setItem('user', JSON.stringify(res.data))
         message.success('登录成功')
-        navigate('/')
+        const next = oauthNext()
+        if (next) {
+          window.location.href = next
+        } else {
+          navigate('/')
+        }
       } else {
         message.error(res.message || '登录失败')
       }

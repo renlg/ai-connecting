@@ -7,11 +7,15 @@ import com.aiconnecting.dto.RegisterRequest;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 
@@ -27,8 +31,18 @@ public class AuthController {
     private String trustedProxies;
 
     @PostMapping("/login")
-    public ApiResponse<LoginResponse> login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpRequest) {
-        return ApiResponse.success(userService.login(request, getClientIp(httpRequest)));
+    public ApiResponse<LoginResponse> login(@Valid @RequestBody LoginRequest request,
+                                            HttpServletRequest httpRequest,
+                                            HttpServletResponse httpResponse) {
+        LoginResponse loginResponse = userService.login(request, getClientIp(httpRequest));
+        ResponseCookie tokenCookie = ResponseCookie.from("aic_token", loginResponse.getToken())
+                .httpOnly(true)
+                .sameSite("Lax")
+                .path("/")
+                .maxAge(Duration.ofDays(7))
+                .build();
+        httpResponse.addHeader(HttpHeaders.SET_COOKIE, tokenCookie.toString());
+        return ApiResponse.success(loginResponse);
     }
 
     /**
