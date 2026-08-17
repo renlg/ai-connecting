@@ -43,7 +43,7 @@ class CostServiceTest {
     }
 
     @Test
-    void csvHasUtf8BomEscapingAllRowsAndFourDecimalCost() {
+    void csvHasUtf8BomEscapingAllRowsAndRoundedIntegerCost() {
         CostAggregateRow row = CostAggregateRow.builder()
                 .channelName("渠道,一").model("upstream\"A")
                 .totalPromptTokens(10).totalCompletionTokens(2).requestCount(1)
@@ -54,7 +54,8 @@ class CostServiceTest {
         String csv = new String(bytes, StandardCharsets.UTF_8);
 
         assertThat(bytes).startsWith((byte) 0xEF, (byte) 0xBB, (byte) 0xBF);
-        assertThat(csv).contains("\"渠道,一\"", "\"upstream\"\"A\"", "\"1.2000\"")
+        assertThat(csv).contains("成本(积分)", "\"渠道,一\"", "\"upstream\"\"A\"", "\"1\"")
+                .doesNotContain("成本(积分/美元)", "\"1.2000\"")
                 .doesNotContain("实际上游模型");
     }
 

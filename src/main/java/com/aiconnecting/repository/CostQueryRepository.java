@@ -38,7 +38,7 @@ public class CostQueryRepository {
     public List<CostAggregateRow> findRows(LocalDateTime startTime, LocalDateTime endTime,
                                            Long channelId, String modelName, Integer page, Integer size) {
         MapSqlParameterSource params = params(startTime, endTime, channelId, modelName);
-        String sql = "SELECT ul.channel_id, MAX(c.name), " + DISPLAY_MODEL + ", "
+        String sql = "SELECT ul.channel_id, MAX(c.name) AS channel_name, " + DISPLAY_MODEL + ", "
                 + "COALESCE(SUM(ul.prompt_tokens), 0), COALESCE(SUM(ul.completion_tokens), 0), "
                 + "COALESCE(SUM(ul.cached_tokens_cache_creation), 0), "
                 + "COALESCE(SUM(ul.cached_tokens_cache_read), 0), COUNT(*), "
@@ -46,7 +46,7 @@ public class CostQueryRepository {
                 + "COALESCE(SUM(CASE WHEN ul.request_path LIKE '%videos%' THEN 1 ELSE 0 END), 0), "
                 + VIDEO_SECONDS + ", COALESCE(SUM(ul.credit_cost), 0) AS total_credit_cost "
                 + filter(channelId, modelName) + "GROUP BY ul.channel_id, " + DISPLAY_MODEL + " "
-                + "ORDER BY total_credit_cost DESC, ul.channel_id ASC, " + DISPLAY_MODEL + " ASC";
+                + "ORDER BY channel_name ASC";
         if (page != null && size != null) {
             sql += " LIMIT :limit OFFSET :offset";
             params.addValue("limit", size).addValue("offset", (long) page * size);

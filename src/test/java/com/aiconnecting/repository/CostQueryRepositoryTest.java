@@ -92,11 +92,34 @@ class CostQueryRepositoryTest {
                 .containsExactly("agnes-image-2.1-flash", "upstream-1", "video-upstream");
     }
 
+    @Test
+    void sortsAggregatedRowsByChannelNameInsteadOfCost() {
+        long createdAt = LocalDate.of(2026, 8, 10).atStartOfDay(ZoneId.of("Asia/Shanghai"))
+                .toInstant().toEpochMilli();
+        jdbc.update("INSERT INTO channels(id, name) VALUES (2, '渠道B')");
+        insertUsage(1, 2, "model-b", "model-b", 1, 1, 0, 0,
+                "1", "/v1/chat/completions", createdAt);
+        insertUsage(2, 1, "model-a", "model-a", 1, 1, 0, 0,
+                "100", "/v1/chat/completions", createdAt);
+
+        List<CostAggregateRow> rows = repository.findRows(
+                LocalDate.of(2026, 8, 10).atStartOfDay(),
+                LocalDate.of(2026, 8, 10).atTime(23, 59, 59, 999_000_000), null, null, null, null);
+
+        assertThat(rows).extracting(CostAggregateRow::getChannelName)
+                .containsExactly("渠道A", "渠道B");
+    }
+
     private void insertUsage(long id, String model, String actualModel, int prompt, int completion,
+                             int cacheCreation, int cacheRead, String cost, String path, long createdAt) {
+        insertUsage(id, 1, model, actualModel, prompt, completion, cacheCreation, cacheRead, cost, path, createdAt);
+    }
+
+    private void insertUsage(long id, long channelId, String model, String actualModel, int prompt, int completion,
                              int cacheCreation, int cacheRead, String cost, String path, long createdAt) {
         jdbc.update("INSERT INTO usage_logs(id, channel_id, model, actual_model, prompt_tokens, completion_tokens, "
                         + "cached_tokens_cache_creation, cached_tokens_cache_read, credit_cost, request_path, created_at) "
-                        + "VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                id, model, actualModel, prompt, completion, cacheCreation, cacheRead, cost, path, createdAt);
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                id, channelId, model, actualModel, prompt, completion, cacheCreation, cacheRead, cost, path, createdAt);
     }
 }

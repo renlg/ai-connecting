@@ -15,7 +15,7 @@ const beijingToday = dayjs().tz('Asia/Shanghai')
 const DEFAULT_RANGE = [beijingToday.subtract(6, 'day'), beijingToday]
 
 const numberFormat = value => Number(value || 0).toLocaleString('zh-CN')
-const costFormat = value => Number(value || 0).toFixed(4)
+const costFormat = value => Number(value || 0).toFixed(0)
 
 export default function Cost() {
   const [form] = Form.useForm()
@@ -143,7 +143,7 @@ export default function Cost() {
     { title: '请求数', dataIndex: 'requestCount', width: 100, align: 'right', render: numberFormat },
     {
       title: '成本', dataIndex: 'totalCreditCost', width: 190, align: 'right',
-      render: value => <span>{costFormat(value)} 积分 / ${costFormat(value)}</span>,
+      render: value => <span>{costFormat(value)} 积分</span>,
     },
   ], [])
 
@@ -187,7 +187,7 @@ export default function Cost() {
         <Col xs={12} sm={8} lg={4}><Card size="small"><Statistic title="缓存创建" value={summary.totalCacheCreation || 0} formatter={numberFormat} /></Card></Col>
         <Col xs={12} sm={8} lg={4}><Card size="small"><Statistic title="缓存读取" value={summary.totalCacheRead || 0} formatter={numberFormat} /></Card></Col>
         <Col xs={12} sm={8} lg={4}><Card size="small"><Statistic title="请求数" value={summary.requestCount || 0} formatter={numberFormat} /></Card></Col>
-        <Col xs={12} sm={8} lg={4}><Card size="small"><Statistic title="总成本" value={summary.totalCreditCost || 0} formatter={value => `${costFormat(value)} 积分 / $${costFormat(value)}`} /></Card></Col>
+        <Col xs={12} sm={8} lg={4}><Card size="small"><Statistic title="总成本" value={summary.totalCreditCost || 0} formatter={value => `${costFormat(value)} 积分`} /></Card></Col>
       </Row>
 
       <Table

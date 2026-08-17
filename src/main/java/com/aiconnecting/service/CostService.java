@@ -45,7 +45,7 @@ public class CostService {
         List<CostAggregateRow> rows = repository.findRows(range.start(), range.end(), channelId,
                 normalize(modelName), null, null);
         StringBuilder csv = new StringBuilder("\uFEFF")
-                .append("渠道,模型,输入token,输出token,缓存创建token,缓存读取token,张数,秒数,请求数,成本(积分/美元)\r\n");
+                .append("渠道,模型,输入token,输出token,缓存创建token,缓存读取token,张数,秒数,请求数,成本(积分)\r\n");
         for (CostAggregateRow row : rows) {
             appendCsv(csv, row.getChannelName());
             appendCsv(csv, row.getModel());
@@ -85,7 +85,7 @@ public class CostService {
     }
 
     private static String scale(BigDecimal value) {
-        return (value == null ? BigDecimal.ZERO : value).setScale(4, java.math.RoundingMode.HALF_UP).toPlainString();
+        return (value == null ? BigDecimal.ZERO : value).setScale(0, java.math.RoundingMode.HALF_UP).toPlainString();
     }
 
     private static void appendCsv(StringBuilder csv, Object value) {
