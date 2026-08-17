@@ -126,7 +126,7 @@ export default function Announcements() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div className="mobile-wrap-toolbar" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>公告管理</h2>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => {
           setEditingId(null)

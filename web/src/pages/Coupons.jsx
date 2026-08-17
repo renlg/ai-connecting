@@ -122,7 +122,7 @@ export default function Coupons() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div className="mobile-wrap-toolbar" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>积分券管理</h2>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { setGeneratedCode(null); setModalOpen(true) }}>
           生成积分券

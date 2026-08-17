@@ -294,9 +294,9 @@ export default function Tokens() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div className="mobile-wrap-toolbar" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>Token 管理</h2>
-        <Space>
+        <Space className="mobile-wrap-toolbar">
           {isAdmin && (
             <Input.Search
               placeholder="搜索所属账号"

@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom'
-import { Layout, Menu, Avatar, Dropdown, Space, theme, Modal, Input, message, Alert, Typography, Button } from 'antd'
+import { Layout, Menu, Avatar, Dropdown, Space, theme, Modal, Input, message, Alert, Typography, Button, Drawer, Grid } from 'antd'
 import {
   DashboardOutlined, ApiOutlined, KeyOutlined,
   UserOutlined, TeamOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
-  RobotOutlined, GiftOutlined, CopyOutlined, BugOutlined, ReadOutlined
+  RobotOutlined, GiftOutlined, CopyOutlined, BugOutlined, ReadOutlined, MenuOutlined
 } from '@ant-design/icons'
 import { redeemCoupon, getLatestAnnouncements, getInviteCode } from '../api'
 
@@ -14,6 +14,7 @@ const { Header, Sider, Content } = Layout
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [redeemOpen, setRedeemOpen] = useState(false)
   const [redeemCode, setRedeemCode] = useState('')
   const [redeemLoading, setRedeemLoading] = useState(false)
@@ -28,6 +29,8 @@ export default function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { token: themeToken } = theme.useToken()
+  const screens = Grid.useBreakpoint()
+  const isMobile = !screens.md
 
   const user = JSON.parse(localStorage.getItem('user') || '{}')
   const isAdmin = user.role === 'admin'
@@ -87,6 +90,15 @@ export default function AppLayout() {
     ]
   }
 
+  useEffect(() => {
+    if (screens.md) setMobileMenuOpen(false)
+  }, [screens.md])
+
+  const handleMenuClick = ({ key }) => {
+    navigate(key)
+    if (isMobile) setMobileMenuOpen(false)
+  }
+
   const handleRedeem = async () => {
     if (!redeemCode.trim()) {
       message.warning('请输入兑换码')
@@ -131,23 +143,44 @@ export default function AppLayout() {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider trigger={null} collapsible collapsed={collapsed} theme="dark">
-        <div className="logo">{collapsed ? 'AI' : 'AI Connecting'}</div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[location.pathname]}
-          items={menuItems}
-          onClick={({ key }) => navigate(key)}
-        />
-      </Sider>
-      <Layout>
+      {!isMobile && (
+        <Sider trigger={null} collapsible collapsed={collapsed} theme="dark">
+          <div className="logo">{collapsed ? 'AI' : 'AI Connecting'}</div>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[location.pathname]}
+            items={menuItems}
+            onClick={handleMenuClick}
+          />
+        </Sider>
+      )}
+      {isMobile && (
+        <Drawer
+          placement="left"
+          open={mobileMenuOpen}
+          onClose={() => setMobileMenuOpen(false)}
+          closable={false}
+          width={200}
+          styles={{ body: { padding: 0, background: '#001529' } }}
+        >
+          <div className="logo">AI Connecting</div>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[location.pathname]}
+            items={menuItems}
+            onClick={handleMenuClick}
+          />
+        </Drawer>
+      )}
+      <Layout style={isMobile ? { minWidth: 0 } : undefined}>
         {/* 公告滚动栏 */}
         {announcements.length > 0 && (
           <div style={{
             background: '#fff7e6',
             borderBottom: '1px solid #ffd591',
-            padding: '8px 24px',
+            padding: isMobile ? '8px 12px' : '8px 24px',
             overflow: 'hidden',
             position: 'relative',
           }}>
@@ -176,23 +209,27 @@ export default function AppLayout() {
             `}</style>
           </div>
         )}
-        <Header style={{ padding: '0 24px', background: themeToken.colorBgContainer, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span onClick={() => setCollapsed(!collapsed)} style={{ fontSize: 18, cursor: 'pointer' }}>
-            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+        <Header style={{ padding: isMobile ? '0 12px' : '0 24px', background: themeToken.colorBgContainer, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span
+            onClick={() => isMobile ? setMobileMenuOpen(true) : setCollapsed(!collapsed)}
+            style={{ fontSize: 18, cursor: 'pointer' }}
+            aria-label={isMobile ? '打开导航菜单' : '切换侧边栏'}
+          >
+            {isMobile ? <MenuOutlined /> : (collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)}
           </span>
-          <Space size="middle">
+          <Space size={isMobile ? 'small' : 'middle'}>
             <Link to="/docs">
-              <Button type="text" icon={<ReadOutlined />}>使用文档</Button>
+              <Button type="text" icon={<ReadOutlined />} aria-label="使用文档">{isMobile ? null : '使用文档'}</Button>
             </Link>
             <Dropdown menu={userMenu}>
               <Space style={{ cursor: 'pointer' }}>
                 <Avatar icon={<UserOutlined />} />
-                <span>{user.nickname || user.username || '用户'}</span>
+                <span className="mobile-user-name">{user.nickname || user.username || '用户'}</span>
               </Space>
             </Dropdown>
           </Space>
         </Header>
-        <Content style={{ margin: '24px 16px', padding: 24, background: themeToken.colorBgContainer, borderRadius: themeToken.borderRadiusLG, minHeight: 280 }}>
+        <Content style={{ margin: isMobile ? '12px 8px' : '24px 16px', padding: isMobile ? 16 : 24, background: themeToken.colorBgContainer, borderRadius: themeToken.borderRadiusLG, minHeight: 280, ...(isMobile ? { minWidth: 0, overflow: 'hidden' } : {}) }}>
           <Outlet />
         </Content>
         <div style={{

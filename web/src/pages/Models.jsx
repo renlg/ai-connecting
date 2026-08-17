@@ -191,7 +191,7 @@ export default function Models() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div className="mobile-wrap-toolbar" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>模型管理</h2>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => {
           setEditing(null)
@@ -201,7 +201,7 @@ export default function Models() {
         }}>新增模型</Button>
       </div>
 
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space className="mobile-filter-row" style={{ marginBottom: 16 }} wrap>
         <Input.Search placeholder="按模型名称模糊搜索" allowClear onSearch={(value) => {
           setSearchName(value)
           load({ name: value || undefined, type: searchType })

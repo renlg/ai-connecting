@@ -171,7 +171,7 @@ export default function ModelGroups() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div className="mobile-wrap-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
           <h2 style={{ marginBottom: 4 }}>模型组</h2>
           <Text type="secondary">为客户端提供统一模型名，并按策略在同类型成员间切换。</Text>
@@ -184,7 +184,7 @@ export default function ModelGroups() {
       <Modal title={editingGroup ? '编辑模型组' : '新增模型组'} open={groupModalOpen} onOk={handleGroupSave} onCancel={() => setGroupModalOpen(false)} width={680}>
         <Form form={groupForm} layout="vertical">
           <Form.Item name="name" label="模型组名称" rules={[{ required: true, message: '请输入模型组名称' }]}><Input placeholder="客户端请求时使用的公开 model 值" /></Form.Item>
-          <Space style={{ display: 'flex' }} align="start">
+          <Space className="mobile-form-row" style={{ display: 'flex' }} align="start">
             <Form.Item name="type" label="类型" rules={[{ required: true }]} style={{ width: 180 }}>
               <Select options={Object.entries(TYPE_META).map(([value, meta]) => ({ value, label: meta.label }))} onChange={() => setGroupMembers([])} />
             </Form.Item>
@@ -208,23 +208,23 @@ export default function ModelGroups() {
             />
           </Form.Item>
 
-          {groupType === 'text' && <Space style={{ display: 'flex' }} align="start">
+          {groupType === 'text' && <Space className="mobile-form-row" style={{ display: 'flex' }} align="start">
             <Form.Item name="inputPrice" label="输入价格（积分/百万token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
             <Form.Item name="outputPrice" label="输出价格（积分/百万token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
             <Form.Item name="cachedPrice" label="缓存价格（积分/百万token）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
           </Space>}
-          {groupType === 'image' && <Space style={{ display: 'flex' }} align="start">
+          {groupType === 'image' && <Space className="mobile-form-row" style={{ display: 'flex' }} align="start">
             <Form.Item name="price1k" label="1K（积分/张）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
             <Form.Item name="price2k" label="2K（积分/张）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
             <Form.Item name="price4k" label="4K（积分/张）"><InputNumber min={0} style={{ width: 190 }} /></Form.Item>
           </Space>}
-          {groupType === 'video' && <Space style={{ display: 'flex', flexWrap: 'wrap' }} align="start">
+          {groupType === 'video' && <Space className="mobile-form-row" style={{ display: 'flex', flexWrap: 'wrap' }} align="start">
             <Form.Item name="price480p" label="480P（积分/秒）"><InputNumber min={0} style={{ width: 140 }} /></Form.Item>
             <Form.Item name="price720p" label="720P（积分/秒）"><InputNumber min={0} style={{ width: 140 }} /></Form.Item>
             <Form.Item name="price1080p" label="1080P（积分/秒）"><InputNumber min={0} style={{ width: 140 }} /></Form.Item>
             <Form.Item name="videoPrice4k" label="4K（积分/秒）"><InputNumber min={0} style={{ width: 140 }} /></Form.Item>
           </Space>}
-          {groupType === 'audio' && <Space style={{ display: 'flex' }} align="start">
+          {groupType === 'audio' && <Space className="mobile-form-row" style={{ display: 'flex' }} align="start">
             <Form.Item name="priceStandard" label="标准（积分/秒）"><InputNumber min={0} style={{ width: 220 }} /></Form.Item>
             <Form.Item name="priceHd" label="高清（积分/秒）"><InputNumber min={0} style={{ width: 220 }} /></Form.Item>
           </Space>}

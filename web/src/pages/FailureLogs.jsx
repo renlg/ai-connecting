@@ -76,7 +76,7 @@ export default function FailureLogs() {
 
   return (
     <div>
-      <Form form={form} layout="inline" onFinish={() => load(1, pagination.pageSize)} style={{ marginBottom: 20, rowGap: 12 }}>
+      <Form className="mobile-filter-form" form={form} layout="inline" onFinish={() => load(1, pagination.pageSize)} style={{ marginBottom: 20, rowGap: 12 }}>
         <Form.Item name="traceId" label="traceId">
           <Input allowClear placeholder="输入完整或部分 traceId" style={{ width: 260 }} />
         </Form.Item>

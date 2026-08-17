@@ -559,11 +559,11 @@ export default function Channels() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div className="mobile-wrap-toolbar" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>渠道管理</h2>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setModelOptions(buildBaseModelOptions(allLocalModels)); setModalOpen(true) }}>新增渠道</Button>
       </div>
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space className="mobile-filter-row" style={{ marginBottom: 16 }} wrap>
         <Input.Search
           placeholder="按名称模糊搜索"
           allowClear
@@ -694,7 +694,7 @@ export default function Channels() {
               style={{ width: '100%' }}
             />
           </Form.Item>
-          <Space>
+          <Space className="mobile-form-row">
             <Form.Item name="priority" label="优先级" initialValue={0}><InputNumber /></Form.Item>
             <Form.Item name="rateLimit" label="速率限制" initialValue={0}><InputNumber min={0} placeholder="0=不限" /></Form.Item>
           </Space>

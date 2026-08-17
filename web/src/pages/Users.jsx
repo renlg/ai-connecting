@@ -90,7 +90,7 @@ export default function Users() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div className="mobile-wrap-toolbar" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>用户管理</h2>
         <Input.Search
           placeholder="搜索用户名/昵称/邮箱"
