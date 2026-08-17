@@ -62,6 +62,8 @@ export default function Channels() {
   const [channels, setChannels] = useState([])
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  const [saveLoading, setSaveLoading] = useState(false)
+  const saveLockRef = useRef(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
   const channelType = Form.useWatch('type', form)
@@ -394,39 +396,41 @@ export default function Channels() {
   }
 
   const handleSave = async () => {
-    const values = await form.validateFields()
-    if (values.type === 'custom') {
-      const mapping = values.modelMapping || {}
-      const selected = Array.isArray(values.modelIds) ? values.modelIds : []
-      values.modelMapping = JSON.stringify(Object.fromEntries(selected.map(id => {
-        const model = allLocalModels.find(item => String(item.id) === String(id))
-        return [model?.name, String(mapping[model?.name] || '').trim()]
-      }).filter(([name]) => name)))
-    } else {
-      values.modelMapping = null
-    }
-    // 多选模型ID转逗号分隔字符串
-    if (values.modelIds && Array.isArray(values.modelIds)) {
-      values.modelIds = values.modelIds.join(',')
-    }
-    // 多选用户等级转逗号分隔字符串
-    if (values.supportedLevels && Array.isArray(values.supportedLevels)) {
-      values.supportedLevels = values.supportedLevels.join(',')
-    }
-    if (editing) {
-      if (!values.apiKey || !values.apiKey.trim()) {
-        delete values.apiKey
+    if (saveLockRef.current) return
+    saveLockRef.current = true
+    setSaveLoading(true)
+    try {
+      const values = await form.validateFields()
+      if (values.type === 'custom') {
+        const mapping = values.modelMapping || {}
+        const selected = Array.isArray(values.modelIds) ? values.modelIds : []
+        values.modelMapping = JSON.stringify(Object.fromEntries(selected.map(id => {
+          const model = allLocalModels.find(item => String(item.id) === String(id))
+          return [model?.name, String(mapping[model?.name] || '').trim()]
+        }).filter(([name]) => name)))
+      } else {
+        values.modelMapping = null
       }
-      await updateChannel(editing.id, values)
-      message.success('更新成功')
-    } else {
-      await createChannel(values)
-      message.success('创建成功')
+      if (values.modelIds && Array.isArray(values.modelIds)) values.modelIds = values.modelIds.join(',')
+      if (values.supportedLevels && Array.isArray(values.supportedLevels)) values.supportedLevels = values.supportedLevels.join(',')
+      if (editing) {
+        if (!values.apiKey || !values.apiKey.trim()) delete values.apiKey
+        await updateChannel(editing.id, values)
+        message.success('更新成功')
+      } else {
+        await createChannel(values)
+        message.success('创建成功')
+      }
+      setModalOpen(false)
+      form.resetFields()
+      setEditing(null)
+      load({ name: searchName || undefined, modelIds: searchModelIds })
+    } catch (err) {
+      if (!err?.errorFields) message.error(err?.message || '保存失败')
+    } finally {
+      saveLockRef.current = false
+      setSaveLoading(false)
     }
-    setModalOpen(false)
-    form.resetFields()
-    setEditing(null)
-    load({ name: searchName || undefined, modelIds: searchModelIds })
   }
 
   const handleSearchName = (value) => {
@@ -639,7 +643,7 @@ export default function Channels() {
             setTestModalOpen(true)
           }}>测试</Button>,
           <Button key="cancel" onClick={() => setModalOpen(false)}>取消</Button>,
-          <Button key="ok" type="primary" onClick={handleSave}>确定</Button>,
+          <Button key="ok" type="primary" loading={saveLoading} disabled={saveLoading} onClick={handleSave}>确定</Button>,
         ]}
       >
         <Form form={form} layout="vertical">

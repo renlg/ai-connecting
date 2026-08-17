@@ -20,6 +20,23 @@ import static org.mockito.Mockito.*;
 class ModelGroupServiceTest {
 
     @Test
+    void duplicateNameIsRejectedAndUpdateCheckExcludesCurrentGroup() {
+        ModelGroupRepository groups = mock(ModelGroupRepository.class);
+        ModelGroupService service = new ModelGroupService(groups, mock(ModelGroupMemberRepository.class),
+                mock(ModelConfigRepository.class), mock(ChannelRepository.class),
+                mock(CacheInvalidationService.class));
+        when(groups.existsByNameExcludingId("shared", null)).thenReturn(true);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.validateNameUnique("shared", null));
+
+        assertEquals(400, error.getCode());
+        assertEquals("模型组名称 \"shared\" 已存在", error.getMessage());
+        service.validateNameUnique("shared", 7L);
+        verify(groups).existsByNameExcludingId("shared", 7L);
+    }
+
+    @Test
     void mediaMemberBoundToCustomChannelIsRejected() {
         ModelGroupRepository groups = mock(ModelGroupRepository.class);
         ModelGroupMemberRepository members = mock(ModelGroupMemberRepository.class);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography, Tooltip } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
 import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCreditHistoryDetail, testTokenChatStream, getTokenModels } from '../api'
@@ -10,6 +10,8 @@ export default function Tokens() {
   const [tokens, setTokens] = useState([])
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  const [saveLoading, setSaveLoading] = useState(false)
+  const saveLockRef = useRef(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
   const [searchText, setSearchText] = useState('')
@@ -105,22 +107,29 @@ export default function Tokens() {
   }
 
   const handleSave = async () => {
-    const values = await form.validateFields()
-    const payload = {
-      ...values,
-      allowedModels: (values.allowedModels || []).join(','),
+    if (saveLockRef.current) return
+    saveLockRef.current = true
+    setSaveLoading(true)
+    try {
+      const values = await form.validateFields()
+      const payload = { ...values, allowedModels: (values.allowedModels || []).join(',') }
+      if (editing) {
+        await updateToken(editing.id, payload)
+        message.success('更新成功')
+      } else {
+        await createToken(payload)
+        message.success('创建成功')
+      }
+      setModalOpen(false)
+      form.resetFields()
+      setEditing(null)
+      load()
+    } catch (err) {
+      if (!err?.errorFields) message.error(err?.message || '保存失败')
+    } finally {
+      saveLockRef.current = false
+      setSaveLoading(false)
     }
-    if (editing) {
-      await updateToken(editing.id, payload)
-      message.success('更新成功')
-    } else {
-      await createToken(payload)
-      message.success('创建成功')
-    }
-    setModalOpen(false)
-    form.resetFields()
-    setEditing(null)
-    load()
   }
 
   const handleDelete = async (id) => {
@@ -354,7 +363,7 @@ export default function Tokens() {
         </div>
       )}
       <Table columns={columns} dataSource={tokens} rowKey="id" loading={loading} scroll={{ x: 1200 }} />
-      <Modal title={editing ? '编辑 Token' : '新增 Token'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={500}>
+      <Modal title={editing ? '编辑 Token' : '新增 Token'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} confirmLoading={saveLoading} okButtonProps={{ disabled: saveLoading }} width={500}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input placeholder="Token 名称" /></Form.Item>
           <Form.Item name="credits" label="积分" initialValue={-1}><InputNumber style={{ width: '100%' }} placeholder="-1 表示无限" /></Form.Item>

@@ -13,6 +13,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -112,6 +113,16 @@ public class ModelConfigService {
         return saved;
     }
 
+    public void validateNameUnique(String name, Long excludeId) {
+        if (name == null || name.isBlank()) {
+            throw new BusinessException("模型名称不能为空", "Model name cannot be empty");
+        }
+        if (modelConfigRepository.existsByNameExcludingId(name, excludeId)) {
+            throw new BusinessException("模型名称已存在", "Model name already exists");
+        }
+        // SQLite 已有 name 唯一索引；MySQL 现有表结构未声明该约束，高并发创建建议补唯一索引。
+    }
+
     /**
      * 校验 displayName 唯一性（display_name 是平台侧模型唯一标识）。
      * 更新场景下排除自身 id；displayName 为空时不做校验。
@@ -157,8 +168,17 @@ public class ModelConfigService {
      */
     @Transactional
     public List<ModelConfig> batchCreate(List<String> names) {
-        List<ModelConfig> configs = names.stream()
+        List<String> validNames = names.stream()
                 .filter(name -> name != null && !name.isBlank())
+                .toList();
+        Set<String> seen = new HashSet<>();
+        for (String name : validNames) {
+            if (!seen.add(name)) {
+                throw new BusinessException("模型名称已存在", "Model name already exists");
+            }
+            validateNameUnique(name, null);
+        }
+        List<ModelConfig> configs = validNames.stream()
                 .map(name -> ModelConfig.builder().name(name).status(1).build())
                 .toList();
         List<ModelConfig> saved = modelConfigRepository.saveAll(configs);

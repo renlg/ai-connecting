@@ -3,6 +3,7 @@ package com.aiconnecting.repository;
 import com.aiconnecting.entity.Announcement;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import java.util.List;
 
 public interface AnnouncementRepository extends JpaRepository<Announcement, Long> {
@@ -18,4 +19,8 @@ public interface AnnouncementRepository extends JpaRepository<Announcement, Long
      */
     @Query("SELECT a FROM Announcement a ORDER BY a.createdAt DESC")
     List<Announcement> findAllByOrderByCreatedAtDesc();
+
+    @Query("SELECT CASE WHEN COUNT(a) > 0 THEN true ELSE false END FROM Announcement a " +
+           "WHERE a.title = :title AND (:excludeId IS NULL OR a.id <> :excludeId)")
+    boolean existsByTitleExcludingId(@Param("title") String title, @Param("excludeId") Long excludeId);
 }

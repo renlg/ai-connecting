@@ -3,6 +3,7 @@ package com.aiconnecting.controller;
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.dto.CouponRedemptionDTO;
 import com.aiconnecting.entity.Coupon;
+import com.aiconnecting.entity.Announcement;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.entity.FailureLog;
@@ -292,5 +293,35 @@ class AdminControllerTest {
                         .content("{\"status\":0}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200));
+    }
+
+    @Test
+    void createAnnouncementRejectsDuplicateTitleWithoutTraceId() throws Exception {
+        setAuthentication(adminUser);
+        when(announcementRepository.existsByTitleExcludingId("维护通知", null)).thenReturn(true);
+
+        mockMvc.perform(post("/api/admin/announcements")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"维护通知\",\"content\":\"今晚维护\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("公告标题已存在"))
+                .andExpect(jsonPath("$.traceId").doesNotExist());
+        verify(announcementRepository, never()).save(any(Announcement.class));
+    }
+
+    @Test
+    void updateAnnouncementTitleCheckExcludesItself() throws Exception {
+        setAuthentication(adminUser);
+        Announcement existing = Announcement.builder().id(7L).title("维护通知").content("旧内容").build();
+        when(announcementRepository.findById(7L)).thenReturn(java.util.Optional.of(existing));
+        when(announcementRepository.save(any(Announcement.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        mockMvc.perform(put("/api/admin/announcements/7")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"维护通知\",\"content\":\"新内容\"}"))
+                .andExpect(status().isOk());
+
+        verify(announcementRepository).existsByTitleExcludingId("维护通知", 7L);
     }
 }

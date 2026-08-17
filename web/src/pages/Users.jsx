@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Table, Tag, Switch, message, Button, Popconfirm, InputNumber, Modal, Form, Space, Input, Select, Tooltip } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -10,6 +10,8 @@ export default function Users() {
   const [creditsModalOpen, setCreditsModalOpen] = useState(false)
   const [levelModalOpen, setLevelModalOpen] = useState(false)
   const [editingUser, setEditingUser] = useState(null)
+  const [saveLoading, setSaveLoading] = useState(false)
+  const saveLockRef = useRef(false)
   const [creditsForm] = Form.useForm()
   const [levelForm] = Form.useForm()
   const [searchText, setSearchText] = useState('')
@@ -40,19 +42,39 @@ export default function Users() {
   }
 
   const handleUpdateCredits = async () => {
-    const values = await creditsForm.validateFields()
-    await updateUserCredits(editingUser.id, values.credits)
-    message.success('积分已更新')
-    setCreditsModalOpen(false)
-    load()
+    if (saveLockRef.current) return
+    saveLockRef.current = true
+    setSaveLoading(true)
+    try {
+      const values = await creditsForm.validateFields()
+      await updateUserCredits(editingUser.id, values.credits)
+      message.success('积分已更新')
+      setCreditsModalOpen(false)
+      load()
+    } catch (err) {
+      if (!err?.errorFields) message.error(err?.message || '积分更新失败')
+    } finally {
+      saveLockRef.current = false
+      setSaveLoading(false)
+    }
   }
 
   const handleUpdateLevel = async () => {
-    const values = await levelForm.validateFields()
-    await updateUserLevel(editingUser.id, values.level)
-    message.success('等级已更新')
-    setLevelModalOpen(false)
-    load()
+    if (saveLockRef.current) return
+    saveLockRef.current = true
+    setSaveLoading(true)
+    try {
+      const values = await levelForm.validateFields()
+      await updateUserLevel(editingUser.id, values.level)
+      message.success('等级已更新')
+      setLevelModalOpen(false)
+      load()
+    } catch (err) {
+      if (!err?.errorFields) message.error(err?.message || '等级更新失败')
+    } finally {
+      saveLockRef.current = false
+      setSaveLoading(false)
+    }
   }
 
   const columns = [
@@ -101,14 +123,14 @@ export default function Users() {
         />
       </div>
       <Table columns={columns} dataSource={users} rowKey="id" loading={loading} scroll={{ x: 1430 }} />
-      <Modal title={`修改积分 - ${editingUser?.username || ''}`} open={creditsModalOpen} onOk={handleUpdateCredits} onCancel={() => setCreditsModalOpen(false)} width={400}>
+      <Modal title={`修改积分 - ${editingUser?.username || ''}`} open={creditsModalOpen} onOk={handleUpdateCredits} onCancel={() => setCreditsModalOpen(false)} confirmLoading={saveLoading} okButtonProps={{ disabled: saveLoading }} width={400}>
         <Form form={creditsForm} layout="vertical">
           <Form.Item name="credits" label="积分" rules={[{ required: true, message: '请输入积分数量' }]}>
             <InputNumber style={{ width: '100%' }} min={0} step={1} placeholder="输入积分数量" />
           </Form.Item>
         </Form>
       </Modal>
-      <Modal title={`修改等级 - ${editingUser?.username || ''}`} open={levelModalOpen} onOk={handleUpdateLevel} onCancel={() => setLevelModalOpen(false)} width={400}>
+      <Modal title={`修改等级 - ${editingUser?.username || ''}`} open={levelModalOpen} onOk={handleUpdateLevel} onCancel={() => setLevelModalOpen(false)} confirmLoading={saveLoading} okButtonProps={{ disabled: saveLoading }} width={400}>
         <Form form={levelForm} layout="vertical">
           <Form.Item name="level" label="用户等级" rules={[{ required: true, message: '请选择用户等级' }]}>
             <Select options={[1, 2, 3, 4, 5].map(l => ({ value: l, label: `Lv${l}` }))} />

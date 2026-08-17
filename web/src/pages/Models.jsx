@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, Tooltip, message, Popconfirm, Switch } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, SearchOutlined } from '@ant-design/icons'
 import {
@@ -19,6 +19,8 @@ export default function Models() {
   const [fallbackGroups, setFallbackGroups] = useState([])
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  const [saveLoading, setSaveLoading] = useState(false)
+  const saveLockRef = useRef(false)
   const [editing, setEditing] = useState(null)
   const [searchName, setSearchName] = useState('')
   const [searchType, setSearchType] = useState(undefined)
@@ -62,15 +64,15 @@ export default function Models() {
   }
 
   const handleSave = async () => {
-    const values = await form.validateFields()
-    if (Array.isArray(values.supportedLevels)) {
-      values.supportedLevels = values.supportedLevels.length === 5 ? '' : values.supportedLevels.join(',')
-    }
-    const payload = {
-      ...values,
-      fallbackGroupId: values.fallbackGroupId || (editing ? 0 : null),
-    }
+    if (saveLockRef.current) return
+    saveLockRef.current = true
+    setSaveLoading(true)
     try {
+      const values = await form.validateFields()
+      if (Array.isArray(values.supportedLevels)) {
+        values.supportedLevels = values.supportedLevels.length === 5 ? '' : values.supportedLevels.join(',')
+      }
+      const payload = { ...values, fallbackGroupId: values.fallbackGroupId || (editing ? 0 : null) }
       if (editing) {
         await updateModel(editing.id, payload)
         message.success('更新成功')
@@ -78,14 +80,16 @@ export default function Models() {
         await createModel(payload)
         message.success('创建成功')
       }
+      setModalOpen(false)
+      form.resetFields()
+      setEditing(null)
+      refreshModels()
     } catch (err) {
-      message.error(err?.message || '保存失败')
-      return
+      if (!err?.errorFields) message.error(err?.message || '保存失败')
+    } finally {
+      saveLockRef.current = false
+      setSaveLoading(false)
     }
-    setModalOpen(false)
-    form.resetFields()
-    setEditing(null)
-    refreshModels()
   }
 
   const handleDelete = async (id) => {
@@ -219,7 +223,7 @@ export default function Models() {
 
       <Table columns={columns} dataSource={filteredModels} rowKey="id" loading={loading} scroll={{ x: 1400 }} />
 
-      <Modal title={editing ? '编辑模型' : '新增模型'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={520}>
+      <Modal title={editing ? '编辑模型' : '新增模型'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} confirmLoading={saveLoading} okButtonProps={{ disabled: saveLoading }} width={520}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="模型名称（模型ID，发送给上游供应商，可重复）" rules={[{ required: true, message: '请输入模型名称' }]}>
             <Input placeholder="例如: gpt-4o" />

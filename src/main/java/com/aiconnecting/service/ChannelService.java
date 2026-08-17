@@ -211,7 +211,18 @@ public class ChannelService {
         }
     }
 
+    public void validateNameUnique(String name, Long excludeId) {
+        if (name == null || name.isBlank()) {
+            throw new BusinessException("渠道名称不能为空", "Channel name cannot be empty");
+        }
+        if (channelRepository.existsByNameExcludingId(name, excludeId)) {
+            throw new BusinessException("渠道名称已存在", "Channel name already exists");
+        }
+        // channels.name 当前没有数据库唯一约束；高并发创建仍建议补唯一索引作为原子兜底。
+    }
+
     public Channel create(ChannelRequest request) {
+        validateNameUnique(request.getName(), null);
         validateSupportedLevels(request.getSupportedLevels());
         validateModelMapping(null, request.getType(), request.getModelIds(), request.getModelMapping());
         Channel channel = Channel.builder()
@@ -236,6 +247,9 @@ public class ChannelService {
     public Channel update(Long id, ChannelRequest request) {
         validateSupportedLevels(request.getSupportedLevels());
         Channel channel = getById(id);
+        if (request.getName() != null) {
+            validateNameUnique(request.getName(), id);
+        }
         String proposedType = request.getType() != null ? request.getType() : channel.getType();
         String proposedModelIds = request.getModelIds() != null ? request.getModelIds() : channel.getModelIds();
         String proposedMapping = request.getModelMapping() != null ? request.getModelMapping() : channel.getModelMapping();

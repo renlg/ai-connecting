@@ -61,6 +61,9 @@ public class TokenService {
 
     public Token create(Long userId, TokenRequest request) {
         String tokenKey = "sk-" + UUID.randomUUID().toString().replace("-", "");
+        while (tokenRepository.findByTokenKey(tokenKey).isPresent()) {
+            tokenKey = "sk-" + UUID.randomUUID().toString().replace("-", "");
+        }
 
         Token token = Token.builder()
                 .name(request.getName())

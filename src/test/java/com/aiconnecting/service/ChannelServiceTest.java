@@ -48,6 +48,28 @@ class ChannelServiceTest {
     }
 
     @Test
+    void createRejectsDuplicateNameWithFriendlyBusinessError() {
+        when(repository.existsByNameExcludingId("test", null)).thenReturn(true);
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.create(request("openai", "7", null)));
+
+        assertEquals(400, error.getCode());
+        assertEquals("渠道名称已存在", error.getMessage());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void updateNameCheckExcludesCurrentChannel() {
+        Channel existing = Channel.builder().id(3L).name("test").type("openai").modelIds("7").build();
+        when(repository.findById(3L)).thenReturn(java.util.Optional.of(existing));
+
+        assertDoesNotThrow(() -> service.update(3L, request("openai", "7", null)));
+
+        verify(repository).existsByNameExcludingId("test", 3L);
+    }
+
+    @Test
     void sameModelCannotBeBoundToCustomAndNormalChannels() {
         when(repository.findChannelsByModel("%,7,%")).thenReturn(List.of(Channel.builder()
                 .id(2L).type("openai").modelIds("7").build()));

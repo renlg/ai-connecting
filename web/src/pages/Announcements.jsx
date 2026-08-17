@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Table, Tag, Button, Modal, Form, Input, message, Switch, Popconfirm } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { getAnnouncements, createAnnouncement, updateAnnouncement, deleteAnnouncement } from '../api'
@@ -8,6 +8,8 @@ export default function Announcements() {
   const [announcements, setAnnouncements] = useState([])
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  const [saveLoading, setSaveLoading] = useState(false)
+  const saveLockRef = useRef(false)
   const [editingId, setEditingId] = useState(null)
   const [form] = Form.useForm()
 
@@ -21,8 +23,11 @@ export default function Announcements() {
   useEffect(() => { load() }, [])
 
   const handleSave = async () => {
-    const values = await form.validateFields()
+    if (saveLockRef.current) return
+    saveLockRef.current = true
+    setSaveLoading(true)
     try {
+      const values = await form.validateFields()
       let res
       if (editingId) {
         res = await updateAnnouncement(editingId, values)
@@ -39,7 +44,10 @@ export default function Announcements() {
         message.error(res.message || '操作失败')
       }
     } catch (err) {
-      message.error(err?.message || '操作失败')
+      if (!err?.errorFields) message.error(err?.message || '操作失败')
+    } finally {
+      saveLockRef.current = false
+      setSaveLoading(false)
     }
   }
 
@@ -144,6 +152,8 @@ export default function Announcements() {
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => { setModalOpen(false); setEditingId(null); form.resetFields() }}
+        confirmLoading={saveLoading}
+        okButtonProps={{ disabled: saveLoading }}
         okText="保存"
         cancelText="取消"
         width={600}

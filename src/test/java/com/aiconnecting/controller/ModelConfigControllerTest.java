@@ -143,6 +143,21 @@ class ModelConfigControllerTest {
     }
 
     @Test
+    void create_duplicateNameReturnsFriendlyBadRequestWithoutTraceId() throws Exception {
+        doThrow(new BusinessException("模型名称已存在"))
+                .when(modelConfigService).validateNameUnique("gpt-4o", null);
+
+        mockMvc.perform(post("/api/admin/models")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"gpt-4o\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("模型名称已存在"))
+                .andExpect(jsonPath("$.traceId").doesNotExist());
+        verify(modelConfigService, never()).save(any(ModelConfig.class));
+    }
+
+    @Test
     void create_defaultRates() throws Exception {
         ModelConfig saved = ModelConfig.builder().id(1L).name("gpt-4o")
                 .inputCreditRate(0).outputCreditRate(0).status(1).build();

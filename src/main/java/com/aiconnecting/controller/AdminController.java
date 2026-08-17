@@ -241,6 +241,7 @@ public class AdminController {
     @PostMapping("/announcements")
     public ApiResponse<Announcement> createAnnouncement(@AuthenticationPrincipal User currentUser,
                                                         @Valid @RequestBody AnnouncementRequest request) {
+        validateAnnouncementTitleUnique(request.getTitle(), null);
         Announcement announcement = Announcement.builder()
                 .title(request.getTitle())
                 .content(request.getContent())
@@ -270,6 +271,7 @@ public class AdminController {
                                                         @Valid @RequestBody AnnouncementRequest request) {
         Announcement announcement = announcementRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(404, "公告不存在", "Announcement not found"));
+        validateAnnouncementTitleUnique(request.getTitle(), id);
         announcement.setTitle(request.getTitle());
         announcement.setContent(request.getContent());
         if (request.getStatus() != null) {
@@ -279,6 +281,13 @@ public class AdminController {
         operationLogService.record(currentUser.getId(), "UPDATE_ANNOUNCEMENT", "announcement:" + id,
                 "title=" + saved.getTitle());
         return ApiResponse.success(saved);
+    }
+
+    private void validateAnnouncementTitleUnique(String title, Long excludeId) {
+        if (announcementRepository.existsByTitleExcludingId(title, excludeId)) {
+            throw new BusinessException("公告标题已存在", "Announcement title already exists");
+        }
+        // announcements.title 当前没有数据库唯一约束；高并发创建仍建议补唯一索引作为原子兜底。
     }
 
     /**

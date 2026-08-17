@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Table, Tag, Button, Modal, Form, InputNumber, DatePicker, message, Switch } from 'antd'
 import { PlusOutlined, EyeOutlined } from '@ant-design/icons'
 import { getCoupons, generateCoupon, updateCouponStatus, getCouponRedemptions } from '../api'
@@ -10,6 +10,8 @@ export default function Coupons() {
   const [modalOpen, setModalOpen] = useState(false)
   const [form] = Form.useForm()
   const [generatedCode, setGeneratedCode] = useState(null)
+  const [generateLoading, setGenerateLoading] = useState(false)
+  const generateLockRef = useRef(false)
 
   // 查看使用记录弹窗
   const [redemptionModalOpen, setRedemptionModalOpen] = useState(false)
@@ -27,13 +29,16 @@ export default function Coupons() {
   useEffect(() => { load() }, [])
 
   const handleGenerate = async () => {
-    const values = await form.validateFields()
-    const data = {
-      credits: values.credits,
-      maxUses: values.maxUses || 1,
-      expiryDate: values.expiryDate ? values.expiryDate.format('YYYY-MM-DDTHH:mm:ss') : null,
-    }
+    if (generateLockRef.current) return
+    generateLockRef.current = true
+    setGenerateLoading(true)
     try {
+      const values = await form.validateFields()
+      const data = {
+        credits: values.credits,
+        maxUses: values.maxUses || 1,
+        expiryDate: values.expiryDate ? values.expiryDate.format('YYYY-MM-DDTHH:mm:ss') : null,
+      }
       const res = await generateCoupon(data)
       if (res.code === 200) {
         setGeneratedCode(res.data.code)
@@ -44,7 +49,10 @@ export default function Coupons() {
         message.error(res.message || '生成失败')
       }
     } catch (err) {
-      message.error(err?.message || '生成失败')
+      if (!err?.errorFields) message.error(err?.message || '生成失败')
+    } finally {
+      generateLockRef.current = false
+      setGenerateLoading(false)
     }
   }
 
@@ -136,6 +144,8 @@ export default function Coupons() {
         open={modalOpen}
         onOk={generatedCode ? () => setModalOpen(false) : handleGenerate}
         onCancel={() => { setModalOpen(false); setGeneratedCode(null); form.resetFields() }}
+        confirmLoading={!generatedCode && generateLoading}
+        okButtonProps={{ disabled: !generatedCode && generateLoading }}
         okText={generatedCode ? '关闭' : '生成'}
         cancelText="取消"
         width={400}

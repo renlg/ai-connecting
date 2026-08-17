@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons'
 import {
@@ -32,6 +32,8 @@ export default function ModelGroups() {
   const [allModels, setAllModels] = useState([])
   const [groupLoading, setGroupLoading] = useState(false)
   const [groupModalOpen, setGroupModalOpen] = useState(false)
+  const [saveLoading, setSaveLoading] = useState(false)
+  const saveLockRef = useRef(false)
   const [editingGroup, setEditingGroup] = useState(null)
   const [groupMembers, setGroupMembers] = useState([])
   const [groupForm] = Form.useForm()
@@ -97,12 +99,15 @@ export default function ModelGroups() {
   }
 
   const handleGroupSave = async () => {
-    const values = await groupForm.validateFields()
-    if (Array.isArray(values.supportedLevels)) {
-      values.supportedLevels = values.supportedLevels.length === 5 ? '' : values.supportedLevels.join(',')
-    }
-    const payload = { ...values, members: groupMembers }
+    if (saveLockRef.current) return
+    saveLockRef.current = true
+    setSaveLoading(true)
     try {
+      const values = await groupForm.validateFields()
+      if (Array.isArray(values.supportedLevels)) {
+        values.supportedLevels = values.supportedLevels.length === 5 ? '' : values.supportedLevels.join(',')
+      }
+      const payload = { ...values, members: groupMembers }
       if (editingGroup) {
         await updateModelGroup(editingGroup.id, payload)
         message.success('模型组更新成功')
@@ -110,15 +115,17 @@ export default function ModelGroups() {
         await createModelGroup(payload)
         message.success('模型组创建成功')
       }
+      setGroupModalOpen(false)
+      setEditingGroup(null)
+      setGroupMembers([])
+      groupForm.resetFields()
+      loadGroups()
     } catch (err) {
-      message.error(err?.message || '模型组保存失败')
-      return
+      if (!err?.errorFields) message.error(err?.message || '模型组保存失败')
+    } finally {
+      saveLockRef.current = false
+      setSaveLoading(false)
     }
-    setGroupModalOpen(false)
-    setEditingGroup(null)
-    setGroupMembers([])
-    groupForm.resetFields()
-    loadGroups()
   }
 
   const handleGroupDelete = async (id) => {
@@ -181,7 +188,7 @@ export default function ModelGroups() {
 
       <Table columns={groupColumns} dataSource={groups} rowKey="id" loading={groupLoading} scroll={{ x: 1200 }} />
 
-      <Modal title={editingGroup ? '编辑模型组' : '新增模型组'} open={groupModalOpen} onOk={handleGroupSave} onCancel={() => setGroupModalOpen(false)} width={680}>
+      <Modal title={editingGroup ? '编辑模型组' : '新增模型组'} open={groupModalOpen} onOk={handleGroupSave} onCancel={() => setGroupModalOpen(false)} confirmLoading={saveLoading} okButtonProps={{ disabled: saveLoading }} width={680}>
         <Form form={groupForm} layout="vertical">
           <Form.Item name="name" label="模型组名称" rules={[{ required: true, message: '请输入模型组名称' }]}><Input placeholder="客户端请求时使用的公开 model 值" /></Form.Item>
           <Space className="mobile-form-row" style={{ display: 'flex' }} align="start">

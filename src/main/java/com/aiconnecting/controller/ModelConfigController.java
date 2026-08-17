@@ -144,6 +144,7 @@ public class ModelConfigController {
         if (request.getName() == null || request.getName().isBlank()) {
             throw new BusinessException("模型名称不能为空", "Model name cannot be empty");
         }
+        modelConfigService.validateNameUnique(request.getName(), null);
         modelConfigService.validateDisplayNameUnique(request.getDisplayName(), null);
         validateNotGroupName(request.getName());
         validateNotGroupName(request.getDisplayName());
@@ -187,6 +188,7 @@ public class ModelConfigController {
         validateSupportedLevels(request.getSupportedLevels());
         ModelConfig config = modelConfigService.getById(id);
         if (request.getName() != null) {
+            modelConfigService.validateNameUnique(request.getName(), id);
             validateNotGroupName(request.getName());
             config.setName(request.getName());
         }
@@ -287,6 +289,7 @@ public class ModelConfigController {
         if (names == null || names.isEmpty()) {
             throw new BusinessException("模型名称列表不能为空", "Model name list cannot be empty");
         }
+        names.stream().filter(name -> name != null && !name.isBlank()).forEach(this::validateNotGroupName);
         List<ModelConfig> created = modelConfigService.batchCreate(names);
         relayService.clearModelNameCache();
         return ApiResponse.success(created);
