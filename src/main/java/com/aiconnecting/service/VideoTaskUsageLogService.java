@@ -40,6 +40,7 @@ public class VideoTaskUsageLogService {
                 .tokenId(task.getTokenId())
                 .channelId(task.getChannelId())
                 .model(task.getModel())
+                .actualModel(task.getModel())
                 .promptTokens(0)
                 .completionTokens(0)
                 .totalTokens(0)
