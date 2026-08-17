@@ -56,6 +56,9 @@ public class ModelGroupFailoverExecutor {
     @Autowired(required = false)
     private RelayProtocolAdapter protocolAdapter;
 
+    @Autowired(required = false)
+    private FailureLogService failureLogService;
+
     /** 总耗时预算（毫秒），介于业务约定的 120-150s 之间 */
     private static final long WALL_CLOCK_BUDGET_MS = 130_000L;
 
@@ -135,6 +138,7 @@ public class ModelGroupFailoverExecutor {
     }
 
     private void recordFailure(Channel channel, Long modelConfigId, BusinessException error) {
+        recordChannelFailure(channel, modelConfigId, null, error);
         FailureClassifier.Classification classification = FailureClassifier.classifyForGroup(error);
         switch (classification.kind()) {
             case RATE_LIMIT -> modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
@@ -152,6 +156,17 @@ public class ModelGroupFailoverExecutor {
             case FAST_FAIL -> modelHealthTracker.recordFailure(channel.getId(), modelConfigId,
                     ModelHealthTracker.FailureType.MEMBER_FAILURE);
         }
+    }
+
+    private void recordChannelFailure(Channel channel, Long memberId, String channelModel,
+                                      BusinessException error) {
+        if (failureLogService == null || channel == null) return;
+        HttpServletRequest request = null;
+        if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()
+                instanceof org.springframework.web.context.request.ServletRequestAttributes attributes) {
+            request = attributes.getRequest();
+        }
+        failureLogService.recordChannelFailure(request, channel.getId(), memberId, channelModel, error);
     }
 
     private BusinessException upstreamFailure(int code, String body, Long retryAfterSeconds) {
@@ -338,6 +353,7 @@ public class ModelGroupFailoverExecutor {
             } catch (PassthroughConnectionException e) {
                 lastFailure = new BusinessException(502, "渠道连接失败: " + e.getCause().getMessage(),
                         "Upstream connection failed: " + e.getCause().getMessage(), e.getCause());
+                recordChannelFailure(channel, modelConfigId, memberModel, lastFailure);
                 log.warn("模型组 {} 透传成员 {} (渠道 {}) 连接失败 (尝试 {}/{}): {}",
                         groupName, memberModel, channel.getId(), attempts, maxAttempts, e.getCause().getMessage());
                 support.channelHealthTracker.recordFailure(channel.getId(),
@@ -612,6 +628,9 @@ public class ModelGroupFailoverExecutor {
                 } catch (IOException connectionFailure) {
                     lastError = connectionFailure.getMessage();
                     lastErrorUpstream = true;
+                    recordChannelFailure(channel, modelConfigId, memberModel,
+                            new BusinessException(502, "渠道请求失败: " + connectionFailure.getMessage(),
+                                    "Channel request failed: " + connectionFailure.getMessage(), connectionFailure));
                     support.channelHealthTracker.recordFailure(channel.getId(),
                             ChannelHealthTracker.ErrorCategory.fromException(connectionFailure),
                             connectionFailure.getMessage());

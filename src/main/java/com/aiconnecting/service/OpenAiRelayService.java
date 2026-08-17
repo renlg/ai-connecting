@@ -64,6 +64,9 @@ public class OpenAiRelayService {
     @Autowired
     private RelayProtocolAdapter protocolAdapter;
 
+    @Autowired(required = false)
+    private FailureLogService failureLogService;
+
     /**
      * 中转请求 (非流式) - 最多重试 3 次，每次选择不同渠道
      */
@@ -140,6 +143,7 @@ public class OpenAiRelayService {
             } catch (BusinessException e) {
                 lastFailure = e;
                 lastError = e.getMessage();
+                recordChannelFailure(httpRequest, channel, modelConfigId, model, e);
                 log.error("渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.dispatchRelayFailure(channel.getId(), modelConfigId, e, () ->
                         support.channelHealthTracker.recordFailure(channel.getId(),
@@ -301,6 +305,7 @@ public class OpenAiRelayService {
             } catch (BusinessException e) {
                 lastFailure = e;
                 lastError = e.getMessage();
+                recordChannelFailure(null, channel, modelConfigId, null, e);
                 log.error("渠道 {} 媒体请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 // 内容审核、上下文超限、请求过大等不可切换错误与文本/模型组路径保持一致：
                 // 原样立即返回，既不尝试其它渠道，也不写模型冷却或渠道熔断。
@@ -323,6 +328,16 @@ public class OpenAiRelayService {
         return new BusinessException(cause.getCode(), message,
                 "All channels are unavailable, please try again later", cause, cause.getUpstreamResponseBody(),
                 cause.getRetryAfterSeconds(), cause.isUpstreamResponse());
+    }
+
+    private void recordChannelFailure(HttpServletRequest request, Channel channel, Long memberId,
+                                      String channelModel, BusinessException error) {
+        if (failureLogService == null || channel == null) return;
+        if (request == null && org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()
+                instanceof org.springframework.web.context.request.ServletRequestAttributes attributes) {
+            request = attributes.getRequest();
+        }
+        failureLogService.recordChannelFailure(request, channel.getId(), memberId, channelModel, error);
     }
 
     /**
@@ -970,6 +985,7 @@ public class OpenAiRelayService {
                 lastError = e.getMessage();
                 lastFailure = new BusinessException(502, "渠道请求失败: " + e.getMessage(),
                         "Channel request failed: " + e.getMessage(), e, null, null, true);
+                recordChannelFailure(httpRequest, channel, modelConfigId, model, lastFailure);
                 log.error("渠道 {} 流式连接失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.dispatchRelayFailure(channel.getId(), modelConfigId, lastFailure, () ->
                         support.channelHealthTracker.recordFailure(channel.getId(),
@@ -995,6 +1011,7 @@ public class OpenAiRelayService {
                     lastFailure = BusinessException.upstream(code, "上游 API 错误: " + errorBody,
                             "Upstream API error: " + errorBody, errorBody,
                             RelaySupport.resolveCooldownSeconds(conn, errorBody));
+                    recordChannelFailure(httpRequest, channel, modelConfigId, model, lastFailure);
                     log.warn("渠道 {} 流式请求失败: {}", channel.getId(), lastError);
                     String streamError = lastError;
                     BusinessException streamFailure = lastFailure;
@@ -1037,6 +1054,7 @@ public class OpenAiRelayService {
                 lastError = e.getMessage();
                 lastFailure = new BusinessException(502, "渠道请求失败: " + e.getMessage(),
                         "Channel request failed: " + e.getMessage(), e, null, null, true);
+                recordChannelFailure(httpRequest, channel, modelConfigId, model, lastFailure);
                 log.error("渠道 {} 流式请求异常 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.dispatchRelayFailure(channel.getId(), modelConfigId, lastFailure, () ->
                         support.channelHealthTracker.recordFailure(channel.getId(),

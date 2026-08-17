@@ -12,6 +12,7 @@ public final class FailureLogContext {
     public static final String CHANNEL_ERROR = FailureLogContext.class.getName() + ".channelError";
     public static final String TRACE_ID = FailureLogContext.class.getName() + ".traceId";
     public static final String RECORDED = FailureLogContext.class.getName() + ".recorded";
+    public static final String RECORDED_CHANNEL_FAILURES = FailureLogContext.class.getName() + ".recordedChannelFailures";
 
     private FailureLogContext() {}
 

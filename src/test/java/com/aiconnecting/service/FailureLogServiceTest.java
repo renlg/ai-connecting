@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.RedisDistributedLock;
+import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.entity.FailureLog;
 import com.aiconnecting.repository.FailureLogRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -74,6 +75,38 @@ class FailureLogServiceTest {
         assertThatCode(() -> service.record(request, 502, "Upstream request failed", "socket reset"))
                 .doesNotThrowAnyException();
         assertThat(attempted.await(2, TimeUnit.SECONDS)).isTrue();
+    }
+
+    @Test
+    void channelFailuresAreDeduplicatedPerChannelMemberAndKeepSanitizedUpstreamBody() throws Exception {
+        CountDownLatch saved = new CountDownLatch(2);
+        ArgumentCaptor<FailureLog> captor = ArgumentCaptor.forClass(FailureLog.class);
+        when(repository.save(captor.capture())).thenAnswer(invocation -> {
+            saved.countDown();
+            return invocation.getArgument(0);
+        });
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/chat/completions");
+        request.setAttribute(FailureLogContext.TRACE_ID, "trace-detail");
+        request.setAttribute(FailureLogContext.MODEL_NAME, "group-name");
+        request.setAttribute(FailureLogContext.PROTOCOL, RelayProtocol.OPENAI.name());
+        BusinessException first = BusinessException.upstream(503, "vendor failed",
+                "{\"error\":\"busy\",\"api_key\":\"sk-secret\"}", null);
+
+        service.recordChannelFailure(request, 151L, 68L, "deepseek-v4-flash", first);
+        service.recordChannelFailure(request, 151L, 68L, "deepseek-v4-flash",
+                new BusinessException(504, "timeout"));
+        service.recordChannelFailure(request, 152L, 68L, "deepseek-v4-flash", first);
+
+        assertThat(saved.await(2, TimeUnit.SECONDS)).isTrue();
+        assertThat(captor.getAllValues()).hasSize(2);
+        FailureLog detail = captor.getAllValues().get(0);
+        assertThat(detail.getTraceId()).isEqualTo("trace-detail");
+        assertThat(detail.getModelName()).isEqualTo("group-name");
+        assertThat(detail.getChannelModelName()).isEqualTo("deepseek-v4-flash");
+        assertThat(detail.getHttpStatus()).isEqualTo(503);
+        assertThat(detail.getChannelError()).contains("Upstream API error: 503", "busy", "[REDACTED]")
+                .doesNotContain("sk-secret");
+        verify(repository, times(2)).save(any());
     }
 
     @Test

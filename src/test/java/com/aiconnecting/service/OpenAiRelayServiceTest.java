@@ -19,6 +19,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -125,6 +126,8 @@ class OpenAiRelayServiceTest {
         ChannelHealthTracker healthTracker = mock(ChannelHealthTracker.class);
         RelaySupport relaySupport = relaySupport(router, healthTracker);
         OpenAiRelayService relayService = relayService(relaySupport);
+        FailureLogService failureLogService = mock(FailureLogService.class);
+        ReflectionTestUtils.setField(relayService, "failureLogService", failureLogService);
         Channel first = Channel.builder().id(7L).build();
         Channel second = Channel.builder().id(9L).build();
         when(router.selectChannel(eq("media-model"), anySet(), anyInt())).thenReturn(first, second);
@@ -143,6 +146,7 @@ class OpenAiRelayServiceTest {
         verify(relaySupport).dispatchRelayFailure(eq(7L), eq(42L), eq(unavailable), any());
         verify(healthTracker).recordFailure(eq(7L), any(), eq("upstream unavailable"));
         verify(healthTracker).recordSuccess(9L);
+        verify(failureLogService).recordChannelFailure(isNull(), eq(7L), eq(42L), isNull(), eq(unavailable));
     }
 
     @Test

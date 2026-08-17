@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.RedisDistributedLock;
+import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.entity.FailureLog;
 import com.aiconnecting.repository.FailureLogRepository;
@@ -17,6 +18,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
@@ -74,6 +77,50 @@ public class FailureLogService {
             writer.execute(() -> persistSafely(entry));
         } catch (Exception e) {
             log.error("提交失败日志写入任务失败（不影响请求）", e);
+        }
+    }
+
+    /**
+     * Records the first real upstream failure for a channel/member pair in this request. Router misses,
+     * cooldown and rate-limit skips never call this method. The snapshot and de-duplication happen on
+     * the request thread; persistence remains isolated on the single failure-log writer.
+     */
+    public void recordChannelFailure(HttpServletRequest request, Long channelId, Object memberId,
+                                     String channelModelName, BusinessException error) {
+        try {
+            if (request == null || error == null || request.getRequestURI() == null
+                    || !request.getRequestURI().startsWith("/v1/")) return;
+            String key = String.valueOf(channelId) + ":" + String.valueOf(memberId);
+            synchronized (request) {
+                @SuppressWarnings("unchecked")
+                Set<String> recorded = (Set<String>) request.getAttribute(FailureLogContext.RECORDED_CHANNEL_FAILURES);
+                if (recorded == null) {
+                    recorded = new HashSet<>();
+                    request.setAttribute(FailureLogContext.RECORDED_CHANNEL_FAILURES, recorded);
+                }
+                if (!recorded.add(key)) return;
+            }
+            String traceId = stringAttr(request, FailureLogContext.TRACE_ID);
+            if (traceId == null) traceId = SseUtils.currentTraceId();
+            String rawBody = error.getUpstreamResponseBody();
+            String detail = rawBody != null
+                    ? "Upstream API error: " + error.getCode() + " - " + rawBody
+                    : error.getMessage();
+            String actualModel = hasText(channelModelName)
+                    ? channelModelName : stringAttr(request, FailureLogContext.CHANNEL_MODEL_NAME);
+            FailureLog entry = FailureLog.builder()
+                    .traceId(limit(traceId, 64))
+                    .userError(sanitize(SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE))
+                    .channelError(blankToNull(sanitize(detail)))
+                    .httpStatus(error.getCode())
+                    .modelName(limit(stringAttr(request, FailureLogContext.MODEL_NAME), 100))
+                    .channelModelName(limit(actualModel, 100))
+                    .protocol(resolveProtocol(request))
+                    .createdAt(System.currentTimeMillis())
+                    .build();
+            writer.execute(() -> persistSafely(entry));
+        } catch (Exception e) {
+            log.error("提交渠道失败日志写入任务失败（不影响请求）", e);
         }
     }
 

@@ -12,6 +12,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import okhttp3.Call;
 import okhttp3.MediaType;
@@ -253,6 +256,28 @@ class ModelGroupFailoverExecutorTest {
                 eq("/v1/chat/completions"), eq("{\"model\":\"second-model\"}"), anyLong());
         verify(fixture.modelHealth).recordFailure(91L, 11L,
                 ModelHealthTracker.FailureType.MODEL_NOT_FOUND);
+    }
+
+    @Test
+    void realMemberFailureIsForwardedToDetailedFailureLogger() {
+        StandardGroupFixture fixture = standardGroupFixture();
+        FailureLogService failureLogs = mock(FailureLogService.class);
+        ReflectionTestUtils.setField(fixture.executor, "failureLogService", failureLogs);
+        BusinessException upstream = BusinessException.upstream(503, "timeout", "timeout body", null);
+        doThrow(upstream).when(fixture.support).forwardRequest(eq(fixture.firstChannel),
+                eq("/v1/chat/completions"), anyString(), anyLong());
+        doReturn("{\"usage\":{\"total_tokens\":0}}")
+                .when(fixture.support).forwardRequest(eq(fixture.secondChannel), anyString(), anyString(), anyLong());
+        MockHttpServletRequest request = request();
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        try {
+            fixture.executor.relayRequest("client-key", "/v1/chat/completions",
+                    "{\"model\":\"public-group\"}", "public-group", request);
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+
+        verify(failureLogs).recordChannelFailure(eq(request), eq(91L), eq(11L), isNull(), eq(upstream));
     }
 
     @Test
