@@ -14,9 +14,9 @@ import java.util.Map;
 /**
  * 仪表盘查询性能索引迁移：为存量数据库补齐 model_configs.display_name 唯一索引
  * （display_name 是平台侧模型唯一标识，name 是发往上游供应商的模型 ID，允许重复），
- * 以及 usage_logs (model, created_at) 复合索引；MySQL 模式下还会清理 58d7b8a 建库时
- * 遗留的 model_configs.name 唯一索引（schema-mysql.sql 已不再建这个索引，但已初始化过的
- * 存量库不会自动补删，需要主动 DROP 一次，且要保证多次启动重复执行是幂等的）。
+ * 以及 usage_logs (model, created_at) 复合索引；同时清理旧版建库脚本遗留的
+ * model_configs.name 唯一索引（当前建库脚本已不再创建，但已初始化过的存量库不会自动补删，
+ * 需要主动 DROP 一次，且要保证多次启动重复执行是幂等的）。
  */
 @Slf4j
 @Component
@@ -52,6 +52,8 @@ public class DashboardIndexMigrationRunner implements ApplicationRunner {
 
         if (mysql) {
             dropLegacyModelConfigsNameUniqueIndex();
+        } else {
+            jdbcTemplate.execute("DROP INDEX IF EXISTS idx_model_configs_name");
         }
 
         log.info("Dashboard index migration complete");

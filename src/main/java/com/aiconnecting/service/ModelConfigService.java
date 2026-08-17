@@ -151,6 +151,11 @@ public class ModelConfigService {
                 "Display name \"" + displayName + "\" already exists; use a unique display name", cause);
     }
 
+    private BusinessException displayNameAlreadyExists(DataIntegrityViolationException cause) {
+        return new BusinessException(400, "显示名称已存在，请使用唯一的显示名称",
+                "Display name already exists; use a unique display name", cause);
+    }
+
     public void delete(Long id) {
         if (!modelConfigRepository.existsById(id)) {
             throw new BusinessException("模型不存在", "Model not found");
@@ -188,7 +193,13 @@ public class ModelConfigService {
         List<ModelConfig> configs = validNames.stream()
                 .map(name -> ModelConfig.builder().name(name).status(1).build())
                 .toList();
-        List<ModelConfig> saved = modelConfigRepository.saveAll(configs);
+        List<ModelConfig> saved;
+        try {
+            saved = modelConfigRepository.saveAll(configs);
+            modelConfigRepository.flush();
+        } catch (DataIntegrityViolationException e) {
+            throw displayNameAlreadyExists(e);
+        }
         cacheInvalidationService.publish(CacheInvalidationService.MODEL_CONFIG);
         return saved;
     }

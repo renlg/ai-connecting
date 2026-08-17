@@ -92,8 +92,6 @@ CREATE TABLE IF NOT EXISTS "model_configs" (
     updated_at TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_model_configs_name ON model_configs (name);
-
 -- 使用记录表
 CREATE TABLE IF NOT EXISTS "usage_logs" (
     id INTEGER PRIMARY KEY,

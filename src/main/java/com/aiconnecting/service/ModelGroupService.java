@@ -157,8 +157,7 @@ public class ModelGroupService {
             saved = modelGroupRepository.save(group);
             modelGroupRepository.flush();
         } catch (DataIntegrityViolationException e) {
-            throw new BusinessException(400, "模型组名称 \"" + group.getName() + "\" 已存在",
-                    "Model group name \"" + group.getName() + "\" already exists", e);
+            throw groupNameAlreadyExists(group.getName(), e);
         }
         replaceMembers(saved.getId(), saved.getType(), memberInputs);
         publishInvalidation();
@@ -227,12 +226,23 @@ public class ModelGroupService {
         existing.setVideoPrice4k(patch.getVideoPrice4k() != null ? patch.getVideoPrice4k() : existing.getVideoPrice4k());
         existing.setPriceStandard(patch.getPriceStandard() != null ? patch.getPriceStandard() : existing.getPriceStandard());
         existing.setPriceHd(patch.getPriceHd() != null ? patch.getPriceHd() : existing.getPriceHd());
-        ModelGroup saved = modelGroupRepository.save(existing);
+        ModelGroup saved;
+        try {
+            saved = modelGroupRepository.save(existing);
+            modelGroupRepository.flush();
+        } catch (DataIntegrityViolationException e) {
+            throw groupNameAlreadyExists(existing.getName(), e);
+        }
         if (memberInputs != null) {
             replaceMembers(saved.getId(), saved.getType(), memberInputs);
         }
         publishInvalidation();
         return saved;
+    }
+
+    private BusinessException groupNameAlreadyExists(String name, DataIntegrityViolationException cause) {
+        return new BusinessException(400, "模型组名称 \"" + name + "\" 已存在",
+                "Model group name \"" + name + "\" already exists", cause);
     }
 
     /** 成员输入：模型配置 id + 权重（缺省 1），顺序即为传入列表顺序（映射为 sortOrder） */
