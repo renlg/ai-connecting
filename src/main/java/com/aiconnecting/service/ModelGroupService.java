@@ -172,8 +172,8 @@ public class ModelGroupService {
         ModelGroup existing = getById(id);
         if (patch.getName() != null) {
             guardDuplicateName(patch.getName());
-            existing.setName(patch.getName());
             try {
+                existing.setName(patch.getName());
                 modelGroupRepository.flush();
             } catch (DataIntegrityViolationException e) {
                 throw groupNameAlreadyExists(existing.getName(), e);
