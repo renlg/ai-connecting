@@ -149,6 +149,8 @@ export const resetUserPassword = (id) => api.put(`/api/admin/users/${id}/reset-p
 export const updateUserCredits = (id, credits) => api.put(`/api/admin/users/${id}/credits`, { credits });
 export const updateUserLevel = (id, level) => api.put(`/api/admin/users/${id}/level`, { level });
 export const getFailureLogs = (params) => api.get('/api/admin/failure-logs', { params });
+export const getCostAggregate = (params) => api.get('/api/admin/cost/aggregate', { params });
+export const exportCostCsv = (params) => api.get('/api/admin/cost/export', { params, responseType: 'blob' });
 
 // Announcements
 export const getLatestAnnouncements = (limit = 5) => api.get('/api/announcements/latest', { params: { limit } });

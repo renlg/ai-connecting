@@ -12,6 +12,7 @@ import ModelGroups from './pages/ModelGroups'
 import Coupons from './pages/Coupons'
 import Announcements from './pages/Announcements'
 import FailureLogs from './pages/FailureLogs'
+import Cost from './pages/Cost'
 import UsageDocs from './pages/UsageDocs'
 import NotFound from './pages/NotFound'
 
@@ -36,6 +37,11 @@ function PrivateRoute({ children }) {
   return children
 }
 
+function AdminRoute({ children }) {
+  const user = JSON.parse(localStorage.getItem('user') || '{}')
+  return user.role === 'admin' ? children : <Navigate to="/" replace />
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -52,6 +58,7 @@ export default function App() {
           <Route path="coupons" element={<Coupons />} />
           <Route path="announcements" element={<Announcements />} />
           <Route path="failure-logs" element={<FailureLogs />} />
+          <Route path="cost" element={<AdminRoute><Cost /></AdminRoute>} />
           <Route path="docs" element={<UsageDocs />} />
           <Route path="*" element={<NotFound />} />
         </Route>
