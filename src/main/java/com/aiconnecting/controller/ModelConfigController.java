@@ -144,7 +144,6 @@ public class ModelConfigController {
         if (request.getName() == null || request.getName().isBlank()) {
             throw new BusinessException("模型名称不能为空", "Model name cannot be empty");
         }
-        modelConfigService.validateNameUnique(request.getName(), null);
         modelConfigService.validateDisplayNameUnique(request.getDisplayName(), null);
         validateNotGroupName(request.getName());
         validateNotGroupName(request.getDisplayName());
@@ -188,7 +187,6 @@ public class ModelConfigController {
         validateSupportedLevels(request.getSupportedLevels());
         ModelConfig config = modelConfigService.getById(id);
         if (request.getName() != null) {
-            modelConfigService.validateNameUnique(request.getName(), id);
             validateNotGroupName(request.getName());
             config.setName(request.getName());
         }

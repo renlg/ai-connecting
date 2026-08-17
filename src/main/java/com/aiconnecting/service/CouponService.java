@@ -34,6 +34,7 @@ public class CouponService {
 
     private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final int COUPON_CODE_GENERATION_ATTEMPTS = 10;
     private static final String ALREADY_REDEEMED_MESSAGE = "该兑换码已使用过";
     private static final String ALREADY_REDEEMED_MESSAGE_EN =
             "This coupon code has already been redeemed by this user";
@@ -43,20 +44,29 @@ public class CouponService {
             throw new BusinessException("无权限创建积分券", "Not authorized to create credit coupons");
         }
 
-        String code = generateCode();
-        while (couponRepository.findByCode(code).isPresent()) {
-            code = generateCode();
+        DataIntegrityViolationException lastCollision = null;
+        for (int attempt = 0; attempt < COUPON_CODE_GENERATION_ATTEMPTS; attempt++) {
+            String code = generateCode();
+            if (couponRepository.findByCode(code).isPresent()) {
+                continue;
+            }
+
+            Coupon coupon = Coupon.builder()
+                    .code(code)
+                    .credits(credits)
+                    .maxUses(maxUses != null ? maxUses : 1)
+                    .expiryDate(expiryDate)
+                    .createdBy(admin.getId())
+                    .build();
+
+            try {
+                return couponRepository.save(coupon);
+            } catch (DataIntegrityViolationException e) {
+                lastCollision = e;
+            }
         }
-
-        Coupon coupon = Coupon.builder()
-                .code(code)
-                .credits(credits)
-                .maxUses(maxUses != null ? maxUses : 1)
-                .expiryDate(expiryDate)
-                .createdBy(admin.getId())
-                .build();
-
-        return couponRepository.save(coupon);
+        throw new BusinessException(400, "兑换码标识已存在，请重试",
+                "Coupon code identifier already exists; retry", lastCollision);
     }
 
     @Transactional

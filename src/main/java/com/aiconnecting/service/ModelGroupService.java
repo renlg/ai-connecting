@@ -11,6 +11,7 @@ import com.aiconnecting.repository.ModelGroupMemberRepository;
 import com.aiconnecting.repository.ModelGroupRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -151,7 +152,14 @@ public class ModelGroupService {
         group.setType(validateType(group.getType()));
         group.setStrategy(normalizeStrategy(group.getStrategy()));
         group.setMaxAttempts(normalizeMaxAttempts(group.getMaxAttempts()));
-        ModelGroup saved = modelGroupRepository.save(group);
+        ModelGroup saved;
+        try {
+            saved = modelGroupRepository.save(group);
+            modelGroupRepository.flush();
+        } catch (DataIntegrityViolationException e) {
+            throw new BusinessException(400, "模型组名称 \"" + group.getName() + "\" 已存在",
+                    "Model group name \"" + group.getName() + "\" already exists", e);
+        }
         replaceMembers(saved.getId(), saved.getType(), memberInputs);
         publishInvalidation();
         return saved;

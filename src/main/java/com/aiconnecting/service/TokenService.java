@@ -6,6 +6,7 @@ import com.aiconnecting.dto.TokenRequest;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.repository.TokenRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.context.event.EventListener;
 
@@ -26,6 +27,7 @@ public class TokenService {
     /** token ID -> token key 的本地反向索引，使 tokenId 广播可 O(1) 精确驱逐。 */
     private final ConcurrentHashMap<Long, String> tokenKeyById = new ConcurrentHashMap<>();
     private static final long TOKEN_CACHE_TTL_MS = 30 * 1000L;
+    private static final int TOKEN_KEY_GENERATION_ATTEMPTS = 10;
 
     private record CachedToken(Token token, long cachedAt) {
         boolean isExpired() {
@@ -60,27 +62,36 @@ public class TokenService {
     }
 
     public Token create(Long userId, TokenRequest request) {
-        String tokenKey = "sk-" + UUID.randomUUID().toString().replace("-", "");
-        while (tokenRepository.findByTokenKey(tokenKey).isPresent()) {
-            tokenKey = "sk-" + UUID.randomUUID().toString().replace("-", "");
+        DataIntegrityViolationException lastCollision = null;
+        for (int attempt = 0; attempt < TOKEN_KEY_GENERATION_ATTEMPTS; attempt++) {
+            String tokenKey = "sk-" + UUID.randomUUID().toString().replace("-", "");
+            if (tokenRepository.findByTokenKey(tokenKey).isPresent()) {
+                continue;
+            }
+
+            Token token = Token.builder()
+                    .name(request.getName())
+                    .tokenKey(tokenKey)
+                    .userId(userId)
+                    .quota(request.getQuota() != null ? request.getQuota() : -1L)
+                    .usedQuota(0L)
+                    .credits(request.getCredits() != null ? request.getCredits() : BigDecimal.valueOf(-1))
+                    .expiredAt(request.getExpiredAt())
+                    .allowedModels(request.getAllowedModels())
+                    .rateLimit(request.getRateLimit() != null ? request.getRateLimit() : 0)
+                    .status(1)
+                    .build();
+
+            try {
+                Token saved = tokenRepository.save(token);
+                cacheInvalidationService.publish(CacheInvalidationService.TOKEN_ID_PREFIX + saved.getId());
+                return saved;
+            } catch (DataIntegrityViolationException e) {
+                lastCollision = e;
+            }
         }
-
-        Token token = Token.builder()
-                .name(request.getName())
-                .tokenKey(tokenKey)
-                .userId(userId)
-                .quota(request.getQuota() != null ? request.getQuota() : -1L)
-                .usedQuota(0L)
-                .credits(request.getCredits() != null ? request.getCredits() : BigDecimal.valueOf(-1))
-                .expiredAt(request.getExpiredAt())
-                .allowedModels(request.getAllowedModels())
-                .rateLimit(request.getRateLimit() != null ? request.getRateLimit() : 0)
-                .status(1)
-                .build();
-
-        Token saved = tokenRepository.save(token);
-        cacheInvalidationService.publish(CacheInvalidationService.TOKEN_ID_PREFIX + saved.getId());
-        return saved;
+        throw new BusinessException(400, "Token 标识已存在，请重试",
+                "Token identifier already exists; retry", lastCollision);
     }
 
     public Token update(Long id, TokenRequest request) {

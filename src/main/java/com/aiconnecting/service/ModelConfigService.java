@@ -8,12 +8,12 @@ import com.aiconnecting.repository.ChannelRepository;
 import com.aiconnecting.repository.ModelConfigRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.context.event.EventListener;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -108,19 +108,23 @@ public class ModelConfigService {
     }
 
     public ModelConfig save(ModelConfig config) {
-        ModelConfig saved = modelConfigRepository.save(config);
+        ModelConfig saved;
+        try {
+            saved = modelConfigRepository.save(config);
+            modelConfigRepository.flush();
+        } catch (DataIntegrityViolationException e) {
+            throw displayNameAlreadyExists(config.getDisplayName(), e);
+        }
         cacheInvalidationService.publish(CacheInvalidationService.MODEL_CONFIG);
         return saved;
     }
 
-    public void validateNameUnique(String name, Long excludeId) {
-        if (name == null || name.isBlank()) {
-            throw new BusinessException("模型名称不能为空", "Model name cannot be empty");
-        }
-        if (modelConfigRepository.existsByNameExcludingId(name, excludeId)) {
-            throw new BusinessException("模型名称已存在", "Model name already exists");
-        }
-        // SQLite 已有 name 唯一索引；MySQL 现有表结构未声明该约束，高并发创建建议补唯一索引。
+    /**
+     * @deprecated 模型配置的业务唯一标识是 displayName；保留此入口仅兼容旧调用方。
+     */
+    @Deprecated(forRemoval = true)
+    public void validateNameUnique(String displayName, Long excludeId) {
+        validateDisplayNameUnique(displayName, excludeId);
     }
 
     /**
@@ -132,9 +136,19 @@ public class ModelConfigService {
             return;
         }
         if (modelConfigRepository.existsByDisplayNameExcludingId(displayName, excludeId)) {
-            throw new BusinessException("显示名称 \"" + displayName + "\" 已存在，请使用唯一的显示名称",
-                    "Display name \"" + displayName + "\" already exists; use a unique display name");
+            throw displayNameAlreadyExists(displayName);
         }
+    }
+
+    private BusinessException displayNameAlreadyExists(String displayName) {
+        return new BusinessException("显示名称 \"" + displayName + "\" 已存在，请使用唯一的显示名称",
+                "Display name \"" + displayName + "\" already exists; use a unique display name");
+    }
+
+    private BusinessException displayNameAlreadyExists(String displayName, DataIntegrityViolationException cause) {
+        return new BusinessException(400,
+                "显示名称 \"" + displayName + "\" 已存在，请使用唯一的显示名称",
+                "Display name \"" + displayName + "\" already exists; use a unique display name", cause);
     }
 
     public void delete(Long id) {
@@ -171,13 +185,6 @@ public class ModelConfigService {
         List<String> validNames = names.stream()
                 .filter(name -> name != null && !name.isBlank())
                 .toList();
-        Set<String> seen = new HashSet<>();
-        for (String name : validNames) {
-            if (!seen.add(name)) {
-                throw new BusinessException("模型名称已存在", "Model name already exists");
-            }
-            validateNameUnique(name, null);
-        }
         List<ModelConfig> configs = validNames.stream()
                 .map(name -> ModelConfig.builder().name(name).status(1).build())
                 .toList();

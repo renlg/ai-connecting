@@ -143,16 +143,16 @@ class ModelConfigControllerTest {
     }
 
     @Test
-    void create_duplicateNameReturnsFriendlyBadRequestWithoutTraceId() throws Exception {
-        doThrow(new BusinessException("模型名称已存在"))
-                .when(modelConfigService).validateNameUnique("gpt-4o", null);
+    void create_duplicateDisplayNameReturnsFriendlyBadRequestWithoutTraceId() throws Exception {
+        doThrow(new BusinessException("显示名称 \"GPT-4o\" 已存在，请使用唯一的显示名称"))
+                .when(modelConfigService).validateDisplayNameUnique("GPT-4o", null);
 
         mockMvc.perform(post("/api/admin/models")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"gpt-4o\"}"))
+                        .content("{\"name\":\"gpt-4o-mini\",\"displayName\":\"GPT-4o\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
-                .andExpect(jsonPath("$.message").value("模型名称已存在"))
+                .andExpect(jsonPath("$.message").value("显示名称 \"GPT-4o\" 已存在，请使用唯一的显示名称"))
                 .andExpect(jsonPath("$.traceId").doesNotExist());
         verify(modelConfigService, never()).save(any(ModelConfig.class));
     }
