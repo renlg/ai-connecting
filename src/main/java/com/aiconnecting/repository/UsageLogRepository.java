@@ -42,20 +42,21 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long>, Usage
     // findDailyCreditCostByTokenIdSince / findLogDetailsByTokenIdAndDate 使用 SQLite 专属的
     // datetime()/unixepoch 函数做按天分桶，MySQL 无此函数，已迁移到 UsageLogRepositoryImpl 按方言分支实现
 
-    // Dashboard 聚合查询：一次查询获取所有指标（Token 相关列仅统计 text 类型模型，请求数/积分不受影响）
+    // Dashboard 聚合查询：一次查询获取所有指标（Token 相关列仅统计 text 类型模型/模型组，请求数/积分不受影响）
     @Query(value = "SELECT COALESCE(COUNT(*), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN total_tokens ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN completion_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN total_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN prompt_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN completion_tokens ELSE 0 END), 0), " +
             "COALESCE(SUM(credit_cost), 0.0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens_cache_hit ELSE 0 END), 0) " +
-            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since", nativeQuery = true)
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN prompt_tokens_cache_hit ELSE 0 END), 0) " +
+            "FROM usage_logs ul WHERE token_id IN :tokenIds AND created_at >= :since", nativeQuery = true)
     List<Object[]> sumAllMetricsByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
-    // 仅统计 text 类型模型的缓存创建/读取 Token（用于仪表盘）
+    // 仅统计 text 类型模型/模型组的缓存创建/读取 Token（用于仪表盘）
     @Query(value = "SELECT COALESCE(SUM(cached_tokens_cache_creation), 0), COALESCE(SUM(cached_tokens_cache_read), 0) " +
-            "FROM usage_logs WHERE token_id IN :tokenIds AND created_at >= :since " +
-            "AND model IN (SELECT name FROM model_configs WHERE type = 'text')", nativeQuery = true)
+            "FROM usage_logs ul WHERE token_id IN :tokenIds AND created_at >= :since " +
+            "AND (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') " +
+            "OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text'))", nativeQuery = true)
     List<Object[]> sumCacheTokensByTokenIdsSince(@Param("tokenIds") List<Long> tokenIds, @Param("since") LocalDateTime since);
 
     // findDailyCreditCostByTokenIdsSince / 按模型及模型组的每日 Token 查询
@@ -79,18 +80,18 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long>, Usage
 
     /**
      * 聚合指定时间窗口内的所有指标（供 StatsAggregationService 使用）
-     * Token 相关列仅统计 text 类型模型，请求数/积分消耗不受模型类型影响
+     * Token 相关列仅统计 text 类型模型/模型组，请求数/积分消耗不受模型类型影响
      */
     @Query(value = "SELECT " +
             "COALESCE(COUNT(*), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN total_tokens ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN completion_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN total_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN prompt_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN completion_tokens ELSE 0 END), 0), " +
             "COALESCE(SUM(credit_cost), 0.0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens_cache_hit ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN cached_tokens_cache_creation ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN cached_tokens_cache_read ELSE 0 END), 0) " +
-            "FROM usage_logs WHERE created_at >= :startTime AND created_at < :endTime", nativeQuery = true)
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN prompt_tokens_cache_hit ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN cached_tokens_cache_creation ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN cached_tokens_cache_read ELSE 0 END), 0) " +
+            "FROM usage_logs ul WHERE created_at >= :startTime AND created_at < :endTime", nativeQuery = true)
     List<Object[]> aggregateWindow(@Param("startTime") LocalDateTime startTime, @Param("endTime") LocalDateTime endTime);
 
     /**
@@ -105,13 +106,13 @@ public interface UsageLogRepository extends JpaRepository<UsageLog, Long>, Usage
      */
     @Query(value = "SELECT " +
             "COALESCE(COUNT(*), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN total_tokens ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN completion_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN total_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN prompt_tokens ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN completion_tokens ELSE 0 END), 0), " +
             "COALESCE(SUM(credit_cost), 0.0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN prompt_tokens_cache_hit ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN cached_tokens_cache_creation ELSE 0 END), 0), " +
-            "COALESCE(SUM(CASE WHEN model IN (SELECT name FROM model_configs WHERE type = 'text') THEN cached_tokens_cache_read ELSE 0 END), 0) " +
-            "FROM usage_logs WHERE created_at >= :since", nativeQuery = true)
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN prompt_tokens_cache_hit ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN cached_tokens_cache_creation ELSE 0 END), 0), " +
+            "COALESCE(SUM(CASE WHEN (EXISTS (SELECT 1 FROM model_configs mc WHERE mc.name = ul.model AND mc.type = 'text') OR EXISTS (SELECT 1 FROM model_groups mg WHERE mg.name = ul.model AND mg.type = 'text')) THEN cached_tokens_cache_read ELSE 0 END), 0) " +
+            "FROM usage_logs ul WHERE created_at >= :since", nativeQuery = true)
     List<Object[]> aggregateSince(@Param("since") LocalDateTime since);
 }

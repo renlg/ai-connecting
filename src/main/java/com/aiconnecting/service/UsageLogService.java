@@ -3,8 +3,10 @@ package com.aiconnecting.service;
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.dto.DashboardDailyStats;
+import com.aiconnecting.entity.ModelGroup;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.User;
+import com.aiconnecting.repository.ModelGroupRepository;
 import com.aiconnecting.repository.UsageLogRepository;
 import com.aiconnecting.repository.UsageStatsRepository;
 import com.aiconnecting.repository.UserRepository;
@@ -38,6 +40,7 @@ public class UsageLogService {
     private final UsageStatsRepository usageStatsRepository;
     private final ChannelService channelService;
     private final ModelConfigService modelConfigService;
+    private final ModelGroupRepository modelGroupRepository;
     private final UserRepository userRepository;
     private final TokenService tokenService;
     private final CacheInvalidationService cacheInvalidationService;
@@ -555,35 +558,47 @@ public class UsageLogService {
 
     /**
      * 将按模型名分组的积分统计（model, credit）合并为按类型（text/image/video/audio）统计。
-     * 未在 model_configs 中找到对应名称的模型会被忽略（与原先 INNER JOIN 行为一致）。
+     * usage_logs.model 既可能是 model_configs.name，也可能是 model_groups.name。
      */
     private Map<String, BigDecimal> mergeCreditsByModelToType(List<Object[]> modelRows) {
         Map<String, ModelConfigService.ModelInfo> modelInfoMap = modelConfigService.getModelInfoMap();
+        Map<String, String> modelGroupTypeMap = getModelGroupTypeMap();
         Map<String, BigDecimal> result = defaultCreditsByType();
         for (Object[] row : modelRows) {
             String model = (String) row[0];
             ModelConfigService.ModelInfo info = modelInfoMap.get(model);
-            if (info == null) continue;
+            String type = info != null ? info.type() : modelGroupTypeMap.get(model);
+            if (type == null) continue;
             BigDecimal credit = BigDecimal.valueOf(((Number) row[1]).doubleValue());
-            result.merge(info.type(), credit, BigDecimal::add);
+            result.merge(type, credit, BigDecimal::add);
         }
         return result;
     }
 
     /**
      * 将按 (date, model) 分组的积分统计合并为按 (date, type) 统计。
-     * 未在 model_configs 中找到对应名称的模型会被忽略（与原先 INNER JOIN 行为一致）。
+     * usage_logs.model 既可能是 model_configs.name，也可能是 model_groups.name。
      */
     private Map<String, Map<String, BigDecimal>> mergeDailyCreditsByModelToType(List<Object[]> modelRows) {
         Map<String, ModelConfigService.ModelInfo> modelInfoMap = modelConfigService.getModelInfoMap();
+        Map<String, String> modelGroupTypeMap = getModelGroupTypeMap();
         Map<String, Map<String, BigDecimal>> result = new HashMap<>();
         for (Object[] row : modelRows) {
             String date = (String) row[0];
             String model = (String) row[1];
             ModelConfigService.ModelInfo info = modelInfoMap.get(model);
-            if (info == null) continue;
+            String type = info != null ? info.type() : modelGroupTypeMap.get(model);
+            if (type == null) continue;
             BigDecimal credit = BigDecimal.valueOf(((Number) row[2]).doubleValue());
-            result.computeIfAbsent(date, d -> defaultCreditsByType()).merge(info.type(), credit, BigDecimal::add);
+            result.computeIfAbsent(date, d -> defaultCreditsByType()).merge(type, credit, BigDecimal::add);
+        }
+        return result;
+    }
+
+    private Map<String, String> getModelGroupTypeMap() {
+        Map<String, String> result = new HashMap<>();
+        for (ModelGroup group : modelGroupRepository.findAll()) {
+            result.put(group.getName(), group.getType());
         }
         return result;
     }
