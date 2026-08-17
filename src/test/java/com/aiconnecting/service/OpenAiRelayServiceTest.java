@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.function.Function;
 
@@ -159,6 +160,27 @@ class OpenAiRelayServiceTest {
         assertFalse(FailureClassifier.isSwitchable(400, promptRejection));
         assertTrue(FailureClassifier.isSwitchable(400,
                 "{\"error\":{\"message\":\"generic invalid request\",\"type\":\"invalid_request_error\"}}"));
+    }
+
+    @Test
+    void quotaFailureRecordsChannelCircuitAndKeepsModelCooldown() {
+        ChannelHealthTracker healthTracker = mock(ChannelHealthTracker.class);
+        RelaySupport relaySupport = relaySupport(mock(ChannelRouter.class), healthTracker);
+        ModelHealthTracker modelHealthTracker = mock(ModelHealthTracker.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<ModelHealthTracker> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(modelHealthTracker);
+        ReflectionTestUtils.setField(relaySupport, "modelHealthTrackerProvider", provider);
+        Runnable fallbackRecorder = mock(Runnable.class);
+        String body = "{\"error\":{\"message\":\"Free quota exhausted\"}}";
+        BusinessException quota = BusinessException.upstream(403, "upstream quota exhausted", body, null);
+
+        relaySupport.dispatchRelayFailure(7L, 42L, quota, fallbackRecorder);
+
+        verify(healthTracker).recordFailure(7L, ChannelHealthTracker.ErrorCategory.QUOTA,
+                "upstream quota exhausted");
+        verify(modelHealthTracker).recordFailure(7L, 42L, ModelHealthTracker.FailureType.QUOTA, null);
+        verify(fallbackRecorder, never()).run();
     }
 
     private RelaySupport relaySupport(ChannelRouter router, ChannelHealthTracker healthTracker) {

@@ -396,28 +396,36 @@ public class RelaySupport {
     }
 
     /**
-     * 单模型直连路径的失败记录：按 {@link FailureClassifier} 分类互斥地写入——RATE_LIMIT/QUOTA/
-     * MODEL_NOT_FOUND 只写模型级冷却（{@link ModelHealthTracker}，仅限该 渠道+模型 组合），不再
-     * 触发渠道级熔断（避免同渠道下的其它模型被一起限流）；CHANNEL 类失败仍由调用方按原有方式写入
+     * 单模型直连路径的失败记录：RATE_LIMIT/MODEL_NOT_FOUND 只写模型级冷却
+     *（{@link ModelHealthTracker}，仅限该 渠道+模型 组合），避免同渠道下的其它模型被一起限流；
+     * QUOTA 同时写渠道级立即熔断和模型级冷却；CHANNEL 类失败仍由调用方按原有方式写入
      * 渠道级熔断（{@code channelFailureRecorder}，保留调用方原有的 ErrorCategory 判定逻辑不变）；
-     * FAST_FAIL 两者都不写。modelConfigId 缺失（如模型未配置）时，429/配额/模型不存在类失败
-     * 退化为调用方原有的渠道级记录方式，避免静默丢失该次失败信号。
+     * FAST_FAIL 两者都不写。modelConfigId 缺失（如模型未配置）时，RATE_LIMIT/MODEL_NOT_FOUND
+     * 退化为调用方原有的渠道级记录方式；QUOTA 始终写渠道级熔断，避免丢失该次失败信号。
      */
     void dispatchRelayFailure(Long channelId, Long modelConfigId, BusinessException error,
                                Runnable channelFailureRecorder) {
         FailureClassifier.Classification classification = FailureClassifier.classify(error);
         switch (classification.kind()) {
-            case RATE_LIMIT, QUOTA, MODEL_NOT_FOUND -> {
+            case RATE_LIMIT, MODEL_NOT_FOUND -> {
                 ModelHealthTracker tracker = modelHealthTrackerProvider.getIfAvailable();
                 if (tracker != null && modelConfigId != null) {
                     ModelHealthTracker.FailureType type = switch (classification.kind()) {
                         case RATE_LIMIT -> ModelHealthTracker.FailureType.RATE_LIMIT;
-                        case QUOTA -> ModelHealthTracker.FailureType.QUOTA;
                         default -> ModelHealthTracker.FailureType.MODEL_NOT_FOUND;
                     };
                     tracker.recordFailure(channelId, modelConfigId, type, classification.retryAfterSeconds());
                 } else {
                     channelFailureRecorder.run();
+                }
+            }
+            case QUOTA -> {
+                channelHealthTracker.recordFailure(channelId, ChannelHealthTracker.ErrorCategory.QUOTA,
+                        error.getMessage());
+                ModelHealthTracker tracker = modelHealthTrackerProvider.getIfAvailable();
+                if (tracker != null && modelConfigId != null) {
+                    tracker.recordFailure(channelId, modelConfigId, ModelHealthTracker.FailureType.QUOTA,
+                            classification.retryAfterSeconds());
                 }
             }
             case CHANNEL -> channelFailureRecorder.run();

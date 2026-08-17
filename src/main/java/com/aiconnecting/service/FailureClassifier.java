@@ -166,7 +166,8 @@ final class FailureClassifier {
                 || normalized.contains("policy_violation")
                 || normalized.contains("unable_to_generate_this_content")) return Kind.FAST_FAIL;
         if (normalized.contains("model_not_found") || normalized.contains("model_decommissioned")) return Kind.MODEL_NOT_FOUND;
-        if (normalized.contains("insufficient_quota") || normalized.contains("quota_exceeded")) return Kind.QUOTA;
+        if (normalized.contains("insufficient_quota") || normalized.contains("insufficient_user_quota")
+                || normalized.contains("quota_exceeded") || normalized.contains("quota_exhausted")) return Kind.QUOTA;
         if (normalized.contains("rate_limit_exceeded") || normalized.contains("rate_limit")) return Kind.RATE_LIMIT;
         return null;
     }

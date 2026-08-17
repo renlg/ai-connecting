@@ -103,15 +103,9 @@ public class ChannelRouter {
                 .toList();
 
         if (available.isEmpty()) {
-            // 如果所有渠道都被封禁，降级使用未尝试的渠道（即使被封禁）
-            List<Channel> fallback = channels.stream()
-                    .filter(c -> excludeIds == null || !excludeIds.contains(c.getId()))
-                    .toList();
-            if (fallback.isEmpty()) {
-                throw new BusinessException(503, "该模型当前不可用，请稍后重试或更换模型", "This model is currently unavailable, please try again later or use another model");
-            }
-            log.warn("所有渠道均被封禁，降级使用被封禁渠道: modelId={}", channelModelId);
-            available = fallback;
+            // OPEN 渠道必须保持 fast-fail；尤其不能让单渠道模型绕过渠道级熔断。
+            throw new BusinessException(503, "该模型当前不可用，请稍后重试或更换模型",
+                    "This model is currently unavailable, please try again later or use another model");
         }
 
         // 阶段一：按 priority 升序分组

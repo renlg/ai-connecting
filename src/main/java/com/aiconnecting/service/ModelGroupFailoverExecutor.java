@@ -150,9 +150,13 @@ public class ModelGroupFailoverExecutor {
                                boolean recordModelCooldown) {
         recordChannelFailure(channel, modelConfigId, null, error);
         FailureClassifier.Classification classification = FailureClassifier.classifyForGroup(error);
-        if (classification.kind() == FailureClassifier.Kind.CHANNEL) {
+        if (classification.kind() == FailureClassifier.Kind.CHANNEL
+                || classification.kind() == FailureClassifier.Kind.QUOTA) {
+            ChannelHealthTracker.ErrorCategory category = classification.kind() == FailureClassifier.Kind.QUOTA
+                    ? ChannelHealthTracker.ErrorCategory.QUOTA
+                    : ChannelHealthTracker.ErrorCategory.fromStatusCode(error.getCode());
             support.channelHealthTracker.recordFailure(channel.getId(),
-                    ChannelHealthTracker.ErrorCategory.fromStatusCode(error.getCode()), error.getMessage());
+                    category, error.getMessage());
         }
         if (!recordModelCooldown) {
             return;

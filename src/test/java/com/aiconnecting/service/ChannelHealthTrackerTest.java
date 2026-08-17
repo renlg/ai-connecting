@@ -75,6 +75,22 @@ class ChannelHealthTrackerTest {
     }
 
     @Test
+    void quotaImmediatelyOpensCircuitForOneHour() {
+        Long id = newChannelId();
+        long recordedAt = System.currentTimeMillis();
+
+        tracker.recordFailure(id, ChannelHealthTracker.ErrorCategory.QUOTA, "Free quota exhausted");
+        awaitAsync();
+
+        assertEquals(ChannelHealthTracker.CircuitState.OPEN, tracker.getEffectiveState(id));
+        assertTrue(tracker.isBlocked(id));
+        Long blockedUntil = tracker.getBlockedUntil(id);
+        assertNotNull(blockedUntil);
+        assertTrue(blockedUntil >= recordedAt + 59 * 60 * 1000L);
+        assertTrue(blockedUntil <= System.currentTimeMillis() + 61 * 60 * 1000L);
+    }
+
+    @Test
     void tripsCircuitWhenErrorRateAndVolumeThresholdReached() {
         Long id = newChannelId();
         // 10 次失败，错误率 100% >= 50%，总请求数 10 >= 阈值 10 -> 应该熔断

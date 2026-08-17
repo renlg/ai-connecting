@@ -277,6 +277,25 @@ class ModelGroupFailoverExecutorTest {
     }
 
     @Test
+    void singleMemberGroupQuotaStillRecordsChannelCircuitWithoutModelCooldown() throws Exception {
+        GroupFixture fixture = groupFixture("application/json",
+                "{\"error\":{\"message\":\"Free quota exhausted\",\"code\":\"insufficient_quota\"}}"
+                        .getBytes(StandardCharsets.UTF_8), 403);
+
+        assertThatThrownBy(() -> fixture.executor.relayRequest(
+                "client-key", "/v1/chat/completions", "{\"model\":\"public-group\"}",
+                "public-group", request(), new MockHttpServletResponse()))
+                .isInstanceOf(BusinessException.class);
+
+        verify(fixture.modelHealth, never()).recordFailure(anyLong(), anyLong(),
+                any(ModelHealthTracker.FailureType.class));
+        verify(fixture.modelHealth, never()).recordFailure(anyLong(), anyLong(),
+                any(ModelHealthTracker.FailureType.class), any());
+        verify(fixture.support.channelHealthTracker, atLeastOnce()).recordFailure(eq(9L),
+                eq(ChannelHealthTracker.ErrorCategory.QUOTA), anyString());
+    }
+
+    @Test
     void realMemberFailureIsForwardedToDetailedFailureLogger() {
         StandardGroupFixture fixture = standardGroupFixture();
         FailureLogService failureLogs = mock(FailureLogService.class);

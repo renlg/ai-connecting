@@ -55,8 +55,8 @@ public class ChannelHealthTracker {
     /** 上游限流（429）冷却时长：30 秒，不计入熔断窗口 */
     private static final long RATE_LIMIT_COOLDOWN_MS = 30 * 1000L;
 
-    /** 鉴权失败（401/403）立即封禁时长：1 小时 */
-    private static final long AUTH_BLOCK_DURATION_MS = 60 * 60 * 1000L;
+    /** 鉴权失败或配额耗尽立即封禁时长：1 小时 */
+    private static final long IMMEDIATE_BLOCK_DURATION_MS = 60 * 60 * 1000L;
 
     /** 半开探测许可有效期，防止并发请求同时探测 */
     private static final long HALF_OPEN_PERMIT_TTL_MS = 20 * 1000L;
@@ -72,11 +72,11 @@ public class ChannelHealthTracker {
      * 上游错误分类
      * TIMEOUT/SERVER_ERROR/CONNECTION_ERROR 计入滚动窗口错误率
      * RATE_LIMIT 仅短暂冷却，不计入错误率、不影响熔断器状态
-     * AUTH_ERROR 立即熔断 1 小时（密钥可能已失效），不经过滚动窗口
+     * AUTH_ERROR/QUOTA 立即熔断 1 小时（密钥失效、欠费或配额耗尽），不经过滚动窗口
      * CLIENT_ERROR 是用户请求本身的问题，不影响渠道健康
      */
     public enum ErrorCategory {
-        TIMEOUT, SERVER_ERROR, RATE_LIMIT, AUTH_ERROR, CLIENT_ERROR, CONNECTION_ERROR;
+        TIMEOUT, SERVER_ERROR, RATE_LIMIT, AUTH_ERROR, QUOTA, CLIENT_ERROR, CONNECTION_ERROR;
 
         public static ErrorCategory fromStatusCode(int code) {
             if (code == 429) return RATE_LIMIT;
@@ -274,10 +274,11 @@ public class ChannelHealthTracker {
                 safeSubmit(() -> applyRateLimitCooldown(channelId, errorMessage));
                 break;
             case AUTH_ERROR:
+            case QUOTA:
                 safeSubmit(() -> {
-                    log.warn("渠道 {} 鉴权失败（{}），密钥可能已失效，立即熔断 1 小时: {}",
+                    log.warn("渠道 {} 发生不可恢复的账户错误（{}），立即熔断 1 小时: {}",
                             channelId, category, errorMessage);
-                    forceOpen(channelId, AUTH_BLOCK_DURATION_MS);
+                    forceOpen(channelId, IMMEDIATE_BLOCK_DURATION_MS);
                 });
                 break;
             case CLIENT_ERROR:
@@ -396,13 +397,14 @@ public class ChannelHealthTracker {
     }
 
     /**
-     * 立即熔断固定时长（用于鉴权失败），不经过窗口判定
+     * 立即熔断固定时长（用于鉴权失败或配额耗尽），不经过窗口判定
      */
     private void forceOpen(Long channelId, long durationMs) {
         long until = System.currentTimeMillis() + durationMs;
         setState(channelId, true, until);
         setOpenSinceIfAbsent(channelId);
         releasePermit(channelId);
+        blockedIdsCache = null;
     }
 
     /**
@@ -418,6 +420,7 @@ public class ChannelHealthTracker {
         if (healthPersistenceService != null) {
             healthPersistenceService.resetProbeFailuresAsync(channelId, System.currentTimeMillis());
         }
+        blockedIdsCache = null;
     }
 
     /**
