@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
+import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.repository.ChannelRepository;
@@ -20,20 +21,21 @@ import static org.mockito.Mockito.*;
 class ModelGroupServiceTest {
 
     @Test
-    void duplicateNameIsRejectedAndUpdateCheckExcludesCurrentGroup() {
+    void duplicateNameIsRejectedAndSubmittedNameIsUsedAsDedupIdentifier() {
         ModelGroupRepository groups = mock(ModelGroupRepository.class);
+        DuplicateSubmitGuard duplicateSubmitGuard = mock(DuplicateSubmitGuard.class);
         ModelGroupService service = new ModelGroupService(groups, mock(ModelGroupMemberRepository.class),
                 mock(ModelConfigRepository.class), mock(ChannelRepository.class),
-                mock(CacheInvalidationService.class));
-        when(groups.existsByNameExcludingId("shared", null)).thenReturn(true);
+                mock(CacheInvalidationService.class), duplicateSubmitGuard);
+        when(duplicateSubmitGuard.tryAcquire("model-group", "shared")).thenReturn(false, true);
 
         BusinessException error = assertThrows(BusinessException.class,
-                () -> service.validateNameUnique("shared", null));
+                () -> service.guardDuplicateName("shared"));
 
         assertEquals(400, error.getCode());
         assertEquals("模型组名称 \"shared\" 已存在", error.getMessage());
-        service.validateNameUnique("shared", 7L);
-        verify(groups).existsByNameExcludingId("shared", 7L);
+        service.guardDuplicateName("shared");
+        verify(duplicateSubmitGuard, times(2)).tryAcquire("model-group", "shared");
     }
 
     @Test
@@ -43,7 +45,7 @@ class ModelGroupServiceTest {
         ModelConfigRepository models = mock(ModelConfigRepository.class);
         ChannelRepository channels = mock(ChannelRepository.class);
         ModelGroupService service = new ModelGroupService(groups, members, models, channels,
-                mock(CacheInvalidationService.class));
+                mock(CacheInvalidationService.class), mock(DuplicateSubmitGuard.class));
         ModelConfig image = ModelConfig.builder().id(7L).name("image-model").type("image").build();
         when(models.findById(7L)).thenReturn(Optional.of(image));
         when(channels.findChannelsByModel("%,7,%")).thenReturn(List.of(

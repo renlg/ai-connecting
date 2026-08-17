@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
+import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.repository.ChannelRepository;
 import com.aiconnecting.repository.ModelConfigRepository;
@@ -16,29 +17,32 @@ import static org.mockito.Mockito.*;
 class ModelConfigServiceTest {
     private ModelConfigRepository repository;
     private ModelConfigService service;
+    private DuplicateSubmitGuard duplicateSubmitGuard;
 
     @BeforeEach
     void setUp() {
         repository = mock(ModelConfigRepository.class);
+        duplicateSubmitGuard = mock(DuplicateSubmitGuard.class);
+        when(duplicateSubmitGuard.tryAcquire(anyString(), anyString())).thenReturn(true);
         service = new ModelConfigService(repository, mock(ChannelRepository.class),
-                mock(CacheInvalidationService.class));
+                mock(CacheInvalidationService.class), duplicateSubmitGuard);
     }
 
     @Test
     void duplicateDisplayNameUsesFriendlyBusinessError() {
-        when(repository.existsByDisplayNameExcludingId("GPT Test", null)).thenReturn(true);
+        when(duplicateSubmitGuard.tryAcquire("model", "GPT Test")).thenReturn(false);
 
         BusinessException error = assertThrows(BusinessException.class,
-                () -> service.validateDisplayNameUnique("GPT Test", null));
+                () -> service.guardDuplicateDisplayName("GPT Test"));
 
         assertEquals(400, error.getCode());
         assertEquals("显示名称 \"GPT Test\" 已存在，请使用唯一的显示名称", error.getMessage());
     }
 
     @Test
-    void updateDisplayNameCheckExcludesCurrentModel() {
-        assertDoesNotThrow(() -> service.validateDisplayNameUnique("GPT Test", 5L));
-        verify(repository).existsByDisplayNameExcludingId("GPT Test", 5L);
+    void updateUsesSubmittedDisplayNameAsDedupIdentifier() {
+        assertDoesNotThrow(() -> service.guardDuplicateDisplayName("GPT Test"));
+        verify(duplicateSubmitGuard).tryAcquire("model", "GPT Test");
     }
 
     @Test

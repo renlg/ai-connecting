@@ -42,7 +42,7 @@ public class ModelConfigController {
         }
     }
 
-    /** 模型名称/显示名不得与已存在的模型组名称冲突，理由同 {@link ModelGroupService#validateNameUnique} */
+    /** 模型名称/显示名不得与已存在的模型组名称冲突，理由同 {@link ModelGroupService#guardDuplicateName} */
     private void validateNotGroupName(String name) {
         if (name != null && !name.isBlank() && modelGroupService.findByName(name).isPresent()) {
             throw new BusinessException(409, "模型名称 \"" + name + "\" 与已存在的模型组名称冲突",
@@ -144,7 +144,7 @@ public class ModelConfigController {
         if (request.getName() == null || request.getName().isBlank()) {
             throw new BusinessException("模型名称不能为空", "Model name cannot be empty");
         }
-        modelConfigService.validateDisplayNameUnique(request.getDisplayName(), null);
+        modelConfigService.guardDuplicateDisplayName(request.getDisplayName());
         validateNotGroupName(request.getName());
         validateNotGroupName(request.getDisplayName());
         validatePrices(request);
@@ -191,7 +191,7 @@ public class ModelConfigController {
             config.setName(request.getName());
         }
         if (request.getDisplayName() != null) {
-            modelConfigService.validateDisplayNameUnique(request.getDisplayName(), id);
+            modelConfigService.guardDuplicateDisplayName(request.getDisplayName());
             validateNotGroupName(request.getDisplayName());
             config.setDisplayName(request.getDisplayName());
         }

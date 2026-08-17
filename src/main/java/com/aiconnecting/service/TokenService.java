@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
+import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.dto.TokenRequest;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.repository.TokenRepository;
@@ -21,6 +22,7 @@ public class TokenService {
 
     private final TokenRepository tokenRepository;
     private final CacheInvalidationService cacheInvalidationService;
+    private final DuplicateSubmitGuard duplicateSubmitGuard;
 
     /** Token 验证缓存，减少数据库查询，缓存 30 秒（缩短以减少禁用/过期Token延迟） */
     private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
@@ -65,7 +67,7 @@ public class TokenService {
         DataIntegrityViolationException lastCollision = null;
         for (int attempt = 0; attempt < TOKEN_KEY_GENERATION_ATTEMPTS; attempt++) {
             String tokenKey = "sk-" + UUID.randomUUID().toString().replace("-", "");
-            if (tokenRepository.findByTokenKey(tokenKey).isPresent()) {
+            if (!duplicateSubmitGuard.tryAcquire("token", tokenKey)) {
                 continue;
             }
 

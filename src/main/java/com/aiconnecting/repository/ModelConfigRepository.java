@@ -14,15 +14,7 @@ public interface ModelConfigRepository extends JpaRepository<ModelConfig, Long> 
 
     List<ModelConfig> findByName(String name);
 
-    @Query("SELECT CASE WHEN COUNT(m) > 0 THEN true ELSE false END FROM ModelConfig m " +
-           "WHERE m.name = :name AND (:excludeId IS NULL OR m.id <> :excludeId)")
-    boolean existsByNameExcludingId(@Param("name") String name, @Param("excludeId") Long excludeId);
-
     List<ModelConfig> findByDisplayName(String displayName);
-
-    @Query("SELECT CASE WHEN COUNT(m) > 0 THEN true ELSE false END FROM ModelConfig m " +
-           "WHERE m.displayName = :displayName AND (:excludeId IS NULL OR m.id <> :excludeId)")
-    boolean existsByDisplayNameExcludingId(@Param("displayName") String displayName, @Param("excludeId") Long excludeId);
 
     List<ModelConfig> findByAdminOnlyFalseOrderByStatusDescNameAsc();
 

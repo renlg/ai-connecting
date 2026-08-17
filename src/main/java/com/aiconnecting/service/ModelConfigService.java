@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
+import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.repository.ChannelRepository;
@@ -30,6 +31,7 @@ public class ModelConfigService {
     private final ModelConfigRepository modelConfigRepository;
     private final ChannelRepository channelRepository;
     private final CacheInvalidationService cacheInvalidationService;
+    private final DuplicateSubmitGuard duplicateSubmitGuard;
 
     /** 按 model_configs.name 索引的模型信息（type/displayName），用于仪表盘按模型名合并统计，避免与 usage_logs JOIN */
     public record ModelInfo(String type, String displayName) {}
@@ -119,23 +121,12 @@ public class ModelConfigService {
         return saved;
     }
 
-    /**
-     * @deprecated 模型配置的业务唯一标识是 displayName；保留此入口仅兼容旧调用方。
-     */
-    @Deprecated(forRemoval = true)
-    public void validateNameUnique(String displayName, Long excludeId) {
-        validateDisplayNameUnique(displayName, excludeId);
-    }
-
-    /**
-     * 校验 displayName 唯一性（display_name 是平台侧模型唯一标识）。
-     * 更新场景下排除自身 id；displayName 为空时不做校验。
-     */
-    public void validateDisplayNameUnique(String displayName, Long excludeId) {
+    /** Reserve a 30-second submission window for the platform-facing display name. */
+    public void guardDuplicateDisplayName(String displayName) {
         if (displayName == null || displayName.isBlank()) {
             return;
         }
-        if (modelConfigRepository.existsByDisplayNameExcludingId(displayName, excludeId)) {
+        if (!duplicateSubmitGuard.tryAcquire("model", displayName)) {
             throw displayNameAlreadyExists(displayName);
         }
     }

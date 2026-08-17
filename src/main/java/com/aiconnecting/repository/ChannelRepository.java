@@ -24,10 +24,6 @@ public interface ChannelRepository extends JpaRepository<Channel, Long> {
            "ORDER BY c.createdAt DESC")
     List<Channel> searchByName(@Param("name") String name);
 
-    @Query("SELECT CASE WHEN COUNT(c) > 0 THEN true ELSE false END FROM Channel c " +
-           "WHERE c.name = :name AND (:excludeId IS NULL OR c.id <> :excludeId)")
-    boolean existsByNameExcludingId(@Param("name") String name, @Param("excludeId") Long excludeId);
-
     @Modifying
     @Query("UPDATE Channel c SET c.usedQuota = c.usedQuota + :delta WHERE c.id = :channelId")
     void addUsedQuota(@Param("channelId") Long channelId, @Param("delta") long delta);

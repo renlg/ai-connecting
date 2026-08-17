@@ -1,6 +1,7 @@
 package com.aiconnecting.controller;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.dto.CouponRedemptionDTO;
 import com.aiconnecting.entity.Coupon;
 import com.aiconnecting.entity.Announcement;
@@ -70,12 +71,14 @@ class AdminControllerTest {
     @MockBean private OperationLogService operationLogService;
     @MockBean private StatsAggregationService statsAggregationService;
     @MockBean private FailureLogService failureLogService;
+    @MockBean private DuplicateSubmitGuard duplicateSubmitGuard;
 
     private User adminUser;
     private User regularUser;
 
     @BeforeEach
     void setUp() {
+        when(duplicateSubmitGuard.tryAcquire(anyString(), anyString())).thenReturn(true);
         SecurityContextHolder.clearContext();
 
         adminUser = User.builder()
@@ -298,7 +301,7 @@ class AdminControllerTest {
     @Test
     void createAnnouncementRejectsDuplicateTitleWithoutTraceId() throws Exception {
         setAuthentication(adminUser);
-        when(announcementRepository.existsByTitleExcludingId("维护通知", null)).thenReturn(true);
+        when(duplicateSubmitGuard.tryAcquire("announcement", "维护通知")).thenReturn(false);
 
         mockMvc.perform(post("/api/admin/announcements")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -311,7 +314,7 @@ class AdminControllerTest {
     }
 
     @Test
-    void updateAnnouncementTitleCheckExcludesItself() throws Exception {
+    void updateAnnouncementUsesSubmittedTitleAsDedupIdentifier() throws Exception {
         setAuthentication(adminUser);
         Announcement existing = Announcement.builder().id(7L).title("维护通知").content("旧内容").build();
         when(announcementRepository.findById(7L)).thenReturn(java.util.Optional.of(existing));
@@ -322,6 +325,6 @@ class AdminControllerTest {
                         .content("{\"title\":\"维护通知\",\"content\":\"新内容\"}"))
                 .andExpect(status().isOk());
 
-        verify(announcementRepository).existsByTitleExcludingId("维护通知", 7L);
+        verify(duplicateSubmitGuard).tryAcquire("announcement", "维护通知");
     }
 }

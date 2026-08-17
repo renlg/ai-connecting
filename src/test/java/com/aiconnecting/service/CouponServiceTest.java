@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
+import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.entity.Coupon;
 import com.aiconnecting.entity.CouponRedemptionLog;
 import com.aiconnecting.entity.User;
@@ -33,6 +34,7 @@ class CouponServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private CouponRedemptionLogRepository redemptionLogRepository;
     @Mock private CacheInvalidationService cacheInvalidationService;
+    @Mock private DuplicateSubmitGuard duplicateSubmitGuard;
 
     @InjectMocks private CouponService couponService;
 
@@ -40,6 +42,7 @@ class CouponServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(duplicateSubmitGuard.tryAcquire(anyString(), anyString())).thenReturn(true);
         coupon = Coupon.builder()
                 .id(10L)
                 .code("SAMECODE")

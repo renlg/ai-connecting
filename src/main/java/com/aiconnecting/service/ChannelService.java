@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
+import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.common.OpenAiUrlUtils;
 import com.aiconnecting.common.SseUtils;
 import com.aiconnecting.dto.ChannelRequest;
@@ -42,6 +43,7 @@ import java.util.stream.Collectors;
 public class ChannelService {
 
     private final ChannelRepository channelRepository;
+    private final DuplicateSubmitGuard duplicateSubmitGuard;
 
     @Autowired(required = false)
     private CacheInvalidationService cacheInvalidationService;
@@ -211,18 +213,17 @@ public class ChannelService {
         }
     }
 
-    public void validateNameUnique(String name, Long excludeId) {
+    public void guardDuplicateName(String name) {
         if (name == null || name.isBlank()) {
             throw new BusinessException("渠道名称不能为空", "Channel name cannot be empty");
         }
-        if (channelRepository.existsByNameExcludingId(name, excludeId)) {
+        if (!duplicateSubmitGuard.tryAcquire("channel", name)) {
             throw new BusinessException("渠道名称已存在", "Channel name already exists");
         }
-        // channels.name 当前没有数据库唯一约束；高并发创建仍建议补唯一索引作为原子兜底。
     }
 
     public Channel create(ChannelRequest request) {
-        validateNameUnique(request.getName(), null);
+        guardDuplicateName(request.getName());
         validateSupportedLevels(request.getSupportedLevels());
         validateModelMapping(null, request.getType(), request.getModelIds(), request.getModelMapping());
         Channel channel = Channel.builder()
@@ -248,7 +249,7 @@ public class ChannelService {
         validateSupportedLevels(request.getSupportedLevels());
         Channel channel = getById(id);
         if (request.getName() != null) {
-            validateNameUnique(request.getName(), id);
+            guardDuplicateName(request.getName());
         }
         String proposedType = request.getType() != null ? request.getType() : channel.getType();
         String proposedModelIds = request.getModelIds() != null ? request.getModelIds() : channel.getModelIds();

@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ChannelServiceVideoTest {
 
-    private final ChannelService service = new ChannelService(null) {
+    private final ChannelService service = new ChannelService(null, null) {
         @Override
         List<InetAddress> resolveVideoHost(String host) throws IOException {
             return List.of(InetAddress.getByAddress(host, new byte[]{8, 8, 8, 8}));

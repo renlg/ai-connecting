@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
+import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.dto.CouponRedemptionDTO;
 import com.aiconnecting.entity.Coupon;
 import com.aiconnecting.entity.CouponRedemptionLog;
@@ -31,6 +32,7 @@ public class CouponService {
     private final UserRepository userRepository;
     private final CouponRedemptionLogRepository redemptionLogRepository;
     private final CacheInvalidationService cacheInvalidationService;
+    private final DuplicateSubmitGuard duplicateSubmitGuard;
 
     private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -47,7 +49,7 @@ public class CouponService {
         DataIntegrityViolationException lastCollision = null;
         for (int attempt = 0; attempt < COUPON_CODE_GENERATION_ATTEMPTS; attempt++) {
             String code = generateCode();
-            if (couponRepository.findByCode(code).isPresent()) {
+            if (!duplicateSubmitGuard.tryAcquire("coupon", code)) {
                 continue;
             }
 

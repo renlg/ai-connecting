@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
+import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.ModelGroup;
 import com.aiconnecting.entity.ModelGroupMember;
@@ -35,6 +36,7 @@ public class ModelGroupService {
     private final ModelConfigRepository modelConfigRepository;
     private final ChannelRepository channelRepository;
     private final CacheInvalidationService cacheInvalidationService;
+    private final DuplicateSubmitGuard duplicateSubmitGuard;
 
     static final Set<String> VALID_TYPES = Set.of("text", "image", "video", "audio");
     static final Set<String> VALID_STRATEGIES = Set.of("round_robin", "priority", "random");
@@ -129,11 +131,11 @@ public class ModelGroupService {
         }
     }
 
-    public void validateNameUnique(String name, Long excludeId) {
+    public void guardDuplicateName(String name) {
         if (name == null || name.isBlank()) {
             throw new BusinessException("模型组名称不能为空", "Model group name cannot be empty");
         }
-        if (modelGroupRepository.existsByNameExcludingId(name, excludeId)) {
+        if (!duplicateSubmitGuard.tryAcquire("model-group", name)) {
             throw new BusinessException("模型组名称 \"" + name + "\" 已存在",
                     "Model group name \"" + name + "\" already exists");
         }
@@ -148,7 +150,7 @@ public class ModelGroupService {
     @Transactional
     public ModelGroup create(ModelGroup group, List<MemberInput> memberInputs) {
         validatePrices(group);
-        validateNameUnique(group.getName(), null);
+        guardDuplicateName(group.getName());
         group.setType(validateType(group.getType()));
         group.setStrategy(normalizeStrategy(group.getStrategy()));
         group.setMaxAttempts(normalizeMaxAttempts(group.getMaxAttempts()));
@@ -169,8 +171,13 @@ public class ModelGroupService {
         validatePrices(patch);
         ModelGroup existing = getById(id);
         if (patch.getName() != null) {
-            validateNameUnique(patch.getName(), id);
+            guardDuplicateName(patch.getName());
             existing.setName(patch.getName());
+            try {
+                modelGroupRepository.flush();
+            } catch (DataIntegrityViolationException e) {
+                throw groupNameAlreadyExists(existing.getName(), e);
+            }
         }
         boolean typeChanged = patch.getType() != null && !patch.getType().equals(existing.getType());
         if (patch.getType() != null) {

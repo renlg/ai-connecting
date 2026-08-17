@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.dto.ChannelRequest;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
@@ -17,6 +18,7 @@ import static org.mockito.Mockito.*;
 class ChannelServiceTest {
     private ChannelRepository repository;
     private ModelConfigService modelConfigService;
+    private DuplicateSubmitGuard duplicateSubmitGuard;
     private ChannelService service;
     private ModelConfig model;
 
@@ -24,7 +26,9 @@ class ChannelServiceTest {
     void setUp() {
         repository = mock(ChannelRepository.class);
         modelConfigService = mock(ModelConfigService.class);
-        service = new ChannelService(repository);
+        duplicateSubmitGuard = mock(DuplicateSubmitGuard.class);
+        when(duplicateSubmitGuard.tryAcquire(anyString(), anyString())).thenReturn(true);
+        service = new ChannelService(repository, duplicateSubmitGuard);
         ReflectionTestUtils.setField(service, "modelConfigService", modelConfigService);
         model = ModelConfig.builder().id(7L).name("platform-model").type("text").build();
         when(repository.findChannelsByModel(anyString())).thenReturn(List.of());
@@ -49,7 +53,7 @@ class ChannelServiceTest {
 
     @Test
     void createRejectsDuplicateNameWithFriendlyBusinessError() {
-        when(repository.existsByNameExcludingId("test", null)).thenReturn(true);
+        when(duplicateSubmitGuard.tryAcquire("channel", "test")).thenReturn(false);
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> service.create(request("openai", "7", null)));
@@ -60,13 +64,13 @@ class ChannelServiceTest {
     }
 
     @Test
-    void updateNameCheckExcludesCurrentChannel() {
+    void updateUsesSubmittedNameAsDedupIdentifier() {
         Channel existing = Channel.builder().id(3L).name("test").type("openai").modelIds("7").build();
         when(repository.findById(3L)).thenReturn(java.util.Optional.of(existing));
 
         assertDoesNotThrow(() -> service.update(3L, request("openai", "7", null)));
 
-        verify(repository).existsByNameExcludingId("test", 3L);
+        verify(duplicateSubmitGuard).tryAcquire("channel", "test");
     }
 
     @Test

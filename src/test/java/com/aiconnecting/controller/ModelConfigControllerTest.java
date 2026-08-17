@@ -145,7 +145,7 @@ class ModelConfigControllerTest {
     @Test
     void create_duplicateDisplayNameReturnsFriendlyBadRequestWithoutTraceId() throws Exception {
         doThrow(new BusinessException("显示名称 \"GPT-4o\" 已存在，请使用唯一的显示名称"))
-                .when(modelConfigService).validateDisplayNameUnique("GPT-4o", null);
+                .when(modelConfigService).guardDuplicateDisplayName("GPT-4o");
 
         mockMvc.perform(post("/api/admin/models")
                         .contentType(MediaType.APPLICATION_JSON)
