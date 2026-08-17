@@ -259,6 +259,24 @@ class ModelGroupFailoverExecutorTest {
     }
 
     @Test
+    void singleMemberGroupFailureDoesNotRecordModelCooldownButStillRecordsChannelFailure() throws Exception {
+        GroupFixture fixture = groupFixture("application/json",
+                "{\"error\":\"unavailable\"}".getBytes(StandardCharsets.UTF_8), 503);
+
+        assertThatThrownBy(() -> fixture.executor.relayRequest(
+                "client-key", "/v1/chat/completions", "{\"model\":\"public-group\"}",
+                "public-group", request(), new MockHttpServletResponse()))
+                .isInstanceOf(BusinessException.class);
+
+        verify(fixture.modelHealth, never()).recordFailure(anyLong(), anyLong(),
+                any(ModelHealthTracker.FailureType.class));
+        verify(fixture.modelHealth, never()).recordFailure(anyLong(), anyLong(),
+                any(ModelHealthTracker.FailureType.class), any());
+        verify(fixture.support.channelHealthTracker, atLeastOnce()).recordFailure(eq(9L),
+                eq(ChannelHealthTracker.ErrorCategory.CONNECTION_ERROR), anyString());
+    }
+
+    @Test
     void realMemberFailureIsForwardedToDetailedFailureLogger() {
         StandardGroupFixture fixture = standardGroupFixture();
         FailureLogService failureLogs = mock(FailureLogService.class);
@@ -358,7 +376,7 @@ class ModelGroupFailoverExecutorTest {
         ModelGroupFailoverExecutor executor = new ModelGroupFailoverExecutor(
                 support, groupService, routing, billing, modelHealth, usageLogs,
                 mock(VideoTaskRepository.class), mock(VideoTaskUsageLogService.class), passthrough);
-        return new GroupFixture(executor, support, usageLogs, billing, calls, sentRequest, channel);
+        return new GroupFixture(executor, support, usageLogs, billing, modelHealth, calls, sentRequest, channel);
     }
 
     private StandardGroupFixture standardGroupFixture() {
@@ -399,7 +417,8 @@ class ModelGroupFailoverExecutorTest {
     }
 
     private record GroupFixture(ModelGroupFailoverExecutor executor, RelaySupport support,
-                                UsageLogService usageLogs, ModelGroupBillingService billing, Call.Factory calls,
+                                UsageLogService usageLogs, ModelGroupBillingService billing,
+                                ModelHealthTracker modelHealth, Call.Factory calls,
                                 org.mockito.ArgumentCaptor<Request> sentRequest, Channel channel) {}
 
     private record StandardGroupFixture(ModelGroupFailoverExecutor executor, RelaySupport support,
