@@ -397,6 +397,28 @@ class RelayControllerTest {
                 .andExpect(jsonPath("$.data[0].embedding").isArray());
     }
 
+    // ==================== Video Generation ====================
+
+    @Test
+    void videoGenerations_normalizesBothEntryPathsForUpstream() throws Exception {
+        when(relayService.resolveModelName("sora-2")).thenReturn("sora-2");
+        when(relayService.relayMediaRequest(eq("sk-test"), eq("/v1/videos"),
+                anyString(), eq("sora-2"), any(), eq("video")))
+                .thenReturn("{\"id\":\"video-123\"}");
+
+        for (String entryPath : List.of("/v1/videos", "/v1/videos/generations")) {
+            mockMvc.perform(post(entryPath)
+                            .header("Authorization", "Bearer sk-test")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"model\":\"sora-2\"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value("video-123"));
+        }
+
+        verify(relayService, times(2)).relayMediaRequest(eq("sk-test"), eq("/v1/videos"),
+                anyString(), eq("sora-2"), any(), eq("video"));
+    }
+
     // ==================== Models List ====================
 
     @Test

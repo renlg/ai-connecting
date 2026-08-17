@@ -146,7 +146,7 @@ public class RelayController {
 
     /**
      * Video Generation API
-     * 预扣积分后按原始请求路径转发到上游渠道，透传上游响应（保留上游原始任务 id）
+     * 预扣积分后统一转发到上游 /v1/videos，透传上游响应（保留上游原始任务 id）
      * 客户端通过 GET /v1/videos/{id} 经中转轮询任务状态
      */
     @PostMapping({"/v1/videos", "/v1/videos/generations"})
@@ -167,7 +167,7 @@ public class RelayController {
             ((com.fasterxml.jackson.databind.node.ObjectNode) jsonBody).put("model", resolvedModel);
             requestBody = objectMapper.writeValueAsString(jsonBody);
         }
-        String result = relayService.relayMediaRequest(tokenKey, request.getRequestURI(),
+        String result = relayService.relayMediaRequest(tokenKey, "/v1/videos",
                 requestBody, resolvedModel, request, "video");
         return parseJsonOrRaw(result);
     }
