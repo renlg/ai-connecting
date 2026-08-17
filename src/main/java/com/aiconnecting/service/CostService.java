@@ -45,11 +45,10 @@ public class CostService {
         List<CostAggregateRow> rows = repository.findRows(range.start(), range.end(), channelId,
                 normalize(modelName), null, null);
         StringBuilder csv = new StringBuilder("\uFEFF")
-                .append("渠道,模型,实际上游模型,输入token,输出token,缓存创建token,缓存读取token,张数,秒数,请求数,成本(积分/美元)\r\n");
+                .append("渠道,模型,输入token,输出token,缓存创建token,缓存读取token,张数,秒数,请求数,成本(积分/美元)\r\n");
         for (CostAggregateRow row : rows) {
             appendCsv(csv, row.getChannelName());
             appendCsv(csv, row.getModel());
-            appendCsv(csv, row.getActualModel());
             appendCsv(csv, row.getTotalPromptTokens());
             appendCsv(csv, row.getTotalCompletionTokens());
             appendCsv(csv, row.getTotalCacheCreation());
@@ -60,6 +59,12 @@ public class CostService {
             appendCsv(csv, scale(row.getTotalCreditCost()), true);
         }
         return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Transactional(readOnly = true)
+    public List<String> modelOptions(String startDate, String endDate, Long channelId) {
+        DateRange range = parseRange(startDate, endDate);
+        return repository.findModelOptions(range.start(), range.end(), channelId);
     }
 
     DateRange parseRange(String startDate, String endDate) {

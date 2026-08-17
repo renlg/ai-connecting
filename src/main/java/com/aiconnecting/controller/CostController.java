@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/admin/cost")
@@ -32,6 +33,14 @@ public class CostController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.success(costService.aggregate(startDate, endDate, channelId, modelName, page, size));
+    }
+
+    @GetMapping("/models")
+    public ApiResponse<List<String>> models(
+            @RequestParam String startDate,
+            @RequestParam String endDate,
+            @RequestParam(required = false) Long channelId) {
+        return ApiResponse.success(costService.modelOptions(startDate, endDate, channelId));
     }
 
     @GetMapping(value = "/export", produces = "text/csv;charset=UTF-8")

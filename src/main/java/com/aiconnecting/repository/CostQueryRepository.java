@@ -23,6 +23,7 @@ import java.util.List;
 @Repository
 @RequiredArgsConstructor
 public class CostQueryRepository {
+    private static final String DISPLAY_MODEL = "COALESCE(NULLIF(ul.actual_model, ''), ul.model)";
     private static final String FILTER_BASE = " FROM usage_logs ul "
             + "LEFT JOIN channels c ON c.id = ul.channel_id "
             + "WHERE ul.created_at BETWEEN :startTime AND :endTime ";
@@ -37,15 +38,15 @@ public class CostQueryRepository {
     public List<CostAggregateRow> findRows(LocalDateTime startTime, LocalDateTime endTime,
                                            Long channelId, String modelName, Integer page, Integer size) {
         MapSqlParameterSource params = params(startTime, endTime, channelId, modelName);
-        String sql = "SELECT ul.channel_id, c.name, ul.model, GROUP_CONCAT(DISTINCT ul.actual_model), "
+        String sql = "SELECT ul.channel_id, MAX(c.name), " + DISPLAY_MODEL + ", "
                 + "COALESCE(SUM(ul.prompt_tokens), 0), COALESCE(SUM(ul.completion_tokens), 0), "
                 + "COALESCE(SUM(ul.cached_tokens_cache_creation), 0), "
                 + "COALESCE(SUM(ul.cached_tokens_cache_read), 0), COUNT(*), "
                 + "COALESCE(SUM(CASE WHEN ul.request_path LIKE '%images/generations%' THEN 1 ELSE 0 END), 0), "
                 + "COALESCE(SUM(CASE WHEN ul.request_path LIKE '%videos%' THEN 1 ELSE 0 END), 0), "
                 + VIDEO_SECONDS + ", COALESCE(SUM(ul.credit_cost), 0) AS total_credit_cost "
-                + filter(channelId, modelName) + "GROUP BY ul.channel_id, c.name, ul.model "
-                + "ORDER BY total_credit_cost DESC, ul.channel_id ASC, ul.model ASC";
+                + filter(channelId, modelName) + "GROUP BY ul.channel_id, " + DISPLAY_MODEL + " "
+                + "ORDER BY total_credit_cost DESC, ul.channel_id ASC, " + DISPLAY_MODEL + " ASC";
         if (page != null && size != null) {
             sql += " LIMIT :limit OFFSET :offset";
             params.addValue("limit", size).addValue("offset", (long) page * size);
@@ -55,7 +56,7 @@ public class CostQueryRepository {
 
     public long countRows(LocalDateTime startTime, LocalDateTime endTime, Long channelId, String modelName) {
         String sql = "SELECT COUNT(*) FROM (SELECT 1" + filter(channelId, modelName)
-                + "GROUP BY ul.channel_id, ul.model) cost_groups";
+                + "GROUP BY ul.channel_id, " + DISPLAY_MODEL + ") cost_groups";
         Long count = namedJdbcTemplate.queryForObject(sql, params(startTime, endTime, channelId, modelName), Long.class);
         return count == null ? 0 : count;
     }
@@ -81,6 +82,13 @@ public class CostQueryRepository {
                         .build());
     }
 
+    public List<String> findModelOptions(LocalDateTime startTime, LocalDateTime endTime, Long channelId) {
+        String sql = "SELECT DISTINCT " + DISPLAY_MODEL + filter(channelId, null)
+                + "AND " + DISPLAY_MODEL + " IS NOT NULL "
+                + "AND " + DISPLAY_MODEL + " <> '' ORDER BY " + DISPLAY_MODEL;
+        return namedJdbcTemplate.queryForList(sql, params(startTime, endTime, channelId, null), String.class);
+    }
+
     private MapSqlParameterSource params(LocalDateTime startTime, LocalDateTime endTime,
                                          Long channelId, String modelName) {
         boolean mysql = DbDialectUtil.isMysql(jdbcTemplate);
@@ -97,14 +105,16 @@ public class CostQueryRepository {
     private static String filter(Long channelId, String modelName) {
         StringBuilder sql = new StringBuilder(FILTER_BASE);
         if (channelId != null) sql.append("AND ul.channel_id = :channelId ");
-        if (modelName != null && !modelName.isBlank()) sql.append("AND ul.model = :modelName ");
+        if (modelName != null && !modelName.isBlank()) {
+            sql.append("AND ").append(DISPLAY_MODEL).append(" = :modelName ");
+        }
         return sql.toString();
     }
 
     private CostAggregateRow mapRow(ResultSet rs, int rowNum) throws SQLException {
-        long imageCount = longValue(rs, 10);
-        long videoRequestCount = longValue(rs, 11);
-        long videoSeconds = longValue(rs, 12);
+        long imageCount = longValue(rs, 9);
+        long videoRequestCount = longValue(rs, 10);
+        long videoSeconds = longValue(rs, 11);
         String channelName = rs.getString(2);
         Long channelId = rs.getObject(1) == null ? null : rs.getLong(1);
         return CostAggregateRow.builder()
@@ -112,16 +122,15 @@ public class CostQueryRepository {
                 .channelName(channelName != null && !channelName.isBlank()
                         ? channelName : (channelId == null ? "未知渠道" : "渠道 #" + channelId))
                 .model(rs.getString(3))
-                .actualModel(blankToNull(rs.getString(4)))
-                .totalPromptTokens(longValue(rs, 5))
-                .totalCompletionTokens(longValue(rs, 6))
-                .totalCacheCreation(longValue(rs, 7))
-                .totalCacheRead(longValue(rs, 8))
-                .requestCount(longValue(rs, 9))
+                .totalPromptTokens(longValue(rs, 4))
+                .totalCompletionTokens(longValue(rs, 5))
+                .totalCacheCreation(longValue(rs, 6))
+                .totalCacheRead(longValue(rs, 7))
+                .requestCount(longValue(rs, 8))
                 .imageCount(imageCount)
                 .videoSeconds(videoSeconds)
                 .modelType(imageCount > 0 ? "image" : (videoRequestCount > 0 ? "video" : "text"))
-                .totalCreditCost(decimalValue(rs.getObject(13)))
+                .totalCreditCost(decimalValue(rs.getObject(12)))
                 .build();
     }
 
@@ -136,7 +145,4 @@ public class CostQueryRepository {
         return decimal.setScale(4, RoundingMode.HALF_UP);
     }
 
-    private static String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value;
-    }
 }

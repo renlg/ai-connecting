@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Col, DatePicker, Form, Row, Select, Space, Statistic, Table, Tooltip, Typography, message } from 'antd'
+import { Button, Card, Col, DatePicker, Form, Row, Select, Space, Statistic, Table, Typography, message } from 'antd'
 import { DownloadOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
-import { exportCostCsv, getChannels, getCostAggregate, getModelGroups, getModels } from '../api'
+import { exportCostCsv, getChannels, getCostAggregate, getCostModels, getModelGroups, getModels } from '../api'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -23,9 +23,14 @@ export default function Cost() {
   const [exporting, setExporting] = useState(false)
   const [data, setData] = useState([])
   const [channels, setChannels] = useState([])
-  const [models, setModels] = useState([])
+  const [configuredModels, setConfiguredModels] = useState([])
+  const [usageModels, setUsageModels] = useState([])
   const [summary, setSummary] = useState({})
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
+  const models = useMemo(
+    () => [...new Set([...configuredModels, ...usageModels])].sort(),
+    [configuredModels, usageModels],
+  )
 
   const currentParams = (page = pagination.current, pageSize = pagination.pageSize) => {
     const values = form.getFieldsValue()
@@ -61,21 +66,41 @@ export default function Cost() {
     }
   }
 
+  const loadModelOptions = async () => {
+    const params = currentParams()
+    delete params.modelName
+    delete params.page
+    delete params.size
+    try {
+      const res = await getCostModels(params)
+      if (res.code === 200) setUsageModels(res.data || [])
+    } catch {
+      message.warning('实际模型筛选项加载失败，仍可查询成本数据')
+    }
+  }
+
   useEffect(() => {
     Promise.all([getChannels(), getModels(), getModelGroups()]).then(([channelRes, modelRes, groupRes]) => {
       if (channelRes.code === 200) setChannels(channelRes.data || [])
       const modelNames = (modelRes.data || []).map(item => item.name)
       const groupNames = (groupRes.data || []).map(item => item.group?.name).filter(Boolean)
       if (modelRes.code === 200 || groupRes.code === 200) {
-        setModels([...new Set([...modelNames, ...groupNames])].sort())
+        setConfiguredModels([...new Set([...modelNames, ...groupNames])].sort())
       }
     }).catch(() => message.warning('筛选项加载失败，仍可查询全部数据'))
     load(1, 20)
+    loadModelOptions()
   }, [])
+
+  const handleSearch = () => {
+    load(1, pagination.pageSize)
+    loadModelOptions()
+  }
 
   const handleReset = () => {
     form.setFieldsValue({ dateRange: DEFAULT_RANGE, channelId: undefined, modelName: undefined })
     load(1, pagination.pageSize)
+    loadModelOptions()
   }
 
   const handleExport = async () => {
@@ -118,11 +143,7 @@ export default function Cost() {
     { title: '请求数', dataIndex: 'requestCount', width: 100, align: 'right', render: numberFormat },
     {
       title: '成本', dataIndex: 'totalCreditCost', width: 190, align: 'right',
-      render: (value, row) => (
-        <Tooltip title={row.actualModel ? `实际上游模型：${row.actualModel}` : '无实际上游模型记录'}>
-          <span>{costFormat(value)} 积分 / ${costFormat(value)}</span>
-        </Tooltip>
-      ),
+      render: value => <span>{costFormat(value)} 积分 / ${costFormat(value)}</span>,
     },
   ], [])
 
@@ -133,7 +154,7 @@ export default function Cost() {
         form={form}
         layout="inline"
         initialValues={{ dateRange: DEFAULT_RANGE }}
-        onFinish={() => load(1, pagination.pageSize)}
+        onFinish={handleSearch}
         style={{ marginBottom: 20, rowGap: 12 }}
       >
         <Form.Item name="dateRange" label="日期范围" rules={[{ required: true, message: '请选择日期范围' }]}>

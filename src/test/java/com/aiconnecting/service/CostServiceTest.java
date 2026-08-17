@@ -45,7 +45,7 @@ class CostServiceTest {
     @Test
     void csvHasUtf8BomEscapingAllRowsAndFourDecimalCost() {
         CostAggregateRow row = CostAggregateRow.builder()
-                .channelName("渠道,一").model("模型\"A").actualModel("upstream")
+                .channelName("渠道,一").model("upstream\"A")
                 .totalPromptTokens(10).totalCompletionTokens(2).requestCount(1)
                 .modelType("image").imageCount(1).totalCreditCost(new BigDecimal("1.2")).build();
         when(repository.findRows(any(), any(), isNull(), isNull(), isNull(), isNull())).thenReturn(List.of(row));
@@ -54,6 +54,17 @@ class CostServiceTest {
         String csv = new String(bytes, StandardCharsets.UTF_8);
 
         assertThat(bytes).startsWith((byte) 0xEF, (byte) 0xBB, (byte) 0xBF);
-        assertThat(csv).contains("\"渠道,一\"", "\"模型\"\"A\"", "\"1.2000\"");
+        assertThat(csv).contains("\"渠道,一\"", "\"upstream\"\"A\"", "\"1.2000\"")
+                .doesNotContain("实际上游模型");
+    }
+
+    @Test
+    void modelOptionsUseParsedRangeAndChannel() {
+        when(repository.findModelOptions(any(), any(), eq(7L))).thenReturn(List.of("upstream-a"));
+
+        assertThat(service.modelOptions("2026-08-10", "2026-08-16", 7L)).containsExactly("upstream-a");
+
+        var range = service.parseRange("2026-08-10", "2026-08-16");
+        verify(repository).findModelOptions(range.start(), range.end(), 7L);
     }
 }

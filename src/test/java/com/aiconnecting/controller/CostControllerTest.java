@@ -7,6 +7,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.security.access.prepost.PreAuthorize;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
@@ -31,6 +32,16 @@ class CostControllerTest {
 
         assertThat(result.getCode()).isEqualTo(200);
         assertThat(result.getData()).isSameAs(response);
+    }
+
+    @Test
+    void modelsReturnsStandardApiEnvelope() {
+        when(service.modelOptions("2026-08-10", "2026-08-16", 2L)).thenReturn(List.of("upstream-a"));
+
+        var result = controller.models("2026-08-10", "2026-08-16", 2L);
+
+        assertThat(result.getCode()).isEqualTo(200);
+        assertThat(result.getData()).containsExactly("upstream-a");
     }
 
     @Test
