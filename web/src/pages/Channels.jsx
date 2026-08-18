@@ -433,7 +433,7 @@ export default function Channels() {
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '名称', dataIndex: 'name', width: 120 },
     { title: '类型', dataIndex: 'type', width: 100, render: v => <Tag color="blue">{v}</Tag> },
-    { title: 'Base URL', dataIndex: 'baseUrl', ellipsis: { showTitle: false }, render: (v) => <Tooltip placement="topLeft" title={v}><span>{v}</span></Tooltip> },
+    { title: 'Base URL', dataIndex: 'baseUrl', width: 200, ellipsis: { showTitle: false }, render: (v) => <Tooltip placement="topLeft" title={v}><span>{v}</span></Tooltip> },
     {
       title: 'API Key', dataIndex: 'apiKey', width: 200, render: (v, record) => (
         <Space size="small">
@@ -540,7 +540,7 @@ export default function Channels() {
           style={{ width: 140 }}
         />
       </Space>
-      <Table columns={columns} dataSource={filteredChannels} rowKey="id" loading={loading} scroll={{ x: 1100 }} />
+      <Table columns={columns} dataSource={filteredChannels} rowKey="id" loading={loading} scroll={{ x: 1300 }} />
       <Modal
         title={editing ? '编辑渠道' : '新增渠道'}
         open={modalOpen}
