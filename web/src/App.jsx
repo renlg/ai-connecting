@@ -14,6 +14,9 @@ import Announcements from './pages/Announcements'
 import FailureLogs from './pages/FailureLogs'
 import Cost from './pages/Cost'
 import UsageDocs from './pages/UsageDocs'
+import RateLimitStrategies from './pages/RateLimitStrategies'
+import FailureStrategies from './pages/FailureStrategies'
+import CircuitBreakers from './pages/CircuitBreakers'
 import NotFound from './pages/NotFound'
 
 function PrivateRoute({ children }) {
@@ -59,6 +62,9 @@ export default function App() {
           <Route path="announcements" element={<Announcements />} />
           <Route path="failure-logs" element={<FailureLogs />} />
           <Route path="cost" element={<AdminRoute><Cost /></AdminRoute>} />
+          <Route path="risk/rate-limit" element={<RateLimitStrategies />} />
+          <Route path="risk/failure" element={<FailureStrategies />} />
+          <Route path="risk/circuit-breaker" element={<CircuitBreakers />} />
           <Route path="docs" element={<UsageDocs />} />
           <Route path="*" element={<NotFound />} />
         </Route>

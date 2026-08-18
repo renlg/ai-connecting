@@ -5,6 +5,7 @@ import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.entity.Channel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.context.event.EventListener;
 
@@ -30,6 +31,7 @@ public class ChannelRouter {
     private final ChannelService channelService;
     private final ChannelHealthTracker healthTracker;
     private final CacheInvalidationService cacheInvalidationService;
+    private final ObjectProvider<RiskManagerService> riskManagerProvider;
 
     /** 按模型缓存渠道列表及其 SWRR 状态，避免每次请求查库 */
     private final ConcurrentHashMap<String, CachedChannelList> channelCache = new ConcurrentHashMap<>();
@@ -96,9 +98,15 @@ public class ChannelRouter {
         // 批量获取封禁状态（1 次 Redis 调用，代替逐渠道查询）
         Set<Long> blockedIds = healthTracker.getBlockedChannelIds();
 
-        // 过滤：排除被封禁和已尝试的渠道
+        // 获取风险管理熔断的渠道（2 秒本地缓存，避免热路径全表扫描）
+        RiskManagerService riskManager = riskManagerProvider.getIfAvailable();
+        Set<Long> riskFusedIds = riskManager != null ? riskManager.getFusedChannelIds() : Collections.emptySet();
+
+        // 过滤：排除被封禁、风险管理熔断和已尝试的渠道
         List<Channel> available = channels.stream()
                 .filter(c -> !blockedIds.contains(c.getId()))
+                .filter(c -> !riskFusedIds.contains(c.getId())
+                        || (riskManager != null && !riskManager.isChannelFusedForModelId(c.getId(), channelModelId)))
                 .filter(c -> excludeIds == null || !excludeIds.contains(c.getId()))
                 .toList();
 
@@ -195,8 +203,12 @@ public class ChannelRouter {
     public List<Channel> filterByType(String channelModelId, String type, Integer userLevel) {
         List<Channel> channels = getCachedChannelList(channelModelId).channels();
         Set<Long> blockedIds = healthTracker.getBlockedChannelIds();
+        RiskManagerService riskManager = riskManagerProvider.getIfAvailable();
+        Set<Long> riskFusedIds = riskManager != null ? riskManager.getFusedChannelIds() : Collections.emptySet();
         return channels.stream()
                 .filter(c -> !blockedIds.contains(c.getId()))
+                .filter(c -> !riskFusedIds.contains(c.getId())
+                        || (riskManager != null && !riskManager.isChannelFusedForModelId(c.getId(), channelModelId)))
                 .filter(c -> type.equalsIgnoreCase(c.getType()) || "anthropic".equalsIgnoreCase(c.getType()))
                 .filter(c -> userLevel == null || channelSupportsLevel(c, userLevel))
                 .toList();

@@ -78,7 +78,7 @@ public class RelaySupport {
     private okhttp3.Interceptor tracingInterceptor;
 
     @Autowired
-    private ObjectProvider<ModelHealthTracker> modelHealthTrackerProvider;
+    ObjectProvider<RiskManagerService> riskManagerProvider;
 
     private OkHttpClient httpClient;
     final ObjectMapper objectMapper = new ObjectMapper();
@@ -385,50 +385,35 @@ public class RelaySupport {
     // ==================== 渠道判断 ====================
 
     boolean isChannelRateLimited(Channel channel) {
-        if (rateLimitService != null) {
-            try {
-                rateLimitService.checkChannelRateLimit(channel.getId(), channel.getRateLimit());
-            } catch (BusinessException e) {
-                return true;
+        return isChannelRateLimited(channel, null);
+    }
+
+    boolean isChannelRateLimited(Channel channel, String channelModelId) {
+        if (riskManagerProvider != null) {
+            RiskManagerService riskManager = riskManagerProvider.getIfAvailable();
+            if (riskManager != null) {
+                return riskManager.checkAndRecordByModelId(channel.getId(), channelModelId);
             }
         }
         return false;
     }
 
     /**
-     * 单模型直连路径的失败记录：RATE_LIMIT/MODEL_NOT_FOUND 只写模型级冷却
-     *（{@link ModelHealthTracker}，仅限该 渠道+模型 组合），避免同渠道下的其它模型被一起限流；
-     * QUOTA 同时写渠道级立即熔断和模型级冷却；CHANNEL 类失败仍由调用方按原有方式写入
-     * 渠道级熔断（{@code channelFailureRecorder}，保留调用方原有的 ErrorCategory 判定逻辑不变）；
-     * FAST_FAIL 两者都不写。modelConfigId 缺失（如模型未配置）时，RATE_LIMIT/MODEL_NOT_FOUND
-     * 退化为调用方原有的渠道级记录方式；QUOTA 始终写渠道级熔断，避免丢失该次失败信号。
+     * 单模型直连路径的失败记录：所有可切换失败统一由渠道级熔断处理；
+     * FAST_FAIL 不写任何健康状态。
      */
     void dispatchRelayFailure(Long channelId, Long modelConfigId, BusinessException error,
                                Runnable channelFailureRecorder) {
+        if (error.isUpstreamResponse() && riskManagerProvider != null) {
+            RiskManagerService riskManager = riskManagerProvider.getIfAvailable();
+            if (riskManager != null) {
+                String modelIdStr = modelConfigId != null ? String.valueOf(modelConfigId) : null;
+                riskManager.recordFailureEventByModelId(channelId, modelIdStr, error.getCode());
+            }
+        }
         FailureClassifier.Classification classification = FailureClassifier.classify(error);
         switch (classification.kind()) {
-            case RATE_LIMIT, MODEL_NOT_FOUND -> {
-                ModelHealthTracker tracker = modelHealthTrackerProvider.getIfAvailable();
-                if (tracker != null && modelConfigId != null) {
-                    ModelHealthTracker.FailureType type = switch (classification.kind()) {
-                        case RATE_LIMIT -> ModelHealthTracker.FailureType.RATE_LIMIT;
-                        default -> ModelHealthTracker.FailureType.MODEL_NOT_FOUND;
-                    };
-                    tracker.recordFailure(channelId, modelConfigId, type, classification.retryAfterSeconds());
-                } else {
-                    channelFailureRecorder.run();
-                }
-            }
-            case QUOTA -> {
-                channelHealthTracker.recordFailure(channelId, ChannelHealthTracker.ErrorCategory.QUOTA,
-                        error.getMessage());
-                ModelHealthTracker tracker = modelHealthTrackerProvider.getIfAvailable();
-                if (tracker != null && modelConfigId != null) {
-                    tracker.recordFailure(channelId, modelConfigId, ModelHealthTracker.FailureType.QUOTA,
-                            classification.retryAfterSeconds());
-                }
-            }
-            case CHANNEL -> channelFailureRecorder.run();
+            case RATE_LIMIT, MODEL_NOT_FOUND, QUOTA, CHANNEL -> channelFailureRecorder.run();
             case FAST_FAIL -> { }
         }
     }

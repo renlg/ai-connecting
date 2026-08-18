@@ -4,7 +4,8 @@ import { Layout, Menu, Avatar, Dropdown, Space, theme, Modal, Input, message, Al
 import {
   DashboardOutlined, ApiOutlined, KeyOutlined,
   UserOutlined, TeamOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
-  RobotOutlined, GiftOutlined, CopyOutlined, BugOutlined, ReadOutlined, MenuOutlined, DollarOutlined
+  RobotOutlined, GiftOutlined, CopyOutlined, BugOutlined, ReadOutlined, MenuOutlined, DollarOutlined,
+  SafetyOutlined, AlertOutlined, StopOutlined, ThunderboltOutlined
 } from '@ant-design/icons'
 import { redeemCoupon, getLatestAnnouncements, getInviteCode } from '../api'
 
@@ -73,6 +74,14 @@ export default function AppLayout() {
       { key: '/announcements', icon: <DashboardOutlined />, label: '公告管理' },
       { key: '/failure-logs', icon: <BugOutlined />, label: '失败日志' },
       { key: '/cost', icon: <DollarOutlined />, label: '成本核算' },
+      {
+        key: 'risk', icon: <SafetyOutlined />, label: '风险管理',
+        children: [
+          { key: '/risk/rate-limit', icon: <ThunderboltOutlined />, label: '限速策略' },
+          { key: '/risk/failure', icon: <AlertOutlined />, label: '失败策略' },
+          { key: '/risk/circuit-breaker', icon: <StopOutlined />, label: '熔断' },
+        ]
+      },
     ] : []),
     { key: '/profile', icon: <UserOutlined />, label: '个人中心' },
   ]
@@ -151,6 +160,7 @@ export default function AppLayout() {
             theme="dark"
             mode="inline"
             selectedKeys={[location.pathname]}
+            defaultOpenKeys={location.pathname.startsWith('/risk') ? ['risk'] : []}
             items={menuItems}
             onClick={handleMenuClick}
           />
@@ -170,6 +180,7 @@ export default function AppLayout() {
             theme="dark"
             mode="inline"
             selectedKeys={[location.pathname]}
+            defaultOpenKeys={location.pathname.startsWith('/risk') ? ['risk'] : []}
             items={menuItems}
             onClick={handleMenuClick}
           />

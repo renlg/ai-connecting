@@ -20,7 +20,6 @@ import java.util.concurrent.TimeUnit;
  * 渠道探测定时任务
  * 每隔 1 小时探测处于熔断 OPEN 状态的渠道，如果恢复则手动关闭熔断器；
  * HALF_OPEN 渠道不由本任务探测，而是由真实流量触发探测（见 ChannelHealthTracker）。
- * 若渠道持续处于 OPEN 状态超过 2 小时，自动禁用。
  */
 @Component
 @RequiredArgsConstructor
@@ -97,10 +96,6 @@ public class ChannelProbeTask {
                 Channel channel = channelService.getById(channelId);
                 if (channel.getStatus() == 0) {
                     log.info("渠道 {} 已被手动禁用，跳过探测", channelId);
-                    continue;
-                }
-                if (healthTracker.isOpenTooLong(channelId)) {
-                    healthTracker.autoDisableChannel(channelId);
                     continue;
                 }
                 probeChannel(channel);

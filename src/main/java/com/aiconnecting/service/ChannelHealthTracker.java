@@ -61,9 +61,6 @@ public class ChannelHealthTracker {
     /** 半开探测许可有效期，防止并发请求同时探测 */
     private static final long HALF_OPEN_PERMIT_TTL_MS = 20 * 1000L;
 
-    /** 持续处于 OPEN 状态超过该时长，自动禁用渠道 */
-    private static final long OPEN_AUTO_DISABLE_MS = 2 * 60 * 60 * 1000L;
-
     public enum CircuitState {
         CLOSED, OPEN, HALF_OPEN
     }
@@ -103,8 +100,6 @@ public class ChannelHealthTracker {
     private static final String CB_UNTIL_PREFIX = "channel:cb:until:";
     /** 当前退避时长 */
     private static final String CB_BACKOFF_PREFIX = "channel:cb:backoff:";
-    /** 本轮 OPEN 起始时间（用于超时自动禁用） */
-    private static final String CB_OPEN_SINCE_PREFIX = "channel:cb:open_since:";
     /** 半开探测许可 */
     private static final String CB_PERMIT_PREFIX = "channel:cb:permit:";
     /** 滚动窗口 - 总请求数 */
@@ -155,7 +150,6 @@ public class ChannelHealthTracker {
     private final ConcurrentHashMap<Long, Integer> memCbState = new ConcurrentHashMap<>(); // 0/1
     private final ConcurrentHashMap<Long, Long> memCbUntil = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Long> memCbBackoff = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, Long> memCbOpenSince = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Long> memCbPermitUntil = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, LinkedList<Long>> memWinTotal = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, LinkedList<Long>> memWinError = new ConcurrentHashMap<>();
@@ -375,7 +369,6 @@ public class ChannelHealthTracker {
         long backoff = getBackoff(channelId);
         long until = System.currentTimeMillis() + backoff;
         setState(channelId, true, until);
-        setOpenSinceIfAbsent(channelId);
         clearWindow(channelId);
         log.warn("渠道 {} 1分钟内错误率达到阈值，已熔断 {} 秒", channelId, backoff / 1000);
     }
@@ -402,7 +395,6 @@ public class ChannelHealthTracker {
     private void forceOpen(Long channelId, long durationMs) {
         long until = System.currentTimeMillis() + durationMs;
         setState(channelId, true, until);
-        setOpenSinceIfAbsent(channelId);
         releasePermit(channelId);
         blockedIdsCache = null;
     }
@@ -413,7 +405,6 @@ public class ChannelHealthTracker {
     private void closeCircuit(Long channelId) {
         setState(channelId, false, 0);
         setBackoff(channelId, INITIAL_BACKOFF_MS);
-        clearOpenSince(channelId);
         releasePermit(channelId);
         clearWindow(channelId);
         memProbeFailures.remove(channelId);
@@ -587,74 +578,6 @@ public class ChannelHealthTracker {
             log.warn("Redis 设置渠道 {} 退避时长失败，降级为内存模式: {}", channelId, e.getMessage());
         }
         memCbBackoff.put(channelId, backoffMs);
-    }
-
-    private void setOpenSinceIfAbsent(Long channelId) {
-        long now = System.currentTimeMillis();
-        try {
-            if (isRedisAvailable()) {
-                redisTemplate.opsForValue().setIfAbsent(CB_OPEN_SINCE_PREFIX + channelId, now, 24, TimeUnit.HOURS);
-                return;
-            }
-        } catch (Exception e) {
-            log.warn("Redis 设置渠道 {} OPEN 起始时间失败，降级为内存模式: {}", channelId, e.getMessage());
-        }
-        memCbOpenSince.putIfAbsent(channelId, now);
-    }
-
-    private void clearOpenSince(Long channelId) {
-        try {
-            if (isRedisAvailable()) {
-                redisTemplate.delete(CB_OPEN_SINCE_PREFIX + channelId);
-                return;
-            }
-        } catch (Exception e) {
-            log.warn("Redis 清除渠道 {} OPEN 起始时间失败: {}", channelId, e.getMessage());
-        }
-        memCbOpenSince.remove(channelId);
-    }
-
-    /**
-     * 渠道已持续处于 OPEN 状态超过 2 小时，应自动禁用
-     */
-    public boolean isOpenTooLong(Long channelId) {
-        if (getEffectiveState(channelId) != CircuitState.OPEN) {
-            return false;
-        }
-        Long openSince;
-        try {
-            if (isRedisAvailable()) {
-                openSince = redisTemplate.opsForValue().get(CB_OPEN_SINCE_PREFIX + channelId);
-            } else {
-                openSince = memCbOpenSince.get(channelId);
-            }
-        } catch (Exception e) {
-            openSince = memCbOpenSince.get(channelId);
-        }
-        return openSince != null && System.currentTimeMillis() - openSince > OPEN_AUTO_DISABLE_MS;
-    }
-
-    /**
-     * 自动禁用渠道（长时间处于熔断状态）
-     */
-    public void autoDisableChannel(Long channelId) {
-        log.error("===== 渠道 {} 持续熔断超过 {} 小时，自动禁用 =====", channelId, OPEN_AUTO_DISABLE_MS / 3600000);
-        long now = System.currentTimeMillis();
-        String lastReason = memLastFailureReason.get(channelId);
-        String reason = "持续熔断超过2小时自动禁用" + (lastReason != null ? ": " + lastReason : "");
-        memLastFailureAt.put(channelId, now);
-        memLastFailureReason.put(channelId, reason);
-        if (healthPersistenceService != null) {
-            healthPersistenceService.recordFailureAsync(channelId, now, reason);
-        }
-        try {
-            if (channelService != null) {
-                channelService.disableChannel(channelId);
-                log.error("渠道 {} 已自动禁用，请检查渠道配置和网络状态", channelId);
-            }
-        } catch (Exception e) {
-            log.error("自动禁用渠道 {} 时发生异常: {}", channelId, e.getMessage(), e);
-        }
     }
 
     // ==================== 查询接口 ====================
@@ -858,7 +781,6 @@ public class ChannelHealthTracker {
                 addScanKeys(keys, CB_STATE_PREFIX + "*");
                 addScanKeys(keys, CB_UNTIL_PREFIX + "*");
                 addScanKeys(keys, CB_BACKOFF_PREFIX + "*");
-                addScanKeys(keys, CB_OPEN_SINCE_PREFIX + "*");
                 addScanKeys(keys, CB_PERMIT_PREFIX + "*");
                 addScanKeys(keys, WIN_TOTAL_PREFIX + "*");
                 addScanKeys(keys, WIN_ERROR_PREFIX + "*");
@@ -873,7 +795,6 @@ public class ChannelHealthTracker {
         memCbState.clear();
         memCbUntil.clear();
         memCbBackoff.clear();
-        memCbOpenSince.clear();
         memCbPermitUntil.clear();
         memWinTotal.clear();
         memWinError.clear();

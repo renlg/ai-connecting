@@ -53,7 +53,7 @@ class ModelGroupFailoverExecutorTest {
 
         ModelGroupFailoverExecutor executor = new ModelGroupFailoverExecutor(
                 support, groupService, routingService, mock(ModelGroupBillingService.class),
-                mock(ModelHealthTracker.class), mock(UsageLogService.class),
+                mock(UsageLogService.class),
                 mock(VideoTaskRepository.class), mock(VideoTaskUsageLogService.class),
                 mock(PassthroughRelayService.class));
 
@@ -254,12 +254,10 @@ class ModelGroupFailoverExecutorTest {
         assertThat(result).contains("fallback");
         verify(fixture.support).forwardRequest(eq(fixture.secondChannel),
                 eq("/v1/chat/completions"), eq("{\"model\":\"second-model\"}"), anyLong());
-        verify(fixture.modelHealth).recordFailure(91L, 11L,
-                ModelHealthTracker.FailureType.MODEL_NOT_FOUND);
     }
 
     @Test
-    void singleMemberGroupFailureDoesNotRecordModelCooldownButStillRecordsChannelFailure() throws Exception {
+    void singleMemberGroupFailureStillRecordsChannelFailure() throws Exception {
         GroupFixture fixture = groupFixture("application/json",
                 "{\"error\":\"unavailable\"}".getBytes(StandardCharsets.UTF_8), 503);
 
@@ -268,16 +266,12 @@ class ModelGroupFailoverExecutorTest {
                 "public-group", request(), new MockHttpServletResponse()))
                 .isInstanceOf(BusinessException.class);
 
-        verify(fixture.modelHealth, never()).recordFailure(anyLong(), anyLong(),
-                any(ModelHealthTracker.FailureType.class));
-        verify(fixture.modelHealth, never()).recordFailure(anyLong(), anyLong(),
-                any(ModelHealthTracker.FailureType.class), any());
         verify(fixture.support.channelHealthTracker, atLeastOnce()).recordFailure(eq(9L),
                 eq(ChannelHealthTracker.ErrorCategory.CONNECTION_ERROR), anyString());
     }
 
     @Test
-    void singleMemberGroupQuotaStillRecordsChannelCircuitWithoutModelCooldown() throws Exception {
+    void singleMemberGroupQuotaStillRecordsChannelCircuit() throws Exception {
         GroupFixture fixture = groupFixture("application/json",
                 "{\"error\":{\"message\":\"Free quota exhausted\",\"code\":\"insufficient_quota\"}}"
                         .getBytes(StandardCharsets.UTF_8), 403);
@@ -287,10 +281,6 @@ class ModelGroupFailoverExecutorTest {
                 "public-group", request(), new MockHttpServletResponse()))
                 .isInstanceOf(BusinessException.class);
 
-        verify(fixture.modelHealth, never()).recordFailure(anyLong(), anyLong(),
-                any(ModelHealthTracker.FailureType.class));
-        verify(fixture.modelHealth, never()).recordFailure(anyLong(), anyLong(),
-                any(ModelHealthTracker.FailureType.class), any());
         verify(fixture.support.channelHealthTracker, atLeastOnce()).recordFailure(eq(9L),
                 eq(ChannelHealthTracker.ErrorCategory.QUOTA), anyString());
     }
@@ -338,8 +328,6 @@ class ModelGroupFailoverExecutorTest {
                 });
         verify(fixture.support).forwardRequest(eq(fixture.firstChannel), anyString(), anyString(), anyLong());
         verify(fixture.support).forwardRequest(eq(fixture.secondChannel), anyString(), anyString(), anyLong());
-        verify(fixture.modelHealth).recordFailure(92L, 12L,
-                ModelHealthTracker.FailureType.MEMBER_FAILURE);
     }
 
     private MockHttpServletRequest request() {
@@ -359,7 +347,6 @@ class ModelGroupFailoverExecutorTest {
         ModelGroupService groupService = mock(ModelGroupService.class);
         ModelGroupRoutingService routing = mock(ModelGroupRoutingService.class);
         ModelGroupBillingService billing = mock(ModelGroupBillingService.class);
-        ModelHealthTracker modelHealth = mock(ModelHealthTracker.class);
         Call.Factory calls = mock(Call.Factory.class);
         Call call = mock(Call.class);
         when(call.timeout()).thenReturn(new okio.Timeout());
@@ -388,14 +375,13 @@ class ModelGroupFailoverExecutorTest {
         doReturn(false).when(support).isChannelRateLimited(channel);
         when(billing.calculateTextCreditCost(any(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(BigDecimal.ZERO);
-        when(modelHealth.isInCooldown(9L, 11L)).thenReturn(false);
 
         PassthroughRelayService passthrough = new PassthroughRelayService(
                 support, mock(ChannelService.class), new ObjectMapper(), calls);
         ModelGroupFailoverExecutor executor = new ModelGroupFailoverExecutor(
-                support, groupService, routing, billing, modelHealth, usageLogs,
+                support, groupService, routing, billing, usageLogs,
                 mock(VideoTaskRepository.class), mock(VideoTaskUsageLogService.class), passthrough);
-        return new GroupFixture(executor, support, usageLogs, billing, modelHealth, calls, sentRequest, channel);
+        return new GroupFixture(executor, support, usageLogs, billing, calls, sentRequest, channel);
     }
 
     private StandardGroupFixture standardGroupFixture() {
@@ -407,7 +393,6 @@ class ModelGroupFailoverExecutorTest {
                 mock(ModelGroupService.class), mock(UserService.class), mock(VideoTaskUsageLogService.class)));
         ModelGroupService groupService = mock(ModelGroupService.class);
         ModelGroupRoutingService routing = mock(ModelGroupRoutingService.class);
-        ModelHealthTracker modelHealth = mock(ModelHealthTracker.class);
         ModelGroup group = ModelGroup.builder().id(10L).name("public-group").type("text")
                 .strategy("priority").maxAttempts(2).enabled(true).build();
         ModelConfig first = ModelConfig.builder().id(11L).name("first-model").status(1).build();
@@ -426,21 +411,20 @@ class ModelGroupFailoverExecutorTest {
         when(router.selectChannel("11", Set.of(), 1)).thenReturn(firstChannel);
         when(router.selectChannel("12", Set.of(), 1)).thenReturn(secondChannel);
         doReturn(false).when(support).isChannelRateLimited(any(Channel.class));
-        when(modelHealth.isInCooldown(anyLong(), anyLong())).thenReturn(false);
 
         ModelGroupFailoverExecutor executor = new ModelGroupFailoverExecutor(
-                support, groupService, routing, mock(ModelGroupBillingService.class), modelHealth, usageLogs,
+                support, groupService, routing, mock(ModelGroupBillingService.class), usageLogs,
                 mock(VideoTaskRepository.class), mock(VideoTaskUsageLogService.class),
                 mock(PassthroughRelayService.class));
-        return new StandardGroupFixture(executor, support, modelHealth, firstChannel, secondChannel);
+        return new StandardGroupFixture(executor, support, firstChannel, secondChannel);
     }
 
     private record GroupFixture(ModelGroupFailoverExecutor executor, RelaySupport support,
                                 UsageLogService usageLogs, ModelGroupBillingService billing,
-                                ModelHealthTracker modelHealth, Call.Factory calls,
+                                Call.Factory calls,
                                 org.mockito.ArgumentCaptor<Request> sentRequest, Channel channel) {}
 
     private record StandardGroupFixture(ModelGroupFailoverExecutor executor, RelaySupport support,
-                                        ModelHealthTracker modelHealth, Channel firstChannel,
+                                        Channel firstChannel,
                                         Channel secondChannel) {}
 }

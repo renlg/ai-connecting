@@ -698,10 +698,7 @@ export default function Channels() {
               style={{ width: '100%' }}
             />
           </Form.Item>
-          <Space className="mobile-form-row">
-            <Form.Item name="priority" label="优先级" initialValue={0}><InputNumber /></Form.Item>
-            <Form.Item name="rateLimit" label="速率限制" initialValue={0}><InputNumber min={0} placeholder="0=不限" /></Form.Item>
-          </Space>
+          <Form.Item name="priority" label="优先级" initialValue={0}><InputNumber /></Form.Item>
         </Form>
       </Modal>
 

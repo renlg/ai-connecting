@@ -167,4 +167,23 @@ export const generateCoupon = (data) => api.post('/api/admin/coupons', data);
 export const updateCouponStatus = (id, status) => api.put(`/api/admin/coupons/${id}/status`, { status });
 export const getCouponRedemptions = (id) => api.get(`/api/admin/coupons/${id}/redemptions`);
 
+// Risk Management - Rate Limit Policies
+export const getRiskPolicies = () => api.get('/api/admin/risk/policies');
+export const createRiskPolicy = (data) => api.post('/api/admin/risk/policies', data);
+export const updateRiskPolicy = (id, data) => api.put(`/api/admin/risk/policies/${id}`, data);
+export const deleteRiskPolicy = (id) => api.delete(`/api/admin/risk/policies/${id}`);
+export const updateRiskPolicyStatus = (id, status) => api.put(`/api/admin/risk/policies/${id}/status`, { status });
+
+// Risk Management - Failure Strategies
+export const getFailureStrategies = () => api.get('/api/admin/risk/failure-strategies');
+export const createFailureStrategy = (data) => api.post('/api/admin/risk/failure-strategies', data);
+export const updateFailureStrategy = (id, data) => api.put(`/api/admin/risk/failure-strategies/${id}`, data);
+export const deleteFailureStrategy = (id) => api.delete(`/api/admin/risk/failure-strategies/${id}`);
+export const updateFailureStrategyStatus = (id, enabled) => api.put(`/api/admin/risk/failure-strategies/${id}/status`, { enabled });
+
+// Risk Management - Circuit Breaker Records
+export const getCircuitBreakerRecords = () => api.get('/api/admin/risk/records');
+export const releaseCircuitBreaker = (id) => api.post(`/api/admin/risk/records/${id}/release`);
+export const createManualCircuitBreaker = (data) => api.post('/api/admin/risk/records/manual', data);
+
 export default api;

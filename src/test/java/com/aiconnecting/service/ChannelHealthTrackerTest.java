@@ -152,14 +152,6 @@ class ChannelHealthTrackerTest {
     }
 
     @Test
-    void isOpenTooLongIsFalseRightAfterTripping() {
-        Long id = newChannelId();
-        tracker.recordFailure(id, ChannelHealthTracker.ErrorCategory.AUTH_ERROR, "401");
-        awaitAsync();
-        assertFalse(tracker.isOpenTooLong(id));
-    }
-
-    @Test
     void getBlockedChannelIdsIncludesRateLimitAndCircuitOpenButOpenIdsIsCircuitOnly() {
         Long rateLimited = newChannelId();
         Long circuitOpen = newChannelId();

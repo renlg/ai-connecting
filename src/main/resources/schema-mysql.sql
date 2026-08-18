@@ -295,3 +295,58 @@ CREATE TABLE IF NOT EXISTS channel_health (
     updated_at BIGINT NOT NULL,
     UNIQUE KEY uk_channel_health_channel_id (channel_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 风险管理策略表（按渠道+模型维度配置速率限制与熔断时长）
+CREATE TABLE IF NOT EXISTS risk_policies (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    channel_id BIGINT NOT NULL,
+    model_config_name VARCHAR(100),
+    rate_limit INT NOT NULL,
+    time_window VARCHAR(20) NOT NULL,
+    window_type VARCHAR(20) NOT NULL DEFAULT 'SLIDING',
+    circuit_breaker_duration INT NOT NULL,
+    status INT NOT NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_risk_policies_channel_id ON risk_policies (channel_id);
+CREATE INDEX idx_risk_policies_status ON risk_policies (status);
+
+-- 失败策略表（按全局/渠道维度配置失败计数与熔断）
+CREATE TABLE IF NOT EXISTS failure_strategies (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    scope VARCHAR(20) NOT NULL,
+    channel_id BIGINT,
+    model_config_id BIGINT,
+    http_codes VARCHAR(200) NOT NULL,
+    window_type VARCHAR(20) NOT NULL DEFAULT 'SLIDING',
+    window_dimension VARCHAR(20) NOT NULL,
+    failure_threshold INT NOT NULL,
+    fuse_duration_seconds INT NOT NULL,
+    priority INT NOT NULL DEFAULT 0,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_failure_strategies_scope ON failure_strategies (scope);
+CREATE INDEX idx_failure_strategies_enabled ON failure_strategies (enabled);
+
+-- 熔断记录表（策略触发或手动添加后写入，记录熔断时间段与状态）
+CREATE TABLE IF NOT EXISTS circuit_breaker_records (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    policy_id BIGINT,
+    channel_id BIGINT NOT NULL,
+    model_config_name VARCHAR(100),
+    source VARCHAR(20) NOT NULL,
+    reason VARCHAR(500),
+    triggered_at DATETIME(6) NOT NULL,
+    expires_at DATETIME(6) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    created_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_circuit_breaker_records_channel_id ON circuit_breaker_records (channel_id);
+CREATE INDEX idx_circuit_breaker_records_status_expires ON circuit_breaker_records (status, expires_at);
+CREATE INDEX idx_circuit_breaker_records_triggered_at ON circuit_breaker_records (triggered_at);

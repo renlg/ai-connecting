@@ -235,7 +235,6 @@ public class ChannelService {
                 .modelMapping(request.getModelMapping())
                 .status(request.getStatus() != null ? request.getStatus() : 1)
                 .priority(request.getPriority() != null ? request.getPriority() : 0)
-                .rateLimit(request.getRateLimit() != null ? request.getRateLimit() : 0)
                 .supportedLevels(request.getSupportedLevels() != null && !request.getSupportedLevels().isBlank()
                         ? request.getSupportedLevels() : "1,2,3,4,5")
                 .usedQuota(0L)
@@ -267,7 +266,6 @@ public class ChannelService {
         }
         if (request.getStatus() != null) channel.setStatus(request.getStatus());
         if (request.getPriority() != null) channel.setPriority(request.getPriority());
-        if (request.getRateLimit() != null) channel.setRateLimit(request.getRateLimit());
         if (request.getSupportedLevels() != null) channel.setSupportedLevels(request.getSupportedLevels());
         Channel saved = channelRepository.save(channel);
         publishChannelInvalidation();
