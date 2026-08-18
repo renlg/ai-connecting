@@ -20,6 +20,9 @@ public interface CircuitBreakerRecordRepository extends JpaRepository<CircuitBre
     @Query("SELECT r FROM CircuitBreakerRecord r WHERE r.channelId = :channelId AND r.status = 'ACTIVE' AND r.expiresAt > :now")
     List<CircuitBreakerRecord> findActiveByChannelId(@Param("channelId") Long channelId, @Param("now") LocalDateTime now);
 
+    @Query("SELECT r FROM CircuitBreakerRecord r WHERE r.channelId = :channelId AND (r.modelConfigName IS NULL OR r.modelConfigName = '') AND r.status = 'ACTIVE' AND r.expiresAt > :now")
+    List<CircuitBreakerRecord> findActiveByChannelIdAndModelIsNull(@Param("channelId") Long channelId, @Param("now") LocalDateTime now);
+
     @Query("SELECT r FROM CircuitBreakerRecord r WHERE r.channelId = :channelId AND r.modelConfigName = :modelConfigName AND r.status = 'ACTIVE' AND r.expiresAt > :now")
     List<CircuitBreakerRecord> findActiveByChannelAndModel(@Param("channelId") Long channelId,
                                                             @Param("modelConfigName") String modelConfigName,

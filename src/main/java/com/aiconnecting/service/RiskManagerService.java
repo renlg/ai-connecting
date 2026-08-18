@@ -18,8 +18,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import jakarta.annotation.PreDestroy;
 
 @Service
 @RequiredArgsConstructor
@@ -45,6 +49,22 @@ public class RiskManagerService {
     private final ConcurrentHashMap<String, Deque<Long>> memSlidingCounters = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, long[]> memFixedCounters = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> modelNameCache = new ConcurrentHashMap<>();
+
+    private final ThreadPoolExecutor failureExecutor = new ThreadPoolExecutor(
+            2, 4, 60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(1024),
+            r -> {
+                Thread t = new Thread(r, "failure-strategy-" + t_counter.getAndIncrement());
+                t.setDaemon(true);
+                return t;
+            }
+    );
+
+    private static final java.util.concurrent.atomic.AtomicLong t_counter = new java.util.concurrent.atomic.AtomicLong();
+
+    private volatile List<FailureStrategy> cachedEnabledStrategies = Collections.emptyList();
+    private volatile long cachedStrategiesLoadedAt = 0;
+    private static final long STRATEGY_CACHE_TTL_MS = 10_000;
 
     // ==================== Risk Policy CRUD ====================
 
@@ -212,18 +232,50 @@ public class RiskManagerService {
     // ==================== Failure Strategy Check ====================
 
     /**
-     * 记录上游失败事件，匹配失败策略并计数，达到阈值时触发熔断。
-     *
-     * @param channelId       渠道 ID
-     * @param modelConfigName 模型名（可为 null）
-     * @param httpCode        上游 HTTP 状态码
+     * 记录上游失败事件（同步版本，供测试直接调用）。
+     * 匹配所有符合条件的失败策略并逐条独立计数。
      */
     public void recordFailureEvent(Long channelId, String modelConfigName, int httpCode) {
-        FailureStrategy strategy = findMatchingFailureStrategy(channelId, modelConfigName, httpCode);
-        if (strategy == null) {
-            return;
-        }
+        processFailureEvent(channelId, null, modelConfigName, httpCode);
+    }
 
+    /**
+     * 记录上游失败事件（异步版本，生产入口）。
+     * 提交到有界线程池异步处理，不阻塞请求主线程。
+     */
+    public void recordFailureEventByModelId(Long channelId, String channelModelId, int httpCode) {
+        String resolvedName = resolveChannelModelIdToName(channelModelId);
+        Long modelConfigId = parseModelConfigId(channelModelId);
+        try {
+            failureExecutor.submit(() -> {
+                try {
+                    processFailureEvent(channelId, modelConfigId, resolvedName, httpCode);
+                } catch (Exception e) {
+                    log.warn("异步失败策略处理异常: channelId={}, model={}, httpCode={}, error={}",
+                            channelId, resolvedName, httpCode, e.getMessage());
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            log.warn("失败策略异步处理队列已满，丢弃事件: channelId={}, model={}, httpCode={}",
+                    channelId, resolvedName, httpCode);
+        }
+    }
+
+    /**
+     * 内部同步处理：匹配所有符合条件的失败策略，逐条独立计数，达到阈值时独立触发熔断。
+     */
+    void processFailureEvent(Long channelId, Long modelConfigId, String modelConfigName, int httpCode) {
+        List<FailureStrategy> strategies = findAllMatchingFailureStrategies(channelId, modelConfigId, httpCode);
+        for (FailureStrategy strategy : strategies) {
+            try {
+                processSingleFailureStrategy(strategy, channelId, modelConfigName);
+            } catch (Exception e) {
+                log.warn("失败策略计数/熔断异常(strategyId={}): {}", strategy.getId(), e.getMessage());
+            }
+        }
+    }
+
+    private void processSingleFailureStrategy(FailureStrategy strategy, Long channelId, String modelConfigName) {
         long windowMs = getWindowMs(strategy.getWindowDimension());
         if (windowMs <= 0 || strategy.getFailureThreshold() <= 0) {
             return;
@@ -242,14 +294,6 @@ public class RiskManagerService {
             memSlidingCounters.remove(counterKey);
             memFixedCounters.remove(counterKey);
         }
-    }
-
-    /**
-     * 使用 channelModelId 记录失败事件（内部解析 ID 为模型名）
-     */
-    public void recordFailureEventByModelId(Long channelId, String channelModelId, int httpCode) {
-        String resolvedName = resolveChannelModelIdToName(channelModelId);
-        recordFailureEvent(channelId, resolvedName, httpCode);
     }
 
     // ==================== Fused Channel Queries ====================
@@ -484,18 +528,53 @@ public class RiskManagerService {
 
     // ==================== Internal: Failure Strategy Matching ====================
 
-    FailureStrategy findMatchingFailureStrategy(Long channelId, String modelConfigName, int httpCode) {
-        List<FailureStrategy> strategies = failureStrategyRepository.findAllEnabledOrderByPriorityAsc();
+    List<FailureStrategy> findAllMatchingFailureStrategies(Long channelId, Long modelConfigId, int httpCode) {
+        List<FailureStrategy> strategies = getEnabledFailureStrategies();
+        List<FailureStrategy> result = new ArrayList<>();
         for (FailureStrategy strategy : strategies) {
             if (!matchesHttpCodes(strategy.getHttpCodes(), httpCode)) continue;
             if ("GLOBAL".equals(strategy.getScope())) {
-                if (strategy.getModelConfigId() == null) return strategy;
+                if (matchesModel(strategy, modelConfigId)) {
+                    result.add(strategy);
+                }
             } else if ("CHANNEL".equals(strategy.getScope())) {
                 if (!channelId.equals(strategy.getChannelId())) continue;
-                if (strategy.getModelConfigId() == null) return strategy;
+                if (matchesModel(strategy, modelConfigId)) {
+                    result.add(strategy);
+                }
             }
         }
-        return null;
+        return result;
+    }
+
+    private boolean matchesModel(FailureStrategy strategy, Long modelConfigId) {
+        if (strategy.getModelConfigId() == null) return true;
+        if (modelConfigId == null) return false;
+        return strategy.getModelConfigId().equals(modelConfigId);
+    }
+
+    private List<FailureStrategy> getEnabledFailureStrategies() {
+        long now = System.currentTimeMillis();
+        if (now - cachedStrategiesLoadedAt < STRATEGY_CACHE_TTL_MS) {
+            return cachedEnabledStrategies;
+        }
+        List<FailureStrategy> loaded = failureStrategyRepository.findAllEnabledOrderByPriorityAsc();
+        cachedEnabledStrategies = loaded;
+        cachedStrategiesLoadedAt = now;
+        return loaded;
+    }
+
+    private Long parseModelConfigId(String channelModelId) {
+        if (channelModelId == null || channelModelId.isEmpty()) return null;
+        try {
+            return Long.parseLong(channelModelId);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    public void invalidateFailureStrategyCache() {
+        cachedStrategiesLoadedAt = 0;
     }
 
     static boolean matchesHttpCodes(String httpCodesStr, int httpCode) {
@@ -552,6 +631,12 @@ public class RiskManagerService {
     private void triggerFailureCircuitBreaker(FailureStrategy strategy, Long channelId, String modelConfigName) {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime expiresAt = now.plusSeconds(strategy.getFuseDurationSeconds());
+
+        if (!shouldWriteFailureFuse(channelId, modelConfigName, expiresAt)) {
+            log.debug("已有更晚或等期的熔断记录，跳过写入: strategyId={}, channelId={}, model={}",
+                    strategy.getId(), channelId, modelConfigName);
+            return;
+        }
 
         String resolvedModelName = modelConfigName;
 
@@ -702,6 +787,49 @@ public class RiskManagerService {
             }
         }
         return result;
+    }
+
+    // ==================== Internal: Circuit Breaker Dedup ====================
+
+    /**
+     * 跨策略判断是否需要写入新的失败熔断记录：按「渠道+模型」维度查询所有未到期记录（不看 strategyId），
+     * 仅当本次到期时间严格晚于现有最晚到期时间时才写入（以更晚到期为准，覆盖/延长）。
+     * 渠道级（model 空）与渠道+模型级各查各的维度；手动熔断（MANUAL）也参与比较。
+     */
+    private boolean shouldWriteFailureFuse(Long channelId, String modelConfigName, LocalDateTime newExpiresAt) {
+        try {
+            LocalDateTime now = LocalDateTime.now();
+            List<CircuitBreakerRecord> existing;
+            if (modelConfigName != null && !modelConfigName.isEmpty()) {
+                existing = circuitBreakerRecordRepository.findActiveByChannelAndModel(channelId, modelConfigName, now);
+            } else {
+                existing = circuitBreakerRecordRepository.findActiveByChannelIdAndModelIsNull(channelId, now);
+            }
+            if (existing == null || existing.isEmpty()) {
+                return true;
+            }
+            LocalDateTime maxExpiry = existing.stream()
+                    .map(CircuitBreakerRecord::getExpiresAt)
+                    .max(LocalDateTime::compareTo)
+                    .orElse(null);
+            return maxExpiry == null || newExpiresAt.isAfter(maxExpiry);
+        } catch (Exception e) {
+            log.warn("检查熔断去重失败，继续写入: {}", e.getMessage());
+            return true;
+        }
+    }
+
+    @PreDestroy
+    void shutdownFailureExecutor() {
+        failureExecutor.shutdown();
+        try {
+            if (!failureExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                failureExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            failureExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     // ==================== Internal: Key Builders ====================

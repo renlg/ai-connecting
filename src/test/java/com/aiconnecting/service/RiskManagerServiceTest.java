@@ -294,14 +294,14 @@ class RiskManagerServiceTest {
     }
 
     @Test
-    void failureStrategyPriorityOrdering() {
-        FailureStrategy highPriority = FailureStrategy.builder()
+    void allMatchingFailureStrategiesAreCounted() {
+        FailureStrategy channelStrategy = FailureStrategy.builder()
                 .id(1L).scope("CHANNEL").channelId(10L)
                 .httpCodes("5xx").windowType("SLIDING").windowDimension("MINUTE")
                 .failureThreshold(1).fuseDurationSeconds(60)
                 .priority(0).enabled(true)
                 .build();
-        FailureStrategy lowPriority = FailureStrategy.builder()
+        FailureStrategy globalStrategy = FailureStrategy.builder()
                 .id(2L).scope("GLOBAL")
                 .httpCodes("5xx").windowType("SLIDING").windowDimension("MINUTE")
                 .failureThreshold(1).fuseDurationSeconds(600)
@@ -309,7 +309,7 @@ class RiskManagerServiceTest {
                 .build();
 
         when(failureStrategyRepo.findAllEnabledOrderByPriorityAsc())
-                .thenReturn(List.of(highPriority, lowPriority));
+                .thenReturn(List.of(channelStrategy, globalStrategy));
         when(recordRepo.save(any())).thenAnswer(inv -> {
             CircuitBreakerRecord r = inv.getArgument(0);
             if (r.getId() == null) r.setId(200L);
@@ -318,10 +318,144 @@ class RiskManagerServiceTest {
 
         service.recordFailureEvent(10L, "gpt-4", 500);
 
-        verify(recordRepo).save(argThat(record ->
+        verify(recordRepo, times(2)).save(argThat(record ->
                 record.getSource().equals("AUTO_FAILURE")
-                        && record.getReason().contains("1")
         ));
+    }
+
+    @Test
+    void failureStrategyDedupPreventsDuplicateFuse() {
+        FailureStrategy strategy = FailureStrategy.builder()
+                .id(1L).scope("GLOBAL").httpCodes("5xx")
+                .windowType("SLIDING").windowDimension("MINUTE")
+                .failureThreshold(1).fuseDurationSeconds(300)
+                .priority(0).enabled(true)
+                .build();
+
+        when(failureStrategyRepo.findAllEnabledOrderByPriorityAsc()).thenReturn(List.of(strategy));
+        when(recordRepo.save(any())).thenAnswer(inv -> {
+            CircuitBreakerRecord r = inv.getArgument(0);
+            if (r.getId() == null) r.setId(200L);
+            return r;
+        });
+
+        // Existing record with later expiry (10 min > 5 min from fuseDurationSeconds=300)
+        CircuitBreakerRecord existingRecord = CircuitBreakerRecord.builder()
+                .id(999L).policyId(1L).channelId(10L).modelConfigName("gpt-4")
+                .source("AUTO_FAILURE")
+                .triggeredAt(LocalDateTime.now()).expiresAt(LocalDateTime.now().plusMinutes(10))
+                .status("ACTIVE").build();
+        when(recordRepo.findActiveByChannelAndModel(eq(10L), eq("gpt-4"), any()))
+                .thenReturn(List.of(existingRecord));
+
+        service.recordFailureEvent(10L, "gpt-4", 500);
+
+        // New expiry (5 min) <= existing (10 min) → skip write
+        verify(recordRepo, never()).save(argThat(r ->
+                "AUTO_FAILURE".equals(r.getSource())));
+    }
+
+    @Test
+    void crossStrategyDedupPreventsShorterFuse() {
+        FailureStrategy newStrategy = FailureStrategy.builder()
+                .id(2L).scope("GLOBAL").httpCodes("5xx")
+                .windowType("SLIDING").windowDimension("MINUTE")
+                .failureThreshold(1).fuseDurationSeconds(60)
+                .priority(0).enabled(true)
+                .build();
+
+        when(failureStrategyRepo.findAllEnabledOrderByPriorityAsc()).thenReturn(List.of(newStrategy));
+        when(recordRepo.save(any())).thenAnswer(inv -> {
+            CircuitBreakerRecord r = inv.getArgument(0);
+            if (r.getId() == null) r.setId(200L);
+            return r;
+        });
+
+        // Existing record from a DIFFERENT strategy (policyId=1) with longer expiry
+        CircuitBreakerRecord existingRecord = CircuitBreakerRecord.builder()
+                .id(999L).policyId(1L).channelId(10L).modelConfigName("gpt-4")
+                .source("AUTO_FAILURE")
+                .triggeredAt(LocalDateTime.now()).expiresAt(LocalDateTime.now().plusMinutes(10))
+                .status("ACTIVE").build();
+        when(recordRepo.findActiveByChannelAndModel(eq(10L), eq("gpt-4"), any()))
+                .thenReturn(List.of(existingRecord));
+
+        service.recordFailureEvent(10L, "gpt-4", 500);
+
+        // New expiry (1 min) <= existing (10 min) → skip, even though different strategy
+        verify(recordRepo, never()).save(argThat(r ->
+                "AUTO_FAILURE".equals(r.getSource())));
+    }
+
+    @Test
+    void longerNewFuseOverridesExistingShorter() {
+        FailureStrategy strategy = FailureStrategy.builder()
+                .id(2L).scope("GLOBAL").httpCodes("5xx")
+                .windowType("SLIDING").windowDimension("MINUTE")
+                .failureThreshold(1).fuseDurationSeconds(600)
+                .priority(0).enabled(true)
+                .build();
+
+        when(failureStrategyRepo.findAllEnabledOrderByPriorityAsc()).thenReturn(List.of(strategy));
+        when(recordRepo.save(any())).thenAnswer(inv -> {
+            CircuitBreakerRecord r = inv.getArgument(0);
+            if (r.getId() == null) r.setId(200L);
+            return r;
+        });
+
+        // Existing record with shorter expiry (2 min)
+        CircuitBreakerRecord existingRecord = CircuitBreakerRecord.builder()
+                .id(999L).policyId(1L).channelId(10L).modelConfigName("gpt-4")
+                .source("AUTO_FAILURE")
+                .triggeredAt(LocalDateTime.now()).expiresAt(LocalDateTime.now().plusMinutes(2))
+                .status("ACTIVE").build();
+        when(recordRepo.findActiveByChannelAndModel(eq(10L), eq("gpt-4"), any()))
+                .thenReturn(List.of(existingRecord));
+
+        service.recordFailureEvent(10L, "gpt-4", 500);
+
+        // New expiry (10 min) > existing (2 min) → should write
+        verify(recordRepo).save(argThat(r ->
+                "AUTO_FAILURE".equals(r.getSource()) && r.getExpiresAt().isAfter(existingRecord.getExpiresAt())));
+    }
+
+    @Test
+    void modelConfigIdMatchingWorks() {
+        FailureStrategy strategyWithModel = FailureStrategy.builder()
+                .id(1L).scope("GLOBAL").modelConfigId(5L)
+                .httpCodes("5xx").windowType("SLIDING").windowDimension("MINUTE")
+                .failureThreshold(1).fuseDurationSeconds(300)
+                .priority(0).enabled(true)
+                .build();
+        FailureStrategy strategyWithoutModel = FailureStrategy.builder()
+                .id(2L).scope("GLOBAL")
+                .httpCodes("5xx").windowType("SLIDING").windowDimension("MINUTE")
+                .failureThreshold(1).fuseDurationSeconds(300)
+                .priority(1).enabled(true)
+                .build();
+
+        when(failureStrategyRepo.findAllEnabledOrderByPriorityAsc())
+                .thenReturn(List.of(strategyWithModel, strategyWithoutModel));
+        when(recordRepo.save(any())).thenAnswer(inv -> {
+            CircuitBreakerRecord r = inv.getArgument(0);
+            if (r.getId() == null) r.setId(200L);
+            return r;
+        });
+
+        // modelConfigId=5 matches both strategies
+        service.processFailureEvent(10L, 5L, "gpt-4", 500);
+        verify(recordRepo, times(2)).save(any());
+
+        reset(recordRepo);
+        when(recordRepo.save(any())).thenAnswer(inv -> {
+            CircuitBreakerRecord r = inv.getArgument(0);
+            if (r.getId() == null) r.setId(200L);
+            return r;
+        });
+
+        // modelConfigId=99 only matches the strategy without model restriction
+        service.processFailureEvent(10L, 99L, "claude-3", 500);
+        verify(recordRepo, times(1)).save(argThat(r -> r.getPolicyId().equals(2L)));
     }
 
     @Test
