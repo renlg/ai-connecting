@@ -173,6 +173,31 @@ public class RedisConfig {
     }
 
     /**
+     * 失败计数 Lua 脚本（滑动窗口）
+     * 总是记录本次失败事件，然后返回窗口内的失败总数，由调用方判断 count >= threshold
+     *
+     * KEYS[1] = 计数 key (risk:failure:{strategyId}:{channelId}:{model})
+     * ARGV[1] = 窗口大小（毫秒）
+     * ARGV[2] = 当前时间戳（毫秒）
+     *
+     * 返回: 窗口内失败次数（含本次）
+     */
+    @Bean
+    public RedisScript<Long> failureCounterScript() {
+        String luaScript = """
+                local key = KEYS[1]
+                local window = tonumber(ARGV[1])
+                local now = tonumber(ARGV[2])
+                
+                redis.call('ZADD', key, now, now .. '-' .. math.random(1000000))
+                redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
+                redis.call('PEXPIRE', key, window + 60000)
+                return redis.call('ZCARD', key)
+                """;
+        return new DefaultRedisScript<>(luaScript, Long.class);
+    }
+
+    /**
      * 限流 Lua 脚本
      * 基于滑动窗口算法实现精确的速率限制
      *

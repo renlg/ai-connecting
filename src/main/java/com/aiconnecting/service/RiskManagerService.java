@@ -9,6 +9,8 @@ import com.aiconnecting.repository.RiskPolicyRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -36,6 +38,10 @@ public class RiskManagerService {
     private final ObjectProvider<RedisTemplate<String, Long>> redisTemplateProvider;
     private final ObjectProvider<RedisScript<Long>> rateLimitScriptProvider;
     private final ObjectProvider<ModelConfigService> modelConfigServiceProvider;
+
+    @Autowired(required = false)
+    @Qualifier("failureCounterScript")
+    private RedisScript<Long> failureCounterScript;
 
     private static final long FUSED_CACHE_TTL_MS = 2000;
     private static final String REDIS_KEY_PREFIX = "risk:cb:";
@@ -291,8 +297,20 @@ public class RiskManagerService {
 
         if (thresholdReached) {
             triggerFailureCircuitBreaker(strategy, channelId, modelConfigName);
-            memSlidingCounters.remove(counterKey);
-            memFixedCounters.remove(counterKey);
+            cleanupCounterKey(counterKey, windowMs);
+        }
+    }
+
+    private void cleanupCounterKey(String counterKey, long windowMs) {
+        memSlidingCounters.remove(counterKey);
+        memFixedCounters.remove(counterKey);
+        RedisTemplate<String, Long> redisTemplate = redisTemplateProvider.getIfAvailable();
+        if (redisTemplate != null) {
+            try {
+                redisTemplate.delete(counterKey);
+            } catch (Exception e) {
+                log.debug("Redis 失败计数 key 清理异常: {}", e.getMessage());
+            }
         }
     }
 
@@ -392,6 +410,49 @@ public class RiskManagerService {
             circuitBreakerRecordRepository.expireOldRecords(LocalDateTime.now());
         } catch (Exception e) {
             log.warn("过期熔断记录清理失败: {}", e.getMessage());
+        }
+    }
+
+    @Scheduled(fixedRate = 1800000)
+    public void cleanupStaleFailureCounters() {
+        try {
+            long now = System.currentTimeMillis();
+            List<FailureStrategy> strategies = getEnabledFailureStrategies();
+            Set<String> activeKeys = new HashSet<>();
+            for (FailureStrategy s : strategies) {
+                long wMs = getWindowMs(s.getWindowDimension());
+                if (wMs <= 0) continue;
+                Long sId = s.getId();
+                for (Map.Entry<String, Deque<Long>> e : memSlidingCounters.entrySet()) {
+                    String k = e.getKey();
+                    if (k.startsWith(FAILURE_COUNTER_PREFIX + sId + ":")) {
+                        Deque<Long> dq = e.getValue();
+                        synchronized (dq) {
+                            if (dq.isEmpty() || now - dq.peekLast() > wMs) {
+                                activeKeys.add(k);
+                            }
+                        }
+                    }
+                }
+                for (Map.Entry<String, long[]> e : memFixedCounters.entrySet()) {
+                    String k = e.getKey();
+                    if (k.startsWith(FAILURE_COUNTER_PREFIX + sId + ":")) {
+                        long[] state = e.getValue();
+                        if (now - state[0] > wMs) {
+                            activeKeys.add(k);
+                        }
+                    }
+                }
+            }
+            for (String k : activeKeys) {
+                memSlidingCounters.remove(k);
+                memFixedCounters.remove(k);
+            }
+            if (!activeKeys.isEmpty()) {
+                log.debug("清理 {} 个过期本地失败计数 key", activeKeys.size());
+            }
+        } catch (Exception e) {
+            log.warn("本地失败计数器清理异常: {}", e.getMessage());
         }
     }
 
@@ -513,6 +574,33 @@ public class RiskManagerService {
     }
 
     private boolean checkFailureWindowCounter(String key, long windowMs, int threshold, long now, String windowType) {
+        RedisTemplate<String, Long> redisTemplate = redisTemplateProvider.getIfAvailable();
+
+        if (redisTemplate != null) {
+            try {
+                if ("FIXED".equalsIgnoreCase(windowType)) {
+                    long windowStart = now - (now % windowMs);
+                    String bucketKey = key + ":" + windowStart;
+                    Long count = redisTemplate.opsForValue().increment(bucketKey);
+                    if (count != null && count == 1) {
+                        long ttlMs = windowMs - (now - windowStart);
+                        redisTemplate.expire(bucketKey, ttlMs + 60_000, TimeUnit.MILLISECONDS);
+                    }
+                    return count != null && count >= threshold;
+                } else {
+                    Long count = redisTemplate.execute(
+                            failureCounterScript,
+                            Collections.singletonList(key),
+                            windowMs,
+                            now
+                    );
+                    return count != null && count >= threshold;
+                }
+            } catch (Exception e) {
+                log.warn("Redis 失败计数异常，降级到本地内存: {} - {}", e.getClass().getName(), e.getMessage());
+            }
+        }
+
         if ("FIXED".equalsIgnoreCase(windowType)) {
             return checkFailureFixedWindow(key, windowMs, threshold, now);
         }
