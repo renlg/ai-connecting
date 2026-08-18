@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Table, Button, Modal, Form, InputNumber, Select, Space, Switch, Popconfirm, message, Radio, Typography, Grid } from 'antd'
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Switch, Popconfirm, message, Radio, Typography, Grid } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import {
   getFailureStrategies, createFailureStrategy, updateFailureStrategy, deleteFailureStrategy, updateFailureStrategyStatus,
