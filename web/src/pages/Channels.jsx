@@ -433,7 +433,7 @@ export default function Channels() {
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '名称', dataIndex: 'name', width: 120 },
     { title: '类型', dataIndex: 'type', width: 100, render: v => <Tag color="blue">{v}</Tag> },
-    { title: 'Base URL', dataIndex: 'baseUrl', ellipsis: true },
+    { title: 'Base URL', dataIndex: 'baseUrl', ellipsis: { showTitle: false }, render: (v) => <Tooltip placement="topLeft" title={v}><span>{v}</span></Tooltip> },
     {
       title: 'API Key', dataIndex: 'apiKey', width: 200, render: (v, record) => (
         <Space size="small">
