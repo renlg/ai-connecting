@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
@@ -37,6 +38,9 @@ public class ChannelHealthTracker {
     public void setHealthPersistenceService(ChannelHealthPersistenceService healthPersistenceService) {
         this.healthPersistenceService = healthPersistenceService;
     }
+
+    @Autowired(required = false)
+    private ObjectProvider<RiskManagerService> riskManagerProvider;
 
     // ==================== 配置常量 ====================
 
@@ -270,9 +274,19 @@ public class ChannelHealthTracker {
             case AUTH_ERROR:
             case QUOTA:
                 safeSubmit(() -> {
-                    log.warn("渠道 {} 发生不可恢复的账户错误（{}），立即熔断 1 小时: {}",
-                            channelId, category, errorMessage);
-                    forceOpen(channelId, IMMEDIATE_BLOCK_DURATION_MS);
+                    if (isFailureStrategyCovering(channelId, category)) {
+                        log.info("渠道 {} 发生 {} 错误，存在匹配的失败策略，交由失败策略体系处理: {}",
+                                channelId, category, errorMessage);
+                        try {
+                            onHealthRelevantFailure(channelId, category, errorMessage);
+                        } catch (Exception e) {
+                            log.error("异步记录渠道 {} 失败异常: {}", channelId, e.getMessage(), e);
+                        }
+                    } else {
+                        log.warn("渠道 {} 发生不可恢复的账户错误（{}），立即熔断 1 小时: {}",
+                                channelId, category, errorMessage);
+                        forceOpen(channelId, IMMEDIATE_BLOCK_DURATION_MS);
+                    }
                 });
                 break;
             case CLIENT_ERROR:
@@ -445,6 +459,25 @@ public class ChannelHealthTracker {
             return true;
         }
         return getEffectiveState(channelId) == CircuitState.OPEN;
+    }
+
+    /**
+     * 判断给定渠道是否存在覆盖该错误类别的失败策略。
+     * AUTH_ERROR 对应 401/403，QUOTA 对应 403（上游配额耗尽通常返回 403）。
+     */
+    private boolean isFailureStrategyCovering(Long channelId, ErrorCategory category) {
+        if (riskManagerProvider == null) return false;
+        RiskManagerService riskManager = riskManagerProvider.getIfAvailable();
+        if (riskManager == null) return false;
+        int[] codes = switch (category) {
+            case AUTH_ERROR -> new int[]{401, 403};
+            case QUOTA -> new int[]{403};
+            default -> new int[0];
+        };
+        for (int code : codes) {
+            if (riskManager.hasFailureStrategyForChannel(channelId, code)) return true;
+        }
+        return false;
     }
 
     private boolean isRateLimitCoolingDown(Long channelId) {

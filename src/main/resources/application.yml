@@ -84,4 +84,12 @@ app:
     bucket: ${OSS_BUCKET:renlg}
     endpoint: ${OSS_ENDPOINT:oss-cn-hangzhou.aliyuncs.com}  # 不含协议前缀的 endpoint host
     prefix: ${OSS_PREFIX:ai-connect}  # 对象 key 前缀
+  risk-ai:
+    enabled: ${RISK_AI_ANALYZER_ENABLED:true}  # AI分析失败数据自动熔断开关
+    interval-ms: ${RISK_AI_ANALYZER_INTERVAL_MS:600000}  # 定时任务周期(毫秒)，默认10分钟
+    model-group: ${RISK_AI_MODEL_GROUP:free}  # AI分析使用的模型组名
+    token: ${RISK_AI_TOKEN:}  # AI分析admin token，优先env，否则从tokens表读name=risk-ai-analyzer
+    scan-window-ms: ${RISK_AI_SCAN_WINDOW_MS:3600000}  # 扫描窗口(毫秒)，默认1小时
+    max-records: ${RISK_AI_MAX_RECORDS:200}  # 单次最多分析条数
+    fuse-years: ${RISK_AI_FUSE_YEARS:10}  # 熔断年限，默认10年
   # CHANNEL_ENCRYPTION_KEY: base64-encoded 32-byte key for AES-256-GCM encryption of channel API keys (required, no default)

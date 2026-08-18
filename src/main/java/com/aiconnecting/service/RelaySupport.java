@@ -80,6 +80,9 @@ public class RelaySupport {
     @Autowired
     ObjectProvider<RiskManagerService> riskManagerProvider;
 
+    @Autowired(required = false)
+    private ChannelFailureRecorder channelFailureRecorder;
+
     private OkHttpClient httpClient;
     final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -410,6 +413,15 @@ public class RelaySupport {
                 String modelIdStr = modelConfigId != null ? String.valueOf(modelConfigId) : null;
                 riskManager.recordFailureEventByModelId(channelId, modelIdStr, error.getCode());
             }
+        }
+        if (this.channelFailureRecorder != null) {
+            String rawBody = error.getUpstreamResponseBody();
+            String detail = rawBody != null
+                    ? "Upstream API error: " + error.getCode() + " - " + rawBody
+                    : error.getMessage();
+            this.channelFailureRecorder.record(channelId,
+                    modelConfigId != null ? String.valueOf(modelConfigId) : null,
+                    error.getCode(), detail);
         }
         FailureClassifier.Classification classification = FailureClassifier.classify(error);
         switch (classification.kind()) {

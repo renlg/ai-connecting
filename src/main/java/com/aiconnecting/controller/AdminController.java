@@ -17,6 +17,7 @@ import com.aiconnecting.entity.OperationLog;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.Announcement;
+import com.aiconnecting.entity.ChannelFailureRecord;
 import com.aiconnecting.entity.FailureLog;
 import com.aiconnecting.service.DashboardService;
 import com.aiconnecting.service.UserService;
@@ -28,10 +29,14 @@ import com.aiconnecting.service.OperationLogService;
 import com.aiconnecting.service.StatsAggregationService;
 import com.aiconnecting.service.FailureLogService;
 import com.aiconnecting.repository.AnnouncementRepository;
+import com.aiconnecting.repository.ChannelFailureRecordRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.web.bind.annotation.*;
 import jakarta.validation.Valid;
 
@@ -56,6 +61,7 @@ public class AdminController {
     private final OperationLogService operationLogService;
     private final StatsAggregationService statsAggregationService;
     private final FailureLogService failureLogService;
+    private final ChannelFailureRecordRepository channelFailureRecordRepository;
     private final DuplicateSubmitGuard duplicateSubmitGuard;
 
     /**
@@ -167,6 +173,28 @@ public class AdminController {
             @RequestParam(required = false) Integer httpStatus) {
         return ApiResponse.success(failureLogService.search(page, size, traceId, exactTraceId, startTime, endTime,
                 modelName, channelModelName, httpStatus));
+    }
+
+    /** 渠道失败记录，支持分页及组合筛选。 */
+    @GetMapping("/failure-logs/channel")
+    public ApiResponse<Page<ChannelFailureRecord>> getChannelFailureLogs(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) Long channelId,
+            @RequestParam(required = false) String modelName,
+            @RequestParam(required = false) Boolean analyzed) {
+        Specification<ChannelFailureRecord> spec = Specification.where(null);
+        if (channelId != null) {
+            spec = spec.and((root, query, cb) -> cb.equal(root.get("channelId"), channelId));
+        }
+        if (modelName != null && !modelName.isBlank()) {
+            spec = spec.and((root, query, cb) -> cb.like(root.get("modelName"), "%" + modelName.trim() + "%"));
+        }
+        if (analyzed != null) {
+            spec = spec.and((root, query, cb) -> cb.equal(root.get("analyzed"), analyzed));
+        }
+        PageRequest pageRequest = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        return ApiResponse.success(channelFailureRecordRepository.findAll(spec, pageRequest));
     }
 
     /**

@@ -201,6 +201,31 @@ public class RiskManagerService {
         return record;
     }
 
+    @Transactional
+    public CircuitBreakerRecord createAutoQuotaCircuitBreaker(Long channelId, String modelConfigName,
+                                                               int durationSeconds, String reason) {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime expiresAt = now.plusSeconds(durationSeconds);
+
+        CircuitBreakerRecord record = CircuitBreakerRecord.builder()
+                .channelId(channelId)
+                .modelConfigName(modelConfigName)
+                .source("AUTO_QUOTA")
+                .reason(reason)
+                .triggeredAt(now)
+                .expiresAt(expiresAt)
+                .status("ACTIVE")
+                .build();
+        circuitBreakerRecordRepository.save(record);
+
+        String fuseKey = buildFuseKey(channelId, modelConfigName);
+        setFuse(fuseKey, expiresAt);
+        invalidateFusedCache();
+
+        log.warn("AI自动熔断(额度耗尽): channelId={}, model={}, 熔断至 {}", channelId, modelConfigName, expiresAt);
+        return record;
+    }
+
     // ==================== Rate Limit Check ====================
 
     /**
@@ -288,7 +313,9 @@ public class RiskManagerService {
         }
 
         String modelPart = (modelConfigName != null && !modelConfigName.isEmpty()) ? modelConfigName : "all";
-        String counterKey = FAILURE_COUNTER_PREFIX + strategy.getId() + ":" + channelId + ":" + modelPart;
+        String counterKey = "GLOBAL".equals(strategy.getScope())
+                ? FAILURE_COUNTER_PREFIX + strategy.getId() + ":" + modelPart
+                : FAILURE_COUNTER_PREFIX + strategy.getId() + ":" + channelId + ":" + modelPart;
         String windowType = strategy.getWindowType() != null ? strategy.getWindowType() : "SLIDING";
         long now = System.currentTimeMillis();
 
@@ -404,6 +431,7 @@ public class RiskManagerService {
         fusedChannelIdsCachedAt = 0;
     }
 
+    @Transactional
     @Scheduled(fixedRate = 60000)
     public void expireOldRecords() {
         try {
@@ -663,6 +691,20 @@ public class RiskManagerService {
 
     public void invalidateFailureStrategyCache() {
         cachedStrategiesLoadedAt = 0;
+    }
+
+    /**
+     * 判断指定渠道是否存在覆盖给定 HTTP 状态码的失败策略。
+     * 供 ChannelHealthTracker 在 AUTH_ERROR/QUOTA 时判断是否应将立即熔断让位给失败策略体系。
+     */
+    public boolean hasFailureStrategyForChannel(Long channelId, int httpCode) {
+        List<FailureStrategy> strategies = getEnabledFailureStrategies();
+        for (FailureStrategy strategy : strategies) {
+            if (!matchesHttpCodes(strategy.getHttpCodes(), httpCode)) continue;
+            if ("GLOBAL".equals(strategy.getScope())) return true;
+            if ("CHANNEL".equals(strategy.getScope()) && channelId.equals(strategy.getChannelId())) return true;
+        }
+        return false;
     }
 
     static boolean matchesHttpCodes(String httpCodesStr, int httpCode) {

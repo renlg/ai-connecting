@@ -12,6 +12,7 @@ import ModelGroups from './pages/ModelGroups'
 import Coupons from './pages/Coupons'
 import Announcements from './pages/Announcements'
 import FailureLogs from './pages/FailureLogs'
+import ChannelFailureLogs from './pages/ChannelFailureLogs'
 import Cost from './pages/Cost'
 import UsageDocs from './pages/UsageDocs'
 import RateLimitStrategies from './pages/RateLimitStrategies'
@@ -60,7 +61,9 @@ export default function App() {
           <Route path="model-groups" element={<ModelGroups />} />
           <Route path="coupons" element={<Coupons />} />
           <Route path="announcements" element={<Announcements />} />
-          <Route path="failure-logs" element={<FailureLogs />} />
+          <Route path="failure-logs" element={<Navigate to="/failure-logs/request" replace />} />
+          <Route path="failure-logs/channel" element={<ChannelFailureLogs />} />
+          <Route path="failure-logs/request" element={<FailureLogs />} />
           <Route path="cost" element={<AdminRoute><Cost /></AdminRoute>} />
           <Route path="risk/rate-limit" element={<RateLimitStrategies />} />
           <Route path="risk/failure" element={<FailureStrategies />} />

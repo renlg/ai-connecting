@@ -350,3 +350,17 @@ CREATE TABLE IF NOT EXISTS circuit_breaker_records (
 CREATE INDEX idx_circuit_breaker_records_channel_id ON circuit_breaker_records (channel_id);
 CREATE INDEX idx_circuit_breaker_records_status_expires ON circuit_breaker_records (status, expires_at);
 CREATE INDEX idx_circuit_breaker_records_triggered_at ON circuit_breaker_records (triggered_at);
+
+-- 渠道失败记录表（AI分析用，保留3天）
+CREATE TABLE IF NOT EXISTS channel_failure_records (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    channel_id BIGINT NOT NULL,
+    model_name VARCHAR(200),
+    error_code VARCHAR(50),
+    error_message VARCHAR(500),
+    analyzed BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at BIGINT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_channel_failure_records_created_at ON channel_failure_records (created_at);
+CREATE INDEX idx_channel_failure_records_analyzed_created ON channel_failure_records (analyzed, created_at);

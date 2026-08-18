@@ -72,7 +72,13 @@ export default function AppLayout() {
       { key: '/users', icon: <TeamOutlined />, label: '用户管理' },
       { key: '/coupons', icon: <GiftOutlined />, label: '积分券管理' },
       { key: '/announcements', icon: <DashboardOutlined />, label: '公告管理' },
-      { key: '/failure-logs', icon: <BugOutlined />, label: '失败日志' },
+      {
+        key: 'failure-logs', icon: <BugOutlined />, label: '失败日志',
+        children: [
+          { key: '/failure-logs/channel', icon: <ApiOutlined />, label: '渠道日志' },
+          { key: '/failure-logs/request', icon: <BugOutlined />, label: '请求日志' },
+        ]
+      },
       { key: '/cost', icon: <DollarOutlined />, label: '成本核算' },
       {
         key: 'risk', icon: <SafetyOutlined />, label: '风险管理',
@@ -160,7 +166,10 @@ export default function AppLayout() {
             theme="dark"
             mode="inline"
             selectedKeys={[location.pathname]}
-            defaultOpenKeys={location.pathname.startsWith('/risk') ? ['risk'] : []}
+            defaultOpenKeys={[
+              ...(location.pathname.startsWith('/risk') ? ['risk'] : []),
+              ...(location.pathname.startsWith('/failure-logs') ? ['failure-logs'] : []),
+            ]}
             items={menuItems}
             onClick={handleMenuClick}
           />
@@ -180,7 +189,10 @@ export default function AppLayout() {
             theme="dark"
             mode="inline"
             selectedKeys={[location.pathname]}
-            defaultOpenKeys={location.pathname.startsWith('/risk') ? ['risk'] : []}
+            defaultOpenKeys={[
+              ...(location.pathname.startsWith('/risk') ? ['risk'] : []),
+              ...(location.pathname.startsWith('/failure-logs') ? ['failure-logs'] : []),
+            ]}
             items={menuItems}
             onClick={handleMenuClick}
           />

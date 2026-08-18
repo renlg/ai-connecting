@@ -58,6 +58,9 @@ public class ModelGroupFailoverExecutor {
     @Autowired(required = false)
     private FailureLogService failureLogService;
 
+    @Autowired(required = false)
+    private ChannelFailureRecorder channelFailureRecorder;
+
     /** 总耗时预算（毫秒），介于业务约定的 120-150s 之间 */
     private static final long WALL_CLOCK_BUDGET_MS = 130_000L;
 
@@ -153,6 +156,15 @@ public class ModelGroupFailoverExecutor {
                     : ChannelHealthTracker.ErrorCategory.fromStatusCode(error.getCode());
             support.channelHealthTracker.recordFailure(channel.getId(),
                     category, error.getMessage());
+        }
+        if (channelFailureRecorder != null) {
+            String rawBody = error.getUpstreamResponseBody();
+            String detail = rawBody != null
+                    ? "Upstream API error: " + error.getCode() + " - " + rawBody
+                    : error.getMessage();
+            channelFailureRecorder.record(channel.getId(),
+                    modelConfigId != null ? String.valueOf(modelConfigId) : null,
+                    error.getCode(), detail);
         }
     }
 
