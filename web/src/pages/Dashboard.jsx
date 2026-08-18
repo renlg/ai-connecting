@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Card, Row, Col, Statistic, Spin, message, Modal, Table, Tag, Segmented, Empty, Tooltip as AntTooltip } from 'antd'
 import { KeyOutlined, SendOutlined, NumberOutlined, DollarOutlined } from '@ant-design/icons'
-import { ApiOutlined, CloudServerOutlined, UserOutlined, WalletOutlined, StopOutlined } from '@ant-design/icons'
+import { ApiOutlined, CloudServerOutlined, UserOutlined, WalletOutlined } from '@ant-design/icons'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
-import { getDashboard, getBlockedChannels, getDailyStats } from '../api'
+import { getDashboard, getDailyStats } from '../api'
 
 // 缓存未命中 / 命中固定用两种颜色区分状态，模型身份由图例文案与横轴分组承载
 const MISS_COLOR = '#1677ff'
@@ -82,9 +82,6 @@ const DAILY_STATS_CACHE_TTL_MS = 60 * 1000
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
   const [statsLoading, setStatsLoading] = useState(true)
-  const [blockedModalOpen, setBlockedModalOpen] = useState(false)
-  const [blockedChannels, setBlockedChannels] = useState([])
-  const [blockedLoading, setBlockedLoading] = useState(false)
   const [dailyStats, setDailyStats] = useState(null)
   const [dailyStatsLoading, setDailyStatsLoading] = useState(true)
   const [days, setDays] = useState(7)
@@ -122,25 +119,6 @@ export default function Dashboard() {
   }, [days])
 
   const creditChartData = dailyStats?.dailyCredits || []
-
-  const handleBlockedClick = () => {
-    setBlockedModalOpen(true)
-    setBlockedLoading(true)
-    getBlockedChannels().then(res => {
-      if (res.code === 200) setBlockedChannels(res.data || [])
-    }).catch(() => message.error('加载封禁渠道失败')).finally(() => setBlockedLoading(false))
-  }
-
-  const blockedColumns = [
-    { title: 'ID', dataIndex: 'id', width: 60 },
-    { title: '渠道名称', dataIndex: 'name' },
-    { title: '类型', dataIndex: 'type', width: 100, render: v => <Tag>{v}</Tag> },
-    {
-      title: '封禁至', dataIndex: 'blockedUntil', width: 180,
-      render: v => v ? new Date(v).toLocaleString('zh-CN', { hour12: false }) : '-'
-    },
-  ]
-
 
   // ── Top: Today's data (prominent) ──
   const cacheHitRateToday = stats?.inputTokensToday > 0
@@ -229,7 +207,6 @@ export default function Dashboard() {
       { title: '用户数量', value: stats?.totalUsers || 0, icon: <UserOutlined />, color: '#fa8c16' },
       { title: '总渠道数', value: stats?.totalChannels || 0, icon: <ApiOutlined />, color: '#1677ff' },
       { title: '活跃渠道', value: stats?.activeChannels || 0, icon: <CloudServerOutlined />, color: '#52c41a' },
-      { title: '封禁渠道', value: stats?.blockedChannels || 0, icon: <StopOutlined />, color: '#ff4d4f', clickable: true },
     ]
   } else {
     otherCards = [
@@ -316,8 +293,7 @@ export default function Dashboard() {
           <Col xs={24} sm={12} md={8} key={i}>
             <Card
               hoverable
-              style={{ borderRadius: 8, cursor: item.clickable ? 'pointer' : 'default' }}
-              onClick={item.clickable ? handleBlockedClick : undefined}
+              style={{ borderRadius: 8 }}
             >
               <Statistic
                 title={item.title}
@@ -382,23 +358,6 @@ export default function Dashboard() {
         emptyText="暂无模型组 Token 数据"
       />
 
-      <Modal
-        title="封禁渠道列表"
-        open={blockedModalOpen}
-        onCancel={() => setBlockedModalOpen(false)}
-        footer={null}
-        width={600}
-      >
-        <Table
-          columns={blockedColumns}
-          dataSource={blockedChannels}
-          rowKey="id"
-          loading={blockedLoading}
-          pagination={false}
-          size="small"
-          locale={{ emptyText: '当前没有封禁的渠道' }}
-        />
-      </Modal>
     </div>
   )
 }

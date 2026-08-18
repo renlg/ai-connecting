@@ -31,7 +31,7 @@ import static org.mockito.Mockito.when;
 class OpenAiRelayServiceTest {
 
     private final OpenAiRelayService service = new OpenAiRelayService(null, null, null, null, null, null, null);
-    private final RelaySupport support = new RelaySupport(null, null, null, null, null, null, null, null, null);
+    private final RelaySupport support = new RelaySupport(null, null, null, null, null, null, null, null);
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
@@ -95,8 +95,7 @@ class OpenAiRelayServiceTest {
     @Test
     void mediaContentPolicyViolationFailsImmediatelyWithoutRetryOrHealthRecord() {
         ChannelRouter router = mock(ChannelRouter.class);
-        ChannelHealthTracker healthTracker = mock(ChannelHealthTracker.class);
-        RelaySupport relaySupport = relaySupport(router, healthTracker);
+        RelaySupport relaySupport = relaySupport(router);
         OpenAiRelayService relayService = relayService(relaySupport);
         Channel first = Channel.builder().id(7L).build();
         Channel second = Channel.builder().id(9L).build();
@@ -117,15 +116,13 @@ class OpenAiRelayServiceTest {
         assertEquals(body, thrown.getUpstreamResponseBody());
         verify(upstreamCall, times(1)).apply(any());
         verify(router, times(1)).selectChannel(eq("media-model"), anySet(), anyInt());
-        verify(relaySupport, never()).dispatchRelayFailure(any(), any(), any(), any());
-        verify(healthTracker, never()).recordFailure(any(), any(), any());
+        verify(relaySupport, never()).dispatchRelayFailure(any(), any(), any());
     }
 
     @Test
     void mediaSwitchableFailureStillRetriesAnotherChannel() {
         ChannelRouter router = mock(ChannelRouter.class);
-        ChannelHealthTracker healthTracker = mock(ChannelHealthTracker.class);
-        RelaySupport relaySupport = relaySupport(router, healthTracker);
+        RelaySupport relaySupport = relaySupport(router);
         OpenAiRelayService relayService = relayService(relaySupport);
         FailureLogService failureLogService = mock(FailureLogService.class);
         ReflectionTestUtils.setField(relayService, "failureLogService", failureLogService);
@@ -144,9 +141,7 @@ class OpenAiRelayServiceTest {
         assertNotNull(result);
         verify(upstreamCall, times(2)).apply(any());
         verify(router, times(2)).selectChannel(eq("media-model"), anySet(), anyInt());
-        verify(relaySupport).dispatchRelayFailure(eq(7L), eq(42L), eq(unavailable), any());
-        verify(healthTracker).recordFailure(eq(7L), any(), eq("upstream unavailable"));
-        verify(healthTracker).recordSuccess(9L);
+        verify(relaySupport).dispatchRelayFailure(eq(7L), eq(42L), eq(unavailable));
         verify(failureLogService).recordChannelFailure(isNull(), eq(7L), eq(42L), isNull(), eq(unavailable));
     }
 
@@ -164,19 +159,16 @@ class OpenAiRelayServiceTest {
 
     @Test
     void quotaFailureRecordsChannelCircuit() {
-        RelaySupport relaySupport = relaySupport(mock(ChannelRouter.class), mock(ChannelHealthTracker.class));
-        Runnable channelFailureRecorder = mock(Runnable.class);
+        RelaySupport relaySupport = relaySupport(mock(ChannelRouter.class));
         String body = "{\"error\":{\"message\":\"Free quota exhausted\"}}";
         BusinessException quota = BusinessException.upstream(403, "upstream quota exhausted", body, null);
 
-        relaySupport.dispatchRelayFailure(7L, 42L, quota, channelFailureRecorder);
-
-        verify(channelFailureRecorder).run();
+        relaySupport.dispatchRelayFailure(7L, 42L, quota);
     }
 
-    private RelaySupport relaySupport(ChannelRouter router, ChannelHealthTracker healthTracker) {
+    private RelaySupport relaySupport(ChannelRouter router) {
         RelaySupport relaySupport = org.mockito.Mockito.spy(new RelaySupport(
-                null, router, healthTracker, null, null, null, null, null, null));
+                null, router, null, null, null, null, null, null));
         doReturn(false).when(relaySupport).isChannelRateLimited(any());
         return relaySupport;
     }

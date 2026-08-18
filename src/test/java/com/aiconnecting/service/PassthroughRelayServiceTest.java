@@ -141,7 +141,7 @@ class PassthroughRelayServiceTest {
         when(usageLogService.calculateCreditCost("platform-model", 2, 3, 0))
                 .thenReturn(new BigDecimal("1.25"));
         RelaySupport support = new RelaySupport(mock(ChannelService.class), mock(ChannelRouter.class),
-                mock(ChannelHealthTracker.class), mock(TokenService.class), usageLogService,
+                mock(TokenService.class), usageLogService,
                 mock(ModelConfigService.class), mock(ModelGroupService.class), mock(UserService.class),
                 mock(VideoTaskUsageLogService.class));
         Token token = Token.builder().id(10L).userId(20L).build();
@@ -172,11 +172,10 @@ class PassthroughRelayServiceTest {
                     .body(ResponseBody.create(responseBytes, MediaType.parse("application/json"))).build();
         });
             ChannelRouter router = mock(ChannelRouter.class);
-            ChannelHealthTracker health = mock(ChannelHealthTracker.class);
             ChannelService channels = mock(ChannelService.class);
             UsageLogService logs = mock(UsageLogService.class);
             when(logs.calculateCreditCost(anyString(), anyInt(), anyInt(), anyInt())).thenReturn(BigDecimal.ZERO);
-            RelaySupport support = spy(new RelaySupport(channels, router, health, mock(TokenService.class), logs,
+            RelaySupport support = spy(new RelaySupport(channels, router, mock(TokenService.class), logs,
                     mock(ModelConfigService.class), mock(ModelGroupService.class), mock(UserService.class),
                     mock(VideoTaskUsageLogService.class)));
             Token token = Token.builder().id(1L).userId(2L).build();
@@ -220,7 +219,7 @@ class PassthroughRelayServiceTest {
         okhttp3.Call.Factory calls = mock(okhttp3.Call.Factory.class);
             ChannelRouter router = mock(ChannelRouter.class);
             ChannelService channels = mock(ChannelService.class);
-            RelaySupport support = spy(new RelaySupport(channels, router, mock(ChannelHealthTracker.class),
+            RelaySupport support = spy(new RelaySupport(channels, router,
                     mock(TokenService.class), mock(UsageLogService.class), mock(ModelConfigService.class),
                     mock(ModelGroupService.class), mock(UserService.class), mock(VideoTaskUsageLogService.class)));
             doReturn("platform-model").when(support).resolveModelName("platform-model");
@@ -248,7 +247,7 @@ class PassthroughRelayServiceTest {
         okhttp3.Call.Factory calls = mock(okhttp3.Call.Factory.class);
         ChannelRouter router = mock(ChannelRouter.class);
         ChannelService channels = mock(ChannelService.class);
-        RelaySupport support = spy(new RelaySupport(channels, router, mock(ChannelHealthTracker.class),
+        RelaySupport support = spy(new RelaySupport(channels, router,
                 mock(TokenService.class), mock(UsageLogService.class), mock(ModelConfigService.class),
                 mock(ModelGroupService.class), mock(UserService.class), mock(VideoTaskUsageLogService.class)));
         doReturn("platform-model").when(support).resolveModelName("platform-model");

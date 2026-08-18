@@ -104,6 +104,7 @@ public class PassthroughRelayService {
         String tokenKey = extractTokenKey(request);
         RelaySupport.RelayContext context = support.validateAndPrepare(
                 tokenKey, canonicalModel, endpointType(request.getRequestURI()));
+        Long modelConfigId = context.modelConfig() != null ? context.modelConfig().getId() : null;
         Set<Long> attempted = new HashSet<>();
         IOException lastConnectionFailure = null;
 
@@ -139,8 +140,9 @@ public class PassthroughRelayService {
                 upstreamResponse = executePassthrough(upstreamRequest);
             } catch (IOException e) {
                 lastConnectionFailure = e;
-                support.channelHealthTracker.recordFailure(channel.getId(),
-                        ChannelHealthTracker.ErrorCategory.fromException(e), e.getMessage());
+                BusinessException failure = new BusinessException(502, "渠道连接失败: " + e.getMessage(),
+                        "Channel connection failed: " + e.getMessage(), e, null, null, true);
+                support.dispatchRelayFailure(channel.getId(), modelConfigId, failure);
                 continue; // no response bytes exist yet; another custom channel may be attempted
             }
 
@@ -155,11 +157,13 @@ public class PassthroughRelayService {
                 try {
                     copyUpstreamResponse(upstreamResponse, servletResponse, observer);
                     if (upstreamResponse.isSuccessful()) {
-                        support.channelHealthTracker.recordSuccess(channel.getId());
                     } else {
-                        support.channelHealthTracker.recordFailure(channel.getId(),
-                                ChannelHealthTracker.ErrorCategory.fromStatusCode(upstreamResponse.code()),
-                                "HTTP " + upstreamResponse.code());
+                        BusinessException upstreamFailure = BusinessException.upstream(
+                                upstreamResponse.code(),
+                                "上游 API 错误: " + failureBody,
+                                "Upstream API error: " + failureBody,
+                                failureBody, null);
+                        support.dispatchRelayFailure(channel.getId(), modelConfigId, upstreamFailure);
                     }
                 } catch (IOException streamFailure) {
                     // The upstream response has already been selected/started. Never retry or append an error.

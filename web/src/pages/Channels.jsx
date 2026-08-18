@@ -1,11 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Table, Button, Modal, Form, Input, InputNumber, Select, AutoComplete, Space, Tag, message, Popconfirm, Switch, Tooltip, Checkbox, Image, Spin } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, UnlockOutlined, CopyOutlined, SearchOutlined } from '@ant-design/icons'
-import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, testChannelMedia, pollChannelTestVideo, downloadChannelTestVideo, getChannelHealth, unblockChannel, getChannelApiKey } from '../api'
+import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined, SendOutlined, ExperimentOutlined, CopyOutlined, SearchOutlined } from '@ant-design/icons'
+import { getChannels, createChannel, updateChannel, deleteChannel, updateChannelStatus, getEnabledModels, fetchChannelModels, testChannelChatStream, testChannelMedia, pollChannelTestVideo, downloadChannelTestVideo, getChannelApiKey } from '../api'
 
-const CB_STATE_COLOR = { CLOSED: 'green', HALF_OPEN: 'gold', OPEN: 'red' }
-
-const HEALTH_REFRESH_MS = 30000
 const VIDEO_POLL_INTERVAL_MS = 5000
 const VIDEO_POLL_LIMIT = 150
 
@@ -81,8 +78,6 @@ export default function Channels() {
   const [testModelOptions, setTestModelOptions] = useState([])
   const testRunRef = useRef(0)
   const videoObjectUrlRef = useRef(null)
-  const [healthMap, setHealthMap] = useState({})
-  const [showBlockedOnly, setShowBlockedOnly] = useState(false)
   const [revealedKeys, setRevealedKeys] = useState({})
   const [copyingId, setCopyingId] = useState(null)
   const [searchName, setSearchName] = useState('')
@@ -100,22 +95,6 @@ export default function Channels() {
     getChannels(params).then(res => {
       if (res.code === 200) setChannels(res.data || [])
     }).finally(() => setLoading(false))
-  }
-
-  const loadHealth = () => {
-    getChannelHealth().then(res => {
-      if (res.code === 200) {
-        const map = {}
-        ;(res.data || []).forEach(h => { map[h.channelId] = h })
-        setHealthMap(map)
-      }
-    })
-  }
-
-  const handleUnblock = async (id) => {
-    await unblockChannel(id)
-    message.success('已解除封禁')
-    loadHealth()
   }
 
   const revealApiKey = async (id) => {
@@ -163,15 +142,10 @@ export default function Channels() {
     })
   }
 
-  useEffect(() => { load(); loadModels(); loadHealth() }, [])
+  useEffect(() => { load(); loadModels() }, [])
 
   useEffect(() => () => {
     if (videoObjectUrlRef.current) URL.revokeObjectURL(videoObjectUrlRef.current)
-  }, [])
-
-  useEffect(() => {
-    const timer = setInterval(loadHealth, HEALTH_REFRESH_MS)
-    return () => clearInterval(timer)
   }, [])
 
   const handleFetchModels = async () => {
@@ -495,41 +469,8 @@ export default function Channels() {
     } },
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },
     {
-      title: '健康状态', width: 220, render: (_, record) => {
-        const h = healthMap[record.id]
-        if (!h) return <Tag>加载中</Tag>
-        const state = h.circuitBreakerState
-        const errorRatePct = ((h.errorRate || 0) * 100).toFixed(1)
-        const tooltip = (
-          <div>
-            <div>currentWeight: {h.currentWeight}</div>
-            <div>effectiveWeight: {h.effectiveWeight}</div>
-            <div>最近1分钟请求数: {h.totalRequests1m}</div>
-            <div>探测失败次数: {h.probeFailures}</div>
-            <div>最后成功: {h.lastSuccessAt || '-'}</div>
-            <div>最后失败: {h.lastFailureAt || '-'}</div>
-            <div>最后失败原因: {h.lastFailureReason || '-'}</div>
-          </div>
-        )
-        return (
-          <Tooltip title={tooltip}>
-            <Space size="small" wrap>
-              <Tag color={CB_STATE_COLOR[state] || 'default'}>{state}</Tag>
-              <Tag>{errorRatePct}%</Tag>
-              {state === 'OPEN' && h.blockedUntil && <Tag color="red">至 {h.blockedUntil}</Tag>}
-            </Space>
-          </Tooltip>
-        )
-      }
-    },
-    {
       title: '操作', width: 220, fixed: 'right', render: (_, record) => (
         <Space size="small" wrap>
-          {healthMap[record.id]?.circuitBreakerState === 'OPEN' && (
-            <Popconfirm title="确定解除封禁？" onConfirm={() => handleUnblock(record.id)}>
-              <Button size="small" icon={<UnlockOutlined />}>解封</Button>
-            </Popconfirm>
-          )}
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditing(record)
             // 重置为该渠道自身对应的本地模型列表，清除上一次为其他渠道"获取模型"后残留的窄化选项

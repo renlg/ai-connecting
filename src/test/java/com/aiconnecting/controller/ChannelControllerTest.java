@@ -4,8 +4,6 @@ import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.dto.ChannelRequest;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.service.ChannelService;
-import com.aiconnecting.service.ChannelHealthService;
-import com.aiconnecting.service.ChannelHealthTracker;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -42,12 +40,6 @@ class ChannelControllerTest {
 
     @MockBean
     private JwtAuthenticationFilter jwtAuthenticationFilter;
-
-    @MockBean
-    private ChannelHealthService channelHealthService;
-
-    @MockBean
-    private ChannelHealthTracker channelHealthTracker;
 
     // ==================== List ====================
 

@@ -149,14 +149,6 @@ public class ModelGroupFailoverExecutor {
             }
         }
         FailureClassifier.Classification classification = FailureClassifier.classifyForGroup(error);
-        if (classification.kind() == FailureClassifier.Kind.CHANNEL
-                || classification.kind() == FailureClassifier.Kind.QUOTA) {
-            ChannelHealthTracker.ErrorCategory category = classification.kind() == FailureClassifier.Kind.QUOTA
-                    ? ChannelHealthTracker.ErrorCategory.QUOTA
-                    : ChannelHealthTracker.ErrorCategory.fromStatusCode(error.getCode());
-            support.channelHealthTracker.recordFailure(channel.getId(),
-                    category, error.getMessage());
-        }
         if (channelFailureRecorder != null) {
             String rawBody = error.getUpstreamResponseBody();
             String detail = rawBody != null
@@ -352,7 +344,7 @@ public class ModelGroupFailoverExecutor {
                 long duration = System.currentTimeMillis() - startTime;
                 recordGroupTextUsage(ctx.token(), channel, group, memberModel, response,
                         request.protocol(), duration, httpRequest, path);
-                support.channelHealthTracker.recordSuccess(channel.getId());
+
                 return response;
             } catch (PassthroughConnectionException e) {
                 lastFailure = new BusinessException(502, "渠道连接失败: " + e.getCause().getMessage(),
@@ -360,8 +352,6 @@ public class ModelGroupFailoverExecutor {
                 recordChannelFailure(channel, modelConfigId, memberModel, lastFailure);
                 log.warn("模型组 {} 透传成员 {} (渠道 {}) 连接失败 (尝试 {}/{}): {}",
                         groupName, memberModel, channel.getId(), attempts, maxAttempts, e.getCause().getMessage());
-                support.channelHealthTracker.recordFailure(channel.getId(),
-                        ChannelHealthTracker.ErrorCategory.fromException(e.getCause()), e.getCause().getMessage());
                 if (remainingBudgetMs(deadline) <= 0) break;
             } catch (BusinessException e) {
                 lastFailure = e;
@@ -412,8 +402,6 @@ public class ModelGroupFailoverExecutor {
             } catch (IOException streamFailure) {
                 if (!observer.bytesObserved() && !httpResponse.isCommitted()) {
                     httpResponse.reset();
-                    support.channelHealthTracker.recordFailure(channel.getId(),
-                            ChannelHealthTracker.ErrorCategory.fromException(streamFailure), streamFailure.getMessage());
                     return false;
                 }
                 log.warn("模型组透传响应流中断，已输出字节后不再切换: group={}, channel={}, path={}, error={}",
@@ -429,13 +417,6 @@ public class ModelGroupFailoverExecutor {
                                 group.getName(), channel.getId(), upstreamModel, billingError);
                     }
                 }
-            }
-            if (upstreamResponse.isSuccessful()) {
-                support.channelHealthTracker.recordSuccess(channel.getId());
-            } else {
-                support.channelHealthTracker.recordFailure(channel.getId(),
-                        ChannelHealthTracker.ErrorCategory.fromStatusCode(upstreamResponse.code()),
-                        "HTTP " + upstreamResponse.code());
             }
             return true;
         }
@@ -628,9 +609,6 @@ public class ModelGroupFailoverExecutor {
                     recordChannelFailure(channel, modelConfigId, memberModel,
                             new BusinessException(502, "渠道请求失败: " + connectionFailure.getMessage(),
                                     "Channel request failed: " + connectionFailure.getMessage(), connectionFailure));
-                    support.channelHealthTracker.recordFailure(channel.getId(),
-                            ChannelHealthTracker.ErrorCategory.fromException(connectionFailure),
-                            connectionFailure.getMessage());
                     if (remainingBudgetMs(deadline) <= 0) break;
                     continue;
                 }
@@ -698,7 +676,7 @@ public class ModelGroupFailoverExecutor {
                 long duration = System.currentTimeMillis() - startTime;
                 RelayServiceUtils.UsageInfo usage = streamResult.usage();
                 recordGroupStreamUsage(ctx.token(), channel, group, memberModel, usage, duration, httpRequest, path);
-                support.channelHealthTracker.recordSuccess(channel.getId());
+
                 return;
             } catch (RelaySupport.SseStreamingException e) {
                 conn.disconnect();
@@ -1034,7 +1012,7 @@ public class ModelGroupFailoverExecutor {
                     throw new BusinessException(502, "上游返回无法解析的转写结果",
                             "Upstream returned an unparseable transcription result");
                 }
-                support.channelHealthTracker.recordSuccess(channel.getId());
+
                 long duration = System.currentTimeMillis() - startTime;
                 recordGroupPrepaidUsage(ctx.token(), channel, group, memberModel, charge, duration, httpRequest, path);
                 String responseContentType = response.contentType();
@@ -1236,7 +1214,7 @@ public class ModelGroupFailoverExecutor {
                         ? support.prepareImageRequestBody(channel, rewriteModelField(requestBody, memberModel))
                         : rewriteModelField(requestBody, memberModel);
                 String response = support.forwardRequest(channel, path, upstreamBody, timeoutMs);
-                support.channelHealthTracker.recordSuccess(channel.getId());
+
                 return new MediaAttemptResult(response, channel, memberModel, startTime, charge);
             } catch (BusinessException e) {
                 releaseAttemptCharge(ctx, charge);
@@ -1292,7 +1270,7 @@ public class ModelGroupFailoverExecutor {
             try {
                 String upstreamBody = rewriteModelField(baseBodyJson, memberModel);
                 RelaySupport.BinaryResponse response = support.forwardBinaryRequest(channel, path, upstreamBody, timeoutMs);
-                support.channelHealthTracker.recordSuccess(channel.getId());
+
                 return new MediaBinaryAttemptResult(response, channel, memberModel, startTime, charge);
             } catch (BusinessException e) {
                 releaseAttemptCharge(ctx, charge);

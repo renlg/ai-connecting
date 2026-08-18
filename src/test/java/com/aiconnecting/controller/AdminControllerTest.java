@@ -11,7 +11,6 @@ import com.aiconnecting.entity.FailureLog;
 import com.aiconnecting.service.CouponService;
 import com.aiconnecting.service.DashboardService;
 import com.aiconnecting.service.StatsAggregationService;
-import com.aiconnecting.service.ChannelHealthTracker;
 import com.aiconnecting.repository.AnnouncementRepository;
 import com.aiconnecting.service.UsageLogService;
 import com.aiconnecting.service.UserService;
@@ -65,7 +64,6 @@ class AdminControllerTest {
     @MockBean private TokenService tokenService;
     @MockBean private CouponService couponService;
     @MockBean private DashboardService dashboardService;
-    @MockBean private ChannelHealthTracker channelHealthTracker;
     @MockBean private AnnouncementRepository announcementRepository;
     @MockBean private JwtUtils jwtUtils;
     @MockBean private JwtAuthenticationFilter jwtAuthenticationFilter;

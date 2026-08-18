@@ -257,35 +257,6 @@ class ModelGroupFailoverExecutorTest {
     }
 
     @Test
-    void singleMemberGroupFailureStillRecordsChannelFailure() throws Exception {
-        GroupFixture fixture = groupFixture("application/json",
-                "{\"error\":\"unavailable\"}".getBytes(StandardCharsets.UTF_8), 503);
-
-        assertThatThrownBy(() -> fixture.executor.relayRequest(
-                "client-key", "/v1/chat/completions", "{\"model\":\"public-group\"}",
-                "public-group", request(), new MockHttpServletResponse()))
-                .isInstanceOf(BusinessException.class);
-
-        verify(fixture.support.channelHealthTracker, atLeastOnce()).recordFailure(eq(9L),
-                eq(ChannelHealthTracker.ErrorCategory.CONNECTION_ERROR), anyString());
-    }
-
-    @Test
-    void singleMemberGroupQuotaStillRecordsChannelCircuit() throws Exception {
-        GroupFixture fixture = groupFixture("application/json",
-                "{\"error\":{\"message\":\"Free quota exhausted\",\"code\":\"insufficient_quota\"}}"
-                        .getBytes(StandardCharsets.UTF_8), 403);
-
-        assertThatThrownBy(() -> fixture.executor.relayRequest(
-                "client-key", "/v1/chat/completions", "{\"model\":\"public-group\"}",
-                "public-group", request(), new MockHttpServletResponse()))
-                .isInstanceOf(BusinessException.class);
-
-        verify(fixture.support.channelHealthTracker, atLeastOnce()).recordFailure(eq(9L),
-                eq(ChannelHealthTracker.ErrorCategory.QUOTA), anyString());
-    }
-
-    @Test
     void realMemberFailureIsForwardedToDetailedFailureLogger() {
         StandardGroupFixture fixture = standardGroupFixture();
         FailureLogService failureLogs = mock(FailureLogService.class);
@@ -339,9 +310,8 @@ class ModelGroupFailoverExecutorTest {
 
     private GroupFixture groupFixture(String contentType, byte[] responseBytes, int status) throws Exception {
         ChannelRouter router = mock(ChannelRouter.class);
-        ChannelHealthTracker channelHealth = mock(ChannelHealthTracker.class);
         UsageLogService usageLogs = mock(UsageLogService.class);
-        RelaySupport support = spy(new RelaySupport(mock(ChannelService.class), router, channelHealth,
+        RelaySupport support = spy(new RelaySupport(mock(ChannelService.class), router,
                 mock(TokenService.class), usageLogs, mock(ModelConfigService.class),
                 mock(ModelGroupService.class), mock(UserService.class), mock(VideoTaskUsageLogService.class)));
         ModelGroupService groupService = mock(ModelGroupService.class);
@@ -386,9 +356,8 @@ class ModelGroupFailoverExecutorTest {
 
     private StandardGroupFixture standardGroupFixture() {
         ChannelRouter router = mock(ChannelRouter.class);
-        ChannelHealthTracker channelHealth = mock(ChannelHealthTracker.class);
         UsageLogService usageLogs = mock(UsageLogService.class);
-        RelaySupport support = spy(new RelaySupport(mock(ChannelService.class), router, channelHealth,
+        RelaySupport support = spy(new RelaySupport(mock(ChannelService.class), router,
                 mock(TokenService.class), usageLogs, mock(ModelConfigService.class),
                 mock(ModelGroupService.class), mock(UserService.class), mock(VideoTaskUsageLogService.class)));
         ModelGroupService groupService = mock(ModelGroupService.class);

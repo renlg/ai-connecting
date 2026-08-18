@@ -695,7 +695,6 @@ public class RiskManagerService {
 
     /**
      * 判断指定渠道是否存在覆盖给定 HTTP 状态码的失败策略。
-     * 供 ChannelHealthTracker 在 AUTH_ERROR/QUOTA 时判断是否应将立即熔断让位给失败策略体系。
      */
     public boolean hasFailureStrategyForChannel(Long channelId, int httpCode) {
         List<FailureStrategy> strategies = getEnabledFailureStrategies();

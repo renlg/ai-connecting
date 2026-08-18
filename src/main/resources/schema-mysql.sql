@@ -283,19 +283,6 @@ CREATE TABLE IF NOT EXISTS video_tasks (
 
 CREATE INDEX idx_video_tasks_upstream_id ON video_tasks (upstream_id);
 
--- 渠道健康看板持久化表（每渠道一行，用于重启后恢复最近成功/失败展示，实时字段不落库）
-CREATE TABLE IF NOT EXISTS channel_health (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    channel_id BIGINT NOT NULL,
-    last_success_at BIGINT,
-    last_failure_at BIGINT,
-    last_failure_reason VARCHAR(1000),
-    probe_failures INT NOT NULL DEFAULT 0,
-    created_at BIGINT NOT NULL,
-    updated_at BIGINT NOT NULL,
-    UNIQUE KEY uk_channel_health_channel_id (channel_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 -- 风险管理策略表（按渠道+模型维度配置速率限制与熔断时长）
 CREATE TABLE IF NOT EXISTS risk_policies (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

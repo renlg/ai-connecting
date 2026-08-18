@@ -60,7 +60,6 @@ public class RelaySupport {
 
     private final ChannelService channelService;
     final ChannelRouter channelRouter;
-    final ChannelHealthTracker channelHealthTracker;
     private final TokenService tokenService;
     private final UsageLogService usageLogService;
     private final ModelConfigService modelConfigService;
@@ -405,8 +404,7 @@ public class RelaySupport {
      * 单模型直连路径的失败记录：所有可切换失败统一由渠道级熔断处理；
      * FAST_FAIL 不写任何健康状态。
      */
-    void dispatchRelayFailure(Long channelId, Long modelConfigId, BusinessException error,
-                               Runnable channelFailureRecorder) {
+    void dispatchRelayFailure(Long channelId, Long modelConfigId, BusinessException error) {
         if (error.isUpstreamResponse() && riskManagerProvider != null) {
             RiskManagerService riskManager = riskManagerProvider.getIfAvailable();
             if (riskManager != null) {
@@ -422,11 +420,6 @@ public class RelaySupport {
             this.channelFailureRecorder.record(channelId,
                     modelConfigId != null ? String.valueOf(modelConfigId) : null,
                     error.getCode(), detail);
-        }
-        FailureClassifier.Classification classification = FailureClassifier.classify(error);
-        switch (classification.kind()) {
-            case RATE_LIMIT, MODEL_NOT_FOUND, QUOTA, CHANNEL -> channelFailureRecorder.run();
-            case FAST_FAIL -> { }
         }
     }
 

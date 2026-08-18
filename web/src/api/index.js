@@ -41,9 +41,7 @@ export const createChannel = (data) => api.post('/api/admin/channels', data);
 export const updateChannel = (id, data) => api.put(`/api/admin/channels/${id}`, data);
 export const deleteChannel = (id) => api.delete(`/api/admin/channels/${id}`);
 export const updateChannelStatus = (id, status) => api.put(`/api/admin/channels/${id}/status`, { status });
-export const getChannelHealth = () => api.get('/api/admin/channels/health');
 export const getChannelApiKey = (id) => api.get(`/api/admin/channels/${id}/apikey`);
-export const unblockChannel = (id) => api.post(`/api/admin/channels/${id}/unblock`);
 export const fetchChannelModels = (data) => api.post('/api/admin/channels/fetch-models', data);
 export const testChannelMedia = (data) => api.post('/api/admin/channels/test-media', data, { timeout: 120000 });
 export const pollChannelTestVideo = (data) => api.post('/api/admin/channels/test-video-status', data, { timeout: 120000 });
@@ -142,7 +140,6 @@ export const updateModelGroupStatus = (id, enabled) => api.put(`/api/admin/model
 // Admin
 export const getDashboard = () => api.get('/api/admin/dashboard');
 export const getDailyStats = (days = 7) => api.get('/api/admin/dashboard/daily-stats', { params: { days } });
-export const getBlockedChannels = () => api.get('/api/admin/channels/blocked');
 export const getUsers = (search) => api.get('/api/admin/users', { params: search ? { search } : {} });
 export const updateUserStatus = (id, status) => api.put(`/api/admin/users/${id}/status`, { status });
 export const resetUserPassword = (id) => api.put(`/api/admin/users/${id}/reset-password`);

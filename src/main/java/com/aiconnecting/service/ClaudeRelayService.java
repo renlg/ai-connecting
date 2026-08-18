@@ -92,15 +92,12 @@ public class ClaudeRelayService {
                         usage.promptTokens(), usage.completionTokens(),
                         usage.cachedTokens(), usage.cacheCreationTokens(), usage.cacheReadTokens(),
                         duration, httpRequest, "/v1/messages");
-                support.channelHealthTracker.recordSuccess(channel.getId());
                 return response;
             } catch (BusinessException e) {
                 lastFailure = e;
                 lastError = e.getMessage();
                 log.error("Claude 渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
-                support.dispatchRelayFailure(channel.getId(), modelConfigId, e, () ->
-                        support.channelHealthTracker.recordFailure(channel.getId(),
-                                ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage()));
+                support.dispatchRelayFailure(channel.getId(), modelConfigId, e);
                 if (attempt == RelaySupport.MAX_RETRIES) {
                     throw wrapFailure(e, "所有渠道均不可用，最后错误: " + lastError);
                 }
@@ -161,7 +158,6 @@ public class ClaudeRelayService {
                 } else {
                     forwardOpenAiStreamAsClaudeSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
                 }
-                support.channelHealthTracker.recordSuccess(channel.getId());
                 log.info("[Claude流式] 处理完成, channel={}", channel.getId());
                 return;
             } catch (Exception e) {
@@ -170,12 +166,7 @@ public class ClaudeRelayService {
                 BusinessException classifyError = (e instanceof BusinessException be) ? be
                         : new BusinessException(502, "渠道请求失败: " + e.getMessage(),
                                 "Channel request failed: " + e.getMessage(), e);
-                support.dispatchRelayFailure(channel.getId(), modelConfigId, classifyError, () -> {
-                    ChannelHealthTracker.ErrorCategory category = (e instanceof BusinessException be)
-                            ? ChannelHealthTracker.ErrorCategory.fromStatusCode(be.getCode())
-                            : ChannelHealthTracker.ErrorCategory.fromException(e);
-                    support.channelHealthTracker.recordFailure(channel.getId(), category, e.getMessage());
-                });
+                support.dispatchRelayFailure(channel.getId(), modelConfigId, classifyError);
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) {
                     log.info("[Claude流式] 响应未提交，尝试下一个渠道");
                     continue;

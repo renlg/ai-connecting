@@ -49,9 +49,6 @@ public class ChannelService {
     private CacheInvalidationService cacheInvalidationService;
 
     @Autowired(required = false)
-    private ChannelHealthPersistenceService channelHealthPersistenceService;
-
-    @Autowired(required = false)
     private okhttp3.Interceptor tracingInterceptor;
 
     @Autowired(required = false)
@@ -376,7 +373,6 @@ public class ChannelService {
             throw new BusinessException("渠道不存在", "Channel not found");
         }
         channelRepository.deleteById(id);
-        channelHealthPersistenceService.deleteByChannelIdAsync(id);
         publishChannelInvalidation();
     }
 
@@ -385,19 +381,6 @@ public class ChannelService {
         channel.setStatus(status);
         channelRepository.save(channel);
         publishChannelInvalidation();
-    }
-
-    /**
-     * 禁用渠道（自动禁用或手动操作）
-     */
-    public void disableChannel(Long id) {
-        Channel channel = getById(id);
-        if (channel.getStatus() != 0) {
-            channel.setStatus(0);
-            channelRepository.save(channel);
-            publishChannelInvalidation();
-            log.warn("渠道 {} ({}) 已被禁用", id, channel.getName());
-        }
     }
 
     /**

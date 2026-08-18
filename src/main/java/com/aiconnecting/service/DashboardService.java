@@ -31,7 +31,6 @@ public class DashboardService {
     private static final List<String> MODEL_TYPES = List.of("text", "image", "video", "audio");
 
     private final ChannelService channelService;
-    private final ChannelHealthTracker channelHealthTracker;
     private final TokenService tokenService;
     private final UserService userService;
     private final UsageLogService usageLogService;
@@ -118,7 +117,7 @@ public class DashboardService {
     private DashboardStats buildAdminStats() {
         List<Channel> channels = channelService.listAll();
         long activeChannels = channels.stream().filter(c -> c.getStatus() == 1).count();
-        long blockedChannels = channelHealthTracker.getBlockedChannelIds().size();
+        long blockedChannels = 0;
 
         // 累计数据：汇总表（90 天内已完成窗口）+ 当前不完整窗口补齐
         LocalDateTime cutoff = LocalDate.now().minusDays(CUMULATIVE_DAYS).atStartOfDay();

@@ -24,7 +24,6 @@ import com.aiconnecting.service.UserService;
 import com.aiconnecting.service.UsageLogService;
 import com.aiconnecting.service.CouponService;
 import com.aiconnecting.service.ChannelService;
-import com.aiconnecting.service.ChannelHealthTracker;
 import com.aiconnecting.service.OperationLogService;
 import com.aiconnecting.service.StatsAggregationService;
 import com.aiconnecting.service.FailureLogService;
@@ -56,7 +55,6 @@ public class AdminController {
     private final UsageLogService usageLogService;
     private final CouponService couponService;
     private final DashboardService dashboardService;
-    private final ChannelHealthTracker channelHealthTracker;
     private final AnnouncementRepository announcementRepository;
     private final OperationLogService operationLogService;
     private final StatsAggregationService statsAggregationService;
@@ -236,31 +234,6 @@ public class AdminController {
         operationLogService.record(currentUser.getId(), "UPDATE_COUPON_STATUS", "coupon:" + id,
                 "status=" + request.getStatus());
         return ApiResponse.success(coupon);
-    }
-
-    /**
-     * 获取封禁渠道列表（含渠道名称和封禁截止时间）
-     */
-    @GetMapping("/channels/blocked")
-    public ApiResponse<List<Map<String, Object>>> getBlockedChannels() {
-        Map<Long, Long> blockedDetails = channelHealthTracker.getBlockedChannelDetails();
-        if (blockedDetails.isEmpty()) {
-            return ApiResponse.success(List.of());
-        }
-        List<Channel> allChannels = channelService.listAll();
-        List<Map<String, Object>> result = new java.util.ArrayList<>();
-        for (Channel channel : allChannels) {
-            Long blockUntil = blockedDetails.get(channel.getId());
-            if (blockUntil != null) {
-                Map<String, Object> item = new java.util.LinkedHashMap<>();
-                item.put("id", channel.getId());
-                item.put("name", channel.getName());
-                item.put("type", channel.getType());
-                item.put("blockedUntil", blockUntil);
-                result.add(item);
-            }
-        }
-        return ApiResponse.success(result);
     }
 
     // ==================== 公告管理 ====================

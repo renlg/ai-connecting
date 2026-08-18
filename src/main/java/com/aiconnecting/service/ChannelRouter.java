@@ -29,7 +29,6 @@ import java.util.stream.Collectors;
 public class ChannelRouter {
 
     private final ChannelService channelService;
-    private final ChannelHealthTracker healthTracker;
     private final CacheInvalidationService cacheInvalidationService;
     private final ObjectProvider<RiskManagerService> riskManagerProvider;
 
@@ -95,16 +94,12 @@ public class ChannelRouter {
             channels = levelMatched;
         }
 
-        // 批量获取封禁状态（1 次 Redis 调用，代替逐渠道查询）
-        Set<Long> blockedIds = healthTracker.getBlockedChannelIds();
-
         // 获取风险管理熔断的渠道（2 秒本地缓存，避免热路径全表扫描）
         RiskManagerService riskManager = riskManagerProvider.getIfAvailable();
         Set<Long> riskFusedIds = riskManager != null ? riskManager.getFusedChannelIds() : Collections.emptySet();
 
-        // 过滤：排除被封禁、风险管理熔断和已尝试的渠道
+        // 过滤：排除风险管理熔断和已尝试的渠道
         List<Channel> available = channels.stream()
-                .filter(c -> !blockedIds.contains(c.getId()))
                 .filter(c -> !riskFusedIds.contains(c.getId())
                         || (riskManager != null && !riskManager.isChannelFusedForModelId(c.getId(), channelModelId)))
                 .filter(c -> excludeIds == null || !excludeIds.contains(c.getId()))
@@ -140,22 +135,6 @@ public class ChannelRouter {
 
         if (selected == null) {
             throw new BusinessException(503, "该模型当前不可用，请稍后重试或更换模型", "This model is currently unavailable, please try again later or use another model");
-        }
-
-        // 若选中的渠道处于 HALF_OPEN（熔断探测期），需要获取探测许可，
-        // 确保同一时刻只有 1 个请求作为探测流量打到该渠道
-        Long halfOpenCandidateId = selected.getId();
-        if (healthTracker.getEffectiveState(halfOpenCandidateId) == ChannelHealthTracker.CircuitState.HALF_OPEN
-                && !healthTracker.tryAcquireHalfOpenProbe(halfOpenCandidateId)) {
-            // 排除同层内所有 HALF_OPEN 渠道（而非仅原候选渠道），
-            // 否则 SWRR 可能选中另一个同样处于探测期的渠道，绕过探测许可检查
-            List<Channel> alternatives = selectedTierChannels.stream()
-                    .filter(c -> healthTracker.getEffectiveState(c.getId()) != ChannelHealthTracker.CircuitState.HALF_OPEN)
-                    .toList();
-            if (!alternatives.isEmpty()) {
-                selected = cached.swrrState().select(alternatives);
-            }
-            // 若没有其他可选渠道，退化为仍使用该渠道（极端并发场景下的兜底）
         }
 
         log.debug("SWRR 选择渠道: modelId={}, channel={}, priority={}, available={}/{}",
@@ -202,11 +181,9 @@ public class ChannelRouter {
      */
     public List<Channel> filterByType(String channelModelId, String type, Integer userLevel) {
         List<Channel> channels = getCachedChannelList(channelModelId).channels();
-        Set<Long> blockedIds = healthTracker.getBlockedChannelIds();
         RiskManagerService riskManager = riskManagerProvider.getIfAvailable();
         Set<Long> riskFusedIds = riskManager != null ? riskManager.getFusedChannelIds() : Collections.emptySet();
         return channels.stream()
-                .filter(c -> !blockedIds.contains(c.getId()))
                 .filter(c -> !riskFusedIds.contains(c.getId())
                         || (riskManager != null && !riskManager.isChannelFusedForModelId(c.getId(), channelModelId)))
                 .filter(c -> type.equalsIgnoreCase(c.getType()) || "anthropic".equalsIgnoreCase(c.getType()))
@@ -239,7 +216,6 @@ public class ChannelRouter {
      */
     public void clearCache() {
         channelCache.clear();
-        healthTracker.clearAll();
         log.info("渠道路由缓存已清除");
     }
 

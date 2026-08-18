@@ -138,16 +138,13 @@ public class OpenAiRelayService {
                 }
                 long duration = System.currentTimeMillis() - startTime;
                 support.recordUsage(ctx.token(), channel, model, response, duration, httpRequest, path);
-                support.channelHealthTracker.recordSuccess(channel.getId());
                 return response;
             } catch (BusinessException e) {
                 lastFailure = e;
                 lastError = e.getMessage();
                 recordChannelFailure(httpRequest, channel, modelConfigId, model, e);
                 log.error("渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
-                support.dispatchRelayFailure(channel.getId(), modelConfigId, e, () ->
-                        support.channelHealthTracker.recordFailure(channel.getId(),
-                                ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage()));
+                support.dispatchRelayFailure(channel.getId(), modelConfigId, e);
                 if (attempt == RelaySupport.MAX_RETRIES) {
                     throw wrapFailure(e, "所有渠道均不可用，最后错误: " + lastError);
                 }
@@ -300,7 +297,6 @@ public class OpenAiRelayService {
             attempt++;
             try {
                 T value = call.apply(channel);
-                support.channelHealthTracker.recordSuccess(channel.getId());
                 return new ChannelResult<>(value, channel);
             } catch (BusinessException e) {
                 lastFailure = e;
@@ -312,9 +308,7 @@ public class OpenAiRelayService {
                 if (!FailureClassifier.isSwitchable(e)) {
                     throw e;
                 }
-                support.dispatchRelayFailure(channel.getId(), modelConfigId, e, () ->
-                        support.channelHealthTracker.recordFailure(channel.getId(),
-                                ChannelHealthTracker.ErrorCategory.fromStatusCode(e.getCode()), e.getMessage()));
+                support.dispatchRelayFailure(channel.getId(), modelConfigId, e);
                 if (attempt == RelaySupport.MAX_RETRIES) {
                     throw wrapFailure(e, "所有渠道均不可用，最后错误: " + lastError);
                 }
@@ -987,9 +981,7 @@ public class OpenAiRelayService {
                         "Channel request failed: " + e.getMessage(), e, null, null, true);
                 recordChannelFailure(httpRequest, channel, modelConfigId, model, lastFailure);
                 log.error("渠道 {} 流式连接失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
-                support.dispatchRelayFailure(channel.getId(), modelConfigId, lastFailure, () ->
-                        support.channelHealthTracker.recordFailure(channel.getId(),
-                                ChannelHealthTracker.ErrorCategory.fromException(e), e.getMessage()));
+                support.dispatchRelayFailure(channel.getId(), modelConfigId, lastFailure);
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                 if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
@@ -1015,9 +1007,7 @@ public class OpenAiRelayService {
                     log.warn("渠道 {} 流式请求失败: {}", channel.getId(), lastError);
                     String streamError = lastError;
                     BusinessException streamFailure = lastFailure;
-                    support.dispatchRelayFailure(channel.getId(), modelConfigId, streamFailure, () ->
-                            support.channelHealthTracker.recordFailure(channel.getId(),
-                                    ChannelHealthTracker.ErrorCategory.fromStatusCode(code), streamError));
+                    support.dispatchRelayFailure(channel.getId(), modelConfigId, streamFailure);
                     conn.disconnect();
                     if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                     if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
@@ -1047,7 +1037,6 @@ public class OpenAiRelayService {
                         usage.promptTokens(), usage.completionTokens(),
                         usage.cachedTokens(), 0, usage.cachedTokens(),
                         duration, httpRequest, path);
-                support.channelHealthTracker.recordSuccess(channel.getId());
                 return;
             } catch (Exception e) {
                 conn.disconnect();
@@ -1056,9 +1045,7 @@ public class OpenAiRelayService {
                         "Channel request failed: " + e.getMessage(), e, null, null, true);
                 recordChannelFailure(httpRequest, channel, modelConfigId, model, lastFailure);
                 log.error("渠道 {} 流式请求异常 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
-                support.dispatchRelayFailure(channel.getId(), modelConfigId, lastFailure, () ->
-                        support.channelHealthTracker.recordFailure(channel.getId(),
-                                ChannelHealthTracker.ErrorCategory.fromException(e), e.getMessage()));
+                support.dispatchRelayFailure(channel.getId(), modelConfigId, lastFailure);
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                 if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
