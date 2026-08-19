@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS failure_logs (
     http_status INT NOT NULL,
     model_name VARCHAR(100),
     channel_model_name VARCHAR(100),
+    channel_name VARCHAR(100),
     protocol VARCHAR(20),
     created_at BIGINT NOT NULL,
     KEY idx_failure_logs_trace_id (trace_id),

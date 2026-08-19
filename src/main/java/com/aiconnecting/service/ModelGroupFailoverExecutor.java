@@ -168,7 +168,7 @@ public class ModelGroupFailoverExecutor {
                 instanceof org.springframework.web.context.request.ServletRequestAttributes attributes) {
             request = attributes.getRequest();
         }
-        failureLogService.recordChannelFailure(request, channel.getId(), memberId, channelModel, error);
+        failureLogService.recordChannelFailure(request, channel.getId(), memberId, channelModel, channel.getName(), error);
     }
 
     private BusinessException upstreamFailure(int code, String body, Long retryAfterSeconds) {

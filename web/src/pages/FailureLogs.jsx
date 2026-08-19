@@ -30,6 +30,7 @@ export default function FailureLogs() {
     if (values.traceId?.trim()) params.traceId = values.traceId.trim()
     if (values.exactTraceId) params.exactTraceId = true
     if (values.httpStatus) params.httpStatus = values.httpStatus
+    if (values.channelName?.trim()) params.channelName = values.channelName.trim()
     if (values.timeRange?.length === 2) {
       params.startTime = values.timeRange[0].valueOf()
       params.endTime = values.timeRange[1].valueOf()
@@ -66,6 +67,7 @@ export default function FailureLogs() {
     },
     { title: '用户请求模型', dataIndex: 'modelName', width: 160, render: value => value || '—' },
     { title: '渠道模型', dataIndex: 'channelModelName', width: 160, render: value => value || '—' },
+    { title: '渠道', dataIndex: 'channelName', width: 140, render: value => value || '—' },
     {
       title: '状态码', dataIndex: 'httpStatus', width: 90,
       render: value => <Tag color={value >= 500 ? 'red' : value === 429 ? 'orange' : 'gold'}>{value}</Tag>,
@@ -86,6 +88,9 @@ export default function FailureLogs() {
         <Form.Item name="timeRange" label="时间范围">
           <RangePicker showTime format="YYYY-MM-DD HH:mm:ss" />
         </Form.Item>
+        <Form.Item name="channelName" label="渠道名称">
+          <Input allowClear placeholder="输入渠道名称" style={{ width: 160 }} />
+        </Form.Item>
         <Form.Item name="httpStatus" label="状态码">
           <InputNumber min={400} max={599} placeholder="如 502" style={{ width: 110 }} />
         </Form.Item>
@@ -102,7 +107,7 @@ export default function FailureLogs() {
         loading={loading}
         columns={columns}
         dataSource={data}
-        scroll={{ x: 1500 }}
+        scroll={{ x: 1640 }}
         pagination={{ ...pagination, showSizeChanger: true, showTotal: total => `共 ${total} 条` }}
         onChange={next => load(next.current, next.pageSize)}
         expandable={{

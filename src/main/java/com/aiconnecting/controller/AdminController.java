@@ -168,9 +168,10 @@ public class AdminController {
             @RequestParam(required = false) Long endTime,
             @RequestParam(required = false) String modelName,
             @RequestParam(required = false) String channelModelName,
+            @RequestParam(required = false) String channelName,
             @RequestParam(required = false) Integer httpStatus) {
         return ApiResponse.success(failureLogService.search(page, size, traceId, exactTraceId, startTime, endTime,
-                modelName, channelModelName, httpStatus));
+                modelName, channelModelName, channelName, httpStatus));
     }
 
     /** 渠道失败记录，支持分页及组合筛选。 */

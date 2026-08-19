@@ -92,10 +92,10 @@ class FailureLogServiceTest {
         BusinessException first = BusinessException.upstream(503, "vendor failed",
                 "{\"error\":\"busy\",\"api_key\":\"sk-secret\"}", null);
 
-        service.recordChannelFailure(request, 151L, 68L, "deepseek-v4-flash", first);
-        service.recordChannelFailure(request, 151L, 68L, "deepseek-v4-flash",
+        service.recordChannelFailure(request, 151L, 68L, "deepseek-v4-flash", null, first);
+        service.recordChannelFailure(request, 151L, 68L, "deepseek-v4-flash", null,
                 new BusinessException(504, "timeout"));
-        service.recordChannelFailure(request, 152L, 68L, "deepseek-v4-flash", first);
+        service.recordChannelFailure(request, 152L, 68L, "deepseek-v4-flash", null, first);
 
         assertThat(saved.await(2, TimeUnit.SECONDS)).isTrue();
         assertThat(captor.getAllValues()).hasSize(2);
@@ -116,7 +116,7 @@ class FailureLogServiceTest {
                 .thenReturn(result);
 
         assertThat(service.search(2, 500, "trace", 100L, 200L,
-                "requested", "upstream", 429)).isSameAs(result);
+                "requested", "upstream", null, 429)).isSameAs(result);
 
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
         verify(repository).findAll(any(org.springframework.data.jpa.domain.Specification.class), pageable.capture());

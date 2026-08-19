@@ -275,7 +275,7 @@ class ModelGroupFailoverExecutorTest {
             RequestContextHolder.resetRequestAttributes();
         }
 
-        verify(failureLogs).recordChannelFailure(eq(request), eq(91L), eq(11L), isNull(), eq(upstream));
+        verify(failureLogs).recordChannelFailure(eq(request), eq(91L), eq(11L), isNull(), isNull(), eq(upstream));
     }
 
     @Test

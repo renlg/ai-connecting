@@ -86,7 +86,7 @@ public class FailureLogService {
      * the request thread; persistence remains isolated on the single failure-log writer.
      */
     public void recordChannelFailure(HttpServletRequest request, Long channelId, Object memberId,
-                                     String channelModelName, BusinessException error) {
+                                     String channelModelName, String channelName, BusinessException error) {
         try {
             if (request == null || error == null || request.getRequestURI() == null
                     || !request.getRequestURI().startsWith("/v1/")) return;
@@ -115,6 +115,7 @@ public class FailureLogService {
                     .httpStatus(error.getCode())
                     .modelName(limit(stringAttr(request, FailureLogContext.MODEL_NAME), 100))
                     .channelModelName(limit(actualModel, 100))
+                    .channelName(limit(channelName, 100))
                     .protocol(resolveProtocol(request))
                     .createdAt(System.currentTimeMillis())
                     .build();
@@ -133,13 +134,15 @@ public class FailureLogService {
     }
 
     public Page<FailureLog> search(int page, int size, String traceId, Long startTime, Long endTime,
-                                   String modelName, String channelModelName, Integer httpStatus) {
-        return search(page, size, traceId, false, startTime, endTime, modelName, channelModelName, httpStatus);
+                                   String modelName, String channelModelName, String channelName,
+                                   Integer httpStatus) {
+        return search(page, size, traceId, false, startTime, endTime, modelName, channelModelName,
+                channelName, httpStatus);
     }
 
     public Page<FailureLog> search(int page, int size, String traceId, boolean exactTraceId,
                                    Long startTime, Long endTime, String modelName,
-                                   String channelModelName, Integer httpStatus) {
+                                   String channelModelName, String channelName, Integer httpStatus) {
         int safePage = Math.max(0, page);
         int safeSize = Math.min(Math.max(1, size), 200);
         Specification<FailureLog> spec = Specification.where(null);
@@ -153,6 +156,7 @@ public class FailureLogService {
         if (endTime != null) spec = spec.and((root, query, cb) -> cb.lessThanOrEqualTo(root.get("createdAt"), endTime));
         if (hasText(modelName)) spec = spec.and((root, query, cb) -> cb.equal(root.get("modelName"), modelName.trim()));
         if (hasText(channelModelName)) spec = spec.and((root, query, cb) -> cb.equal(root.get("channelModelName"), channelModelName.trim()));
+        if (hasText(channelName)) spec = spec.and((root, query, cb) -> cb.equal(root.get("channelName"), channelName.trim()));
         if (httpStatus != null) spec = spec.and((root, query, cb) -> cb.equal(root.get("httpStatus"), httpStatus));
         return repository.findAll(spec, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt")));
     }

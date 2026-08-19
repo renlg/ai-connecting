@@ -142,7 +142,7 @@ class OpenAiRelayServiceTest {
         verify(upstreamCall, times(2)).apply(any());
         verify(router, times(2)).selectChannel(eq("media-model"), anySet(), anyInt());
         verify(relaySupport).dispatchRelayFailure(eq(7L), eq(42L), eq(unavailable));
-        verify(failureLogService).recordChannelFailure(isNull(), eq(7L), eq(42L), isNull(), eq(unavailable));
+        verify(failureLogService).recordChannelFailure(isNull(), eq(7L), eq(42L), isNull(), isNull(), eq(unavailable));
     }
 
     @Test

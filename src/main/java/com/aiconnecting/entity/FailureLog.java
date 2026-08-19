@@ -37,6 +37,9 @@ public class FailureLog {
     @Column(length = 100)
     private String channelModelName;
 
+    @Column(length = 100)
+    private String channelName;
+
     @Column(length = 20)
     private String protocol;
 

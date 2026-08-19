@@ -227,7 +227,7 @@ class AdminControllerTest {
         FailureLog failure = FailureLog.builder().id(7L).traceId("trace-abc")
                 .userError("failed").httpStatus(502).createdAt(1_700_000_000_000L).build();
         when(failureLogService.search(1, 10, "trace-abc", true, 100L, 200L,
-                "requested", "upstream", 502)).thenReturn(new PageImpl<>(List.of(failure)));
+                "requested", "upstream", null, 502)).thenReturn(new PageImpl<>(List.of(failure)));
 
         mockMvc.perform(get("/api/admin/failure-logs")
                         .param("page", "1").param("size", "10")
@@ -241,7 +241,7 @@ class AdminControllerTest {
                 .andExpect(jsonPath("$.data.content[0].traceId").value("trace-abc"))
                 .andExpect(jsonPath("$.data.content[0].httpStatus").value(502));
         verify(failureLogService).search(1, 10, "trace-abc", true, 100L, 200L,
-                "requested", "upstream", 502);
+                "requested", "upstream", null, 502);
     }
 
     // ==================== Coupons ====================
