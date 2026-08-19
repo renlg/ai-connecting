@@ -142,7 +142,7 @@ public class PassthroughRelayService {
                 lastConnectionFailure = e;
                 BusinessException failure = new BusinessException(502, "渠道连接失败: " + e.getMessage(),
                         "Channel connection failed: " + e.getMessage(), e, null, null, true);
-                support.dispatchRelayFailure(channel.getId(), modelConfigId, failure);
+                support.dispatchRelayFailure(channel.getId(), channel.getName(), modelConfigId, failure);
                 continue; // no response bytes exist yet; another custom channel may be attempted
             }
 
@@ -163,7 +163,7 @@ public class PassthroughRelayService {
                                 "上游 API 错误: " + failureBody,
                                 "Upstream API error: " + failureBody,
                                 failureBody, null);
-                        support.dispatchRelayFailure(channel.getId(), modelConfigId, upstreamFailure);
+                        support.dispatchRelayFailure(channel.getId(), channel.getName(), modelConfigId, upstreamFailure);
                     }
                 } catch (IOException streamFailure) {
                     // The upstream response has already been selected/started. Never retry or append an error.

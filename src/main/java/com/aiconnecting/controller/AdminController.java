@@ -180,11 +180,15 @@ public class AdminController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) Long channelId,
+            @RequestParam(required = false) String channelName,
             @RequestParam(required = false) String modelName,
             @RequestParam(required = false) Boolean analyzed) {
         Specification<ChannelFailureRecord> spec = Specification.where(null);
         if (channelId != null) {
             spec = spec.and((root, query, cb) -> cb.equal(root.get("channelId"), channelId));
+        }
+        if (channelName != null && !channelName.isBlank()) {
+            spec = spec.and((root, query, cb) -> cb.equal(root.get("channelName"), channelName.trim()));
         }
         if (modelName != null && !modelName.isBlank()) {
             spec = spec.and((root, query, cb) -> cb.like(root.get("modelName"), "%" + modelName.trim() + "%"));

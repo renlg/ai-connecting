@@ -343,6 +343,7 @@ CREATE INDEX idx_circuit_breaker_records_triggered_at ON circuit_breaker_records
 CREATE TABLE IF NOT EXISTS channel_failure_records (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     channel_id BIGINT NOT NULL,
+    channel_name VARCHAR(100),
     model_name VARCHAR(200),
     error_code VARCHAR(50),
     error_message VARCHAR(500),

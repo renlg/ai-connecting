@@ -18,6 +18,9 @@ public class ChannelFailureRecord {
     @Column(nullable = false)
     private Long channelId;
 
+    @Column(length = 100)
+    private String channelName;
+
     @Column(length = 200)
     private String modelName;
 

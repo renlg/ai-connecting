@@ -154,7 +154,7 @@ public class ModelGroupFailoverExecutor {
             String detail = rawBody != null
                     ? "Upstream API error: " + error.getCode() + " - " + rawBody
                     : error.getMessage();
-            channelFailureRecorder.record(channel.getId(),
+            channelFailureRecorder.record(channel.getId(), channel.getName(),
                     modelConfigId != null ? String.valueOf(modelConfigId) : null,
                     error.getCode(), detail);
         }
@@ -350,6 +350,11 @@ public class ModelGroupFailoverExecutor {
                 lastFailure = new BusinessException(502, "渠道连接失败: " + e.getCause().getMessage(),
                         "Upstream connection failed: " + e.getCause().getMessage(), e.getCause());
                 recordChannelFailure(channel, modelConfigId, memberModel, lastFailure);
+                if (channelFailureRecorder != null) {
+                    channelFailureRecorder.record(channel.getId(), channel.getName(),
+                            modelConfigId != null ? String.valueOf(modelConfigId) : null,
+                            502, lastFailure.getMessage());
+                }
                 log.warn("模型组 {} 透传成员 {} (渠道 {}) 连接失败 (尝试 {}/{}): {}",
                         groupName, memberModel, channel.getId(), attempts, maxAttempts, e.getCause().getMessage());
                 if (remainingBudgetMs(deadline) <= 0) break;
@@ -606,9 +611,14 @@ public class ModelGroupFailoverExecutor {
                 } catch (IOException connectionFailure) {
                     lastError = connectionFailure.getMessage();
                     lastErrorUpstream = true;
-                    recordChannelFailure(channel, modelConfigId, memberModel,
-                            new BusinessException(502, "渠道请求失败: " + connectionFailure.getMessage(),
-                                    "Channel request failed: " + connectionFailure.getMessage(), connectionFailure));
+                    BusinessException connError = new BusinessException(502, "渠道请求失败: " + connectionFailure.getMessage(),
+                            "Channel request failed: " + connectionFailure.getMessage(), connectionFailure);
+                    recordChannelFailure(channel, modelConfigId, memberModel, connError);
+                    if (channelFailureRecorder != null) {
+                        channelFailureRecorder.record(channel.getId(), channel.getName(),
+                                modelConfigId != null ? String.valueOf(modelConfigId) : null,
+                                502, connError.getMessage());
+                    }
                     if (remainingBudgetMs(deadline) <= 0) break;
                     continue;
                 }

@@ -116,7 +116,7 @@ class OpenAiRelayServiceTest {
         assertEquals(body, thrown.getUpstreamResponseBody());
         verify(upstreamCall, times(1)).apply(any());
         verify(router, times(1)).selectChannel(eq("media-model"), anySet(), anyInt());
-        verify(relaySupport, never()).dispatchRelayFailure(any(), any(), any());
+        verify(relaySupport, never()).dispatchRelayFailure(any(), any(), any(), any());
     }
 
     @Test
@@ -141,7 +141,7 @@ class OpenAiRelayServiceTest {
         assertNotNull(result);
         verify(upstreamCall, times(2)).apply(any());
         verify(router, times(2)).selectChannel(eq("media-model"), anySet(), anyInt());
-        verify(relaySupport).dispatchRelayFailure(eq(7L), eq(42L), eq(unavailable));
+        verify(relaySupport).dispatchRelayFailure(eq(7L), isNull(), eq(42L), eq(unavailable));
         verify(failureLogService).recordChannelFailure(isNull(), eq(7L), eq(42L), isNull(), isNull(), eq(unavailable));
     }
 
@@ -163,7 +163,7 @@ class OpenAiRelayServiceTest {
         String body = "{\"error\":{\"message\":\"Free quota exhausted\"}}";
         BusinessException quota = BusinessException.upstream(403, "upstream quota exhausted", body, null);
 
-        relaySupport.dispatchRelayFailure(7L, 42L, quota);
+        relaySupport.dispatchRelayFailure(7L, null, 42L, quota);
     }
 
     private RelaySupport relaySupport(ChannelRouter router) {

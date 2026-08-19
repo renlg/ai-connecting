@@ -25,6 +25,7 @@ export default function ChannelFailureLogs() {
     const values = form.getFieldsValue()
     const params = { page: page - 1, size: pageSize }
     if (values.channelId) params.channelId = values.channelId
+    if (values.channelName?.trim()) params.channelName = values.channelName.trim()
     if (values.modelName?.trim()) params.modelName = values.modelName.trim()
     if (values.analyzed !== undefined && values.analyzed !== null) params.analyzed = values.analyzed
     setLoading(true)
@@ -50,6 +51,7 @@ export default function ChannelFailureLogs() {
 
   const columns = [
     { title: '渠道ID', dataIndex: 'channelId', width: 90 },
+    { title: '渠道', dataIndex: 'channelName', width: 120, render: value => value || '—' },
     { title: '模型名', dataIndex: 'modelName', width: 180, render: value => value || '—' },
     { title: '错误码', dataIndex: 'errorCode', width: 100, render: value => value || '—' },
     { title: '错误信息', dataIndex: 'errorMessage', width: 360, render: value => <ErrorCell value={value} /> },
@@ -68,6 +70,9 @@ export default function ChannelFailureLogs() {
       <Form className="mobile-filter-form" form={form} layout="inline" onFinish={() => load(1, pagination.pageSize)} style={{ marginBottom: 20, rowGap: 12 }}>
         <Form.Item name="channelId" label="渠道ID">
           <InputNumber placeholder="渠道ID" style={{ width: 120 }} />
+        </Form.Item>
+        <Form.Item name="channelName" label="渠道名称">
+          <Input allowClear placeholder="渠道名称" style={{ width: 160 }} />
         </Form.Item>
         <Form.Item name="modelName" label="模型名">
           <Input allowClear placeholder="模型名称" style={{ width: 180 }} />
@@ -91,7 +96,7 @@ export default function ChannelFailureLogs() {
         loading={loading}
         columns={columns}
         dataSource={data}
-        scroll={{ x: 1010 }}
+        scroll={{ x: 1200 }}
         pagination={{ ...pagination, showSizeChanger: true, showTotal: total => `共 ${total} 条` }}
         onChange={next => load(next.current, next.pageSize)}
       />

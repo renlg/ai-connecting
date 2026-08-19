@@ -46,7 +46,7 @@ public class ChannelFailureRecorder {
         this.modelConfigServiceProvider = modelConfigServiceProvider;
     }
 
-    public void record(Long channelId, String modelName, int errorCode, String errorMessage) {
+    public void record(Long channelId, String channelName, String modelName, int errorCode, String errorMessage) {
         if (channelId == null) return;
         String traceId = SseUtils.currentTraceId();
         String normalizedName = modelName != null ? modelName : "";
@@ -60,6 +60,7 @@ public class ChannelFailureRecorder {
                     String resolvedName = resolveModelName(normalizedName);
                     ChannelFailureRecord record = ChannelFailureRecord.builder()
                             .channelId(channelId)
+                            .channelName(channelName)
                             .modelName(truncate(resolvedName, MAX_MODEL_LENGTH))
                             .errorCode(String.valueOf(errorCode))
                             .errorMessage(truncate(errorMessage, MAX_ERROR_LENGTH))

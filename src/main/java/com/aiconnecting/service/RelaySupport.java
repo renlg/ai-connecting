@@ -404,7 +404,7 @@ public class RelaySupport {
      * 单模型直连路径的失败记录：所有可切换失败统一由渠道级熔断处理；
      * FAST_FAIL 不写任何健康状态。
      */
-    void dispatchRelayFailure(Long channelId, Long modelConfigId, BusinessException error) {
+    void dispatchRelayFailure(Long channelId, String channelName, Long modelConfigId, BusinessException error) {
         if (error.isUpstreamResponse() && riskManagerProvider != null) {
             RiskManagerService riskManager = riskManagerProvider.getIfAvailable();
             if (riskManager != null) {
@@ -417,7 +417,7 @@ public class RelaySupport {
             String detail = rawBody != null
                     ? "Upstream API error: " + error.getCode() + " - " + rawBody
                     : error.getMessage();
-            this.channelFailureRecorder.record(channelId,
+            this.channelFailureRecorder.record(channelId, channelName,
                     modelConfigId != null ? String.valueOf(modelConfigId) : null,
                     error.getCode(), detail);
         }
