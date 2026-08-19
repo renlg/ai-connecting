@@ -171,7 +171,9 @@ public class ModelGroupService {
         validatePrices(patch);
         ModelGroup existing = getById(id);
         if (patch.getName() != null) {
-            guardDuplicateName(patch.getName());
+            if (!patch.getName().equals(existing.getName())) {
+                guardDuplicateName(patch.getName());
+            }
             try {
                 existing.setName(patch.getName());
                 modelGroupRepository.flush();
