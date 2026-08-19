@@ -394,7 +394,7 @@ public class RelaySupport {
         if (riskManagerProvider != null) {
             RiskManagerService riskManager = riskManagerProvider.getIfAvailable();
             if (riskManager != null) {
-                return riskManager.checkAndRecordByModelId(channel.getId(), channelModelId);
+                return riskManager.checkRateLimitOnlyByModelId(channel.getId(), channelModelId);
             }
         }
         return false;

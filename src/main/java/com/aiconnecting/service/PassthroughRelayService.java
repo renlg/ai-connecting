@@ -12,6 +12,8 @@ import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import okhttp3.ConnectionPool;
+import okhttp3.Dispatcher;
 import okhttp3.Headers;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -50,12 +52,21 @@ public class PassthroughRelayService {
 
     @org.springframework.beans.factory.annotation.Autowired
     public PassthroughRelayService(RelaySupport support, ChannelService channelService, ObjectMapper objectMapper) {
-        this(support, channelService, objectMapper, new OkHttpClient.Builder()
+        this(support, channelService, objectMapper, buildPassthroughClient());
+    }
+
+    private static OkHttpClient buildPassthroughClient() {
+        Dispatcher dispatcher = new Dispatcher();
+        dispatcher.setMaxRequests(128);
+        dispatcher.setMaxRequestsPerHost(32);
+        return new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(300, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(false)
-                .build());
+                .connectionPool(new ConnectionPool(32, 5, TimeUnit.MINUTES))
+                .dispatcher(dispatcher)
+                .build();
     }
 
     PassthroughRelayService(RelaySupport support, ChannelService channelService, ObjectMapper objectMapper,

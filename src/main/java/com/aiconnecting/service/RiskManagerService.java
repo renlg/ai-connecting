@@ -12,6 +12,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -57,12 +58,17 @@ public class RiskManagerService {
     private final ConcurrentHashMap<String, String> modelNameCache = new ConcurrentHashMap<>();
 
     private final ThreadPoolExecutor failureExecutor = new ThreadPoolExecutor(
-            2, 4, 60L, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<>(1024),
+            4, 8, 60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(4096),
             r -> {
                 Thread t = new Thread(r, "failure-strategy-" + t_counter.getAndIncrement());
                 t.setDaemon(true);
                 return t;
+            },
+            (r, executor) -> {
+                log.warn("失败策略线程池队列已满({}/{}), 由调用线程直接执行以防丢事件",
+                        executor.getQueue().size(), executor.getMaximumPoolSize());
+                new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy().rejectedExecution(r, executor);
             }
     );
 
@@ -237,12 +243,23 @@ public class RiskManagerService {
         if (isFused(fuseKey)) {
             return true;
         }
+        return checkRateLimitOnly(channelId, modelConfigName);
+    }
 
+    /**
+     * 速率检查入口：使用 channelModelId（可能是 ModelConfig ID 或原始模型名）
+     */
+    public boolean checkAndRecordByModelId(Long channelId, String channelModelId) {
+        String resolvedName = resolveChannelModelIdToName(channelModelId);
+        return checkAndRecord(channelId, resolvedName);
+    }
+
+    /**
+     * 纯限速检查（不含熔断判断）：匹配策略 → 检查计数 → 超限则触发熔断。
+     * 供 selectChannel() 已过滤熔断渠道后的重试路径使用，避免重复查 Redis 熔断 key。
+     */
+    public boolean checkRateLimitOnly(Long channelId, String modelConfigName) {
         List<RiskPolicy> policies = findApplicablePolicies(channelId, modelConfigName);
-        if (policies.isEmpty()) {
-            return false;
-        }
-
         for (RiskPolicy policy : policies) {
             if (checkPolicyRateLimit(policy, channelId, modelConfigName)) {
                 triggerRateLimitCircuitBreaker(policy, channelId, modelConfigName);
@@ -253,11 +270,11 @@ public class RiskManagerService {
     }
 
     /**
-     * 速率检查入口：使用 channelModelId（可能是 ModelConfig ID 或原始模型名）
+     * checkRateLimitOnly 的 channelModelId 入口
      */
-    public boolean checkAndRecordByModelId(Long channelId, String channelModelId) {
+    public boolean checkRateLimitOnlyByModelId(Long channelId, String channelModelId) {
         String resolvedName = resolveChannelModelIdToName(channelModelId);
-        return checkAndRecord(channelId, resolvedName);
+        return checkRateLimitOnly(channelId, resolvedName);
     }
 
     // ==================== Failure Strategy Check ====================
@@ -329,8 +346,17 @@ public class RiskManagerService {
     }
 
     private void cleanupCounterKey(String counterKey, long windowMs) {
-        memSlidingCounters.remove(counterKey);
-        memFixedCounters.remove(counterKey);
+        Deque<Long> dq = memSlidingCounters.get(counterKey);
+        if (dq != null) {
+            synchronized (dq) {
+                dq.clear();
+            }
+        }
+        long[] fc = memFixedCounters.get(counterKey);
+        if (fc != null) {
+            fc[0] = System.currentTimeMillis();
+            fc[1] = 0;
+        }
         RedisTemplate<String, Long> redisTemplate = redisTemplateProvider.getIfAvailable();
         if (redisTemplate != null) {
             try {
@@ -428,7 +454,10 @@ public class RiskManagerService {
     }
 
     public void invalidateFusedCache() {
-        fusedChannelIdsCachedAt = 0;
+        synchronized (this) {
+            fusedChannelIdsCache = Collections.emptySet();
+            fusedChannelIdsCachedAt = 0;
+        }
     }
 
     @Transactional
@@ -441,47 +470,54 @@ public class RiskManagerService {
         }
     }
 
-    @Scheduled(fixedRate = 1800000)
+    @Scheduled(fixedRate = 1800_000)
     public void cleanupStaleFailureCounters() {
         try {
             long now = System.currentTimeMillis();
-            List<FailureStrategy> strategies = getEnabledFailureStrategies();
-            Set<String> activeKeys = new HashSet<>();
-            for (FailureStrategy s : strategies) {
-                long wMs = getWindowMs(s.getWindowDimension());
-                if (wMs <= 0) continue;
-                Long sId = s.getId();
-                for (Map.Entry<String, Deque<Long>> e : memSlidingCounters.entrySet()) {
-                    String k = e.getKey();
-                    if (k.startsWith(FAILURE_COUNTER_PREFIX + sId + ":")) {
-                        Deque<Long> dq = e.getValue();
-                        synchronized (dq) {
-                            if (dq.isEmpty() || now - dq.peekLast() > wMs) {
-                                activeKeys.add(k);
-                            }
-                        }
+            int slidingCleaned = 0;
+            for (Map.Entry<String, Deque<Long>> e : memSlidingCounters.entrySet()) {
+                Deque<Long> dq = e.getValue();
+                synchronized (dq) {
+                    while (!dq.isEmpty() && now - dq.peekFirst() > getWindowMsForCounterKey(e.getKey())) {
+                        dq.pollFirst();
                     }
-                }
-                for (Map.Entry<String, long[]> e : memFixedCounters.entrySet()) {
-                    String k = e.getKey();
-                    if (k.startsWith(FAILURE_COUNTER_PREFIX + sId + ":")) {
-                        long[] state = e.getValue();
-                        if (now - state[0] > wMs) {
-                            activeKeys.add(k);
-                        }
-                    }
+                    if (!dq.isEmpty()) slidingCleaned++;
                 }
             }
-            for (String k : activeKeys) {
-                memSlidingCounters.remove(k);
-                memFixedCounters.remove(k);
+
+            int fixedCleaned = 0;
+            for (Map.Entry<String, long[]> e : memFixedCounters.entrySet()) {
+                long[] state = e.getValue();
+                long wMs = getWindowMsForCounterKey(e.getKey());
+                if (wMs > 0 && now - state[0] >= wMs) {
+                    state[0] = now;
+                    state[1] = 0;
+                    fixedCleaned++;
+                }
             }
-            if (!activeKeys.isEmpty()) {
-                log.debug("清理 {} 个过期本地失败计数 key", activeKeys.size());
+
+            int fusedRemoved = 0;
+            for (Map.Entry<String, Long> e : memFusedExpiry.entrySet()) {
+                if (e.getValue() <= now) {
+                    memFusedExpiry.remove(e.getKey());
+                    fusedRemoved++;
+                }
+            }
+
+            if (slidingCleaned + fixedCleaned + fusedRemoved > 0) {
+                log.debug("本地计数器清理: 滑动窗口活跃={}, 固定窗口重置={}, 过期熔断移除={}",
+                        slidingCleaned, fixedCleaned, fusedRemoved);
             }
         } catch (Exception e) {
             log.warn("本地失败计数器清理异常: {}", e.getMessage());
         }
+    }
+
+    private long getWindowMsForCounterKey(String key) {
+        if (key.contains(":MINUTE")) return 60_000L;
+        if (key.contains(":HOUR")) return 3_600_000L;
+        if (key.contains(":DAY")) return 86_400_000L;
+        return 86_400_000L;
     }
 
     // ==================== Internal: Policy Matching ====================
@@ -859,30 +895,52 @@ public class RiskManagerService {
 
         if (redisTemplate != null) {
             try {
-                Set<String> keys = redisTemplate.keys(REDIS_KEY_PREFIX + "channel:*");
-                if (keys != null) {
-                    for (String key : keys) {
-                        Long expiresAt = redisTemplate.opsForValue().get(key);
-                        if (expiresAt != null && expiresAt > System.currentTimeMillis()) {
-                            String channelIdStr = key.substring((REDIS_KEY_PREFIX + "channel:").length());
-                            try {
-                                result.add(Long.parseLong(channelIdStr));
-                            } catch (NumberFormatException ignored) {
+                long now = System.currentTimeMillis();
+                Set<String> allKeys = new HashSet<>();
+                try (var channelCursor = redisTemplate.scan(ScanOptions.scanOptions().match(REDIS_KEY_PREFIX + "channel:*").count(200).build())) {
+                    while (channelCursor.hasNext()) {
+                        allKeys.add(channelCursor.next());
+                    }
+                }
+                if (!allKeys.isEmpty()) {
+                    List<String> channelKeys = new ArrayList<>(allKeys);
+                    List<Long> values = redisTemplate.opsForValue().multiGet(channelKeys);
+                    if (values != null) {
+                        String prefix = REDIS_KEY_PREFIX + "channel:";
+                        for (int i = 0; i < channelKeys.size(); i++) {
+                            Long expiresAt = values.get(i);
+                            if (expiresAt != null && expiresAt > now) {
+                                String channelIdStr = channelKeys.get(i).substring(prefix.length());
+                                try {
+                                    result.add(Long.parseLong(channelIdStr));
+                                } catch (NumberFormatException ignored) {
+                                }
                             }
                         }
                     }
                 }
-                Set<String> modelKeys = redisTemplate.keys(REDIS_KEY_PREFIX + "model:*");
-                if (modelKeys != null) {
-                    for (String key : modelKeys) {
-                        Long expiresAt = redisTemplate.opsForValue().get(key);
-                        if (expiresAt != null && expiresAt > System.currentTimeMillis()) {
-                            String rest = key.substring((REDIS_KEY_PREFIX + "model:").length());
-                            int colonIdx = rest.indexOf(':');
-                            if (colonIdx > 0) {
-                                try {
-                                    result.add(Long.parseLong(rest.substring(0, colonIdx)));
-                                } catch (NumberFormatException ignored) {
+
+                Set<String> allModelKeys = new HashSet<>();
+                try (var modelCursor = redisTemplate.scan(ScanOptions.scanOptions().match(REDIS_KEY_PREFIX + "model:*").count(200).build())) {
+                    while (modelCursor.hasNext()) {
+                        allModelKeys.add(modelCursor.next());
+                    }
+                }
+                if (!allModelKeys.isEmpty()) {
+                    List<String> modelKeys = new ArrayList<>(allModelKeys);
+                    List<Long> values = redisTemplate.opsForValue().multiGet(modelKeys);
+                    if (values != null) {
+                        String prefix = REDIS_KEY_PREFIX + "model:";
+                        for (int i = 0; i < modelKeys.size(); i++) {
+                            Long expiresAt = values.get(i);
+                            if (expiresAt != null && expiresAt > now) {
+                                String rest = modelKeys.get(i).substring(prefix.length());
+                                int colonIdx = rest.indexOf(':');
+                                if (colonIdx > 0) {
+                                    try {
+                                        result.add(Long.parseLong(rest.substring(0, colonIdx)));
+                                    } catch (NumberFormatException ignored) {
+                                    }
                                 }
                             }
                         }
