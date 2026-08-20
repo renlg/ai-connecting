@@ -14,6 +14,9 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -167,8 +170,21 @@ public class RiskManagerService {
 
     // ==================== Circuit Breaker Records ====================
 
-    public List<CircuitBreakerRecord> listRecords() {
-        return circuitBreakerRecordRepository.findAllOrderByTriggeredAtDesc();
+    public Page<CircuitBreakerRecord> listRecords(int page, int size, Long channelId,
+                                                   String modelName, String status) {
+        String normalizedModelName = normalizeOptionalFilter(modelName);
+        String normalizedStatus = normalizeOptionalFilter(status);
+        int safePage = Math.max(page, 0);
+        int safeSize = Math.min(Math.max(size, 1), 200);
+        return circuitBreakerRecordRepository.searchRecords(
+                channelId,
+                normalizedModelName,
+                normalizedStatus,
+                PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "triggeredAt")));
+    }
+
+    private String normalizeOptionalFilter(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     @Transactional

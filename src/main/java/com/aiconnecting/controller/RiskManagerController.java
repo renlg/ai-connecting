@@ -8,6 +8,7 @@ import com.aiconnecting.entity.User;
 import com.aiconnecting.service.OperationLogService;
 import com.aiconnecting.service.RiskManagerService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -134,8 +135,14 @@ public class RiskManagerController {
     // ==================== Circuit Breaker Records ====================
 
     @GetMapping("/records")
-    public ApiResponse<List<CircuitBreakerRecord>> listRecords() {
-        return ApiResponse.success(riskManagerService.listRecords());
+    public ApiResponse<Page<CircuitBreakerRecord>> listRecords(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) Long channelId,
+            @RequestParam(required = false) String modelName,
+            @RequestParam(required = false) String status) {
+        return ApiResponse.success(riskManagerService.listRecords(
+                page, size, channelId, modelName, status));
     }
 
     @PostMapping("/records/{id}/release")

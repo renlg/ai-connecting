@@ -180,7 +180,7 @@ export const deleteFailureStrategy = (id) => api.delete(`/api/admin/risk/failure
 export const updateFailureStrategyStatus = (id, enabled) => api.put(`/api/admin/risk/failure-strategies/${id}/status`, { enabled });
 
 // Risk Management - Circuit Breaker Records
-export const getCircuitBreakerRecords = () => api.get('/api/admin/risk/records');
+export const getCircuitBreakerRecords = (params) => api.get('/api/admin/risk/records', { params });
 export const releaseCircuitBreaker = (id) => api.post(`/api/admin/risk/records/${id}/release`);
 export const createManualCircuitBreaker = (data) => api.post('/api/admin/risk/records/manual', data);
 

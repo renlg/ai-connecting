@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Table, Button, Modal, Form, InputNumber, Select, Space, Popconfirm, message, Tag, Input, Typography, Grid } from 'antd'
-import { PlusOutlined, UnlockOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, SearchOutlined, UnlockOutlined } from '@ant-design/icons'
 import {
   getCircuitBreakerRecords, releaseCircuitBreaker, createManualCircuitBreaker,
   getChannels, getEnabledModels
@@ -17,6 +17,12 @@ export default function CircuitBreakers() {
   const [channels, setChannels] = useState([])
   const [models, setModels] = useState([])
   const [loading, setLoading] = useState(false)
+  const [filterChannelId, setFilterChannelId] = useState()
+  const [filterModelName, setFilterModelName] = useState('')
+  const [filterStatus, setFilterStatus] = useState()
+  const [pagination, setPagination] = useState({ current: 1, pageSize: 10, total: 0 })
+  const paginationRef = useRef({ current: 1, pageSize: 10 })
+  const appliedFiltersRef = useRef({})
   const [modalOpen, setModalOpen] = useState(false)
   const [saveLoading, setSaveLoading] = useState(false)
   const saveLockRef = useRef(false)
@@ -28,15 +34,43 @@ export default function CircuitBreakers() {
     loadRecords()
     loadChannels()
     loadModels()
-    const interval = setInterval(loadRecords, 15000)
+    const interval = setInterval(() => loadRecords(), 15000)
     return () => clearInterval(interval)
   }, [])
 
-  const loadRecords = () => {
+  const loadRecords = (page = paginationRef.current.current, pageSize = paginationRef.current.pageSize, filters = appliedFiltersRef.current) => {
+    const params = { page: page - 1, size: pageSize, ...filters }
     setLoading(true)
-    getCircuitBreakerRecords().then(res => {
-      if (res.code === 200) setRecords(res.data || [])
+    getCircuitBreakerRecords(params).then(res => {
+      if (res.code === 200) {
+        const pageData = res.data || {}
+        setRecords(pageData.content || [])
+        const nextPagination = {
+          current: (pageData.number ?? page - 1) + 1,
+          pageSize: pageData.size || pageSize,
+          total: pageData.totalElements || 0,
+        }
+        paginationRef.current = nextPagination
+        setPagination(nextPagination)
+      }
     }).finally(() => setLoading(false))
+  }
+
+  const handleSearch = () => {
+    const filters = {}
+    if (filterChannelId) filters.channelId = filterChannelId
+    if (filterModelName.trim()) filters.modelName = filterModelName.trim()
+    if (filterStatus) filters.status = filterStatus
+    appliedFiltersRef.current = filters
+    loadRecords(1, pagination.pageSize, filters)
+  }
+
+  const handleReset = () => {
+    setFilterChannelId(undefined)
+    setFilterModelName('')
+    setFilterStatus(undefined)
+    appliedFiltersRef.current = {}
+    loadRecords(1, pagination.pageSize, {})
   }
 
   const loadChannels = () => {
@@ -119,12 +153,47 @@ export default function CircuitBreakers() {
         }}>手动添加</Button>
       </div>
 
+      <Space className="mobile-filter-row" style={{ marginBottom: 16 }} wrap>
+        <Select
+          value={filterChannelId}
+          onChange={setFilterChannelId}
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="全部渠道"
+          style={{ width: 200 }}
+          options={channels.map(c => ({ value: c.id, label: c.name }))}
+        />
+        <Input
+          value={filterModelName}
+          onChange={e => setFilterModelName(e.target.value)}
+          onPressEnter={handleSearch}
+          allowClear
+          placeholder="模型名称"
+          style={{ width: 200 }}
+        />
+        <Select
+          value={filterStatus}
+          onChange={setFilterStatus}
+          allowClear
+          placeholder="全部状态"
+          style={{ width: 160 }}
+          options={[
+            { value: 'ACTIVE', label: '生效中 (ACTIVE)' },
+            { value: 'EXPIRED', label: '已过期 (EXPIRED)' },
+          ]}
+        />
+        <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查询</Button>
+        <Button icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>
+      </Space>
+
       <Table
         dataSource={records}
         columns={columns}
         rowKey="id"
         loading={loading}
-        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{ ...pagination, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+        onChange={next => loadRecords(next.current, next.pageSize)}
         size="small"
         scroll={{ x: 1100 }}
       />
