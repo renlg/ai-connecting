@@ -32,6 +32,16 @@ public class ModelGroupRoutingService {
      * 暴露无权使用的成员模型。
      */
     public List<Candidate> resolveOrderedCandidates(ModelGroup group, boolean isAdmin, Integer userLevel) {
+        return resolveOrderedCandidates(group, isAdmin, userLevel, null);
+    }
+
+    /**
+     * 在原成员策略顺序之上应用视觉能力偏好。偏好只做稳定分区，不过滤任何成员：带图请求把
+     * visionSupport=true 放在前面，纯文本请求反之，同一分区内仍保持 priority/round-robin/random
+     * 生成的原始顺序。
+     */
+    public List<Candidate> resolveOrderedCandidates(ModelGroup group, boolean isAdmin, Integer userLevel,
+                                                    Boolean requestHasImage) {
         List<ModelGroupService.MemberView> views = modelGroupService.listMemberViews(group.getId());
         List<ModelGroupService.MemberView> eligible = views.stream()
                 .filter(v -> v.modelConfig().getStatus() != null && v.modelConfig().getStatus() == 1)
@@ -46,6 +56,19 @@ public class ModelGroupRoutingService {
             case "random" -> weightedShuffle(eligible);
             default -> rotate(group.getId(), eligible);
         };
+        if (requestHasImage != null && ordered.size() > 1) {
+            boolean preferVision = requestHasImage;
+            List<ModelGroupService.MemberView> preferred = ordered.stream()
+                    .filter(v -> Boolean.TRUE.equals(v.modelConfig().getVisionSupport()) == preferVision)
+                    .toList();
+            List<ModelGroupService.MemberView> fallback = ordered.stream()
+                    .filter(v -> Boolean.TRUE.equals(v.modelConfig().getVisionSupport()) != preferVision)
+                    .toList();
+            List<ModelGroupService.MemberView> partitioned = new ArrayList<>(ordered.size());
+            partitioned.addAll(preferred);
+            partitioned.addAll(fallback);
+            ordered = partitioned;
+        }
         List<Candidate> result = new ArrayList<>(ordered.size());
         for (ModelGroupService.MemberView v : ordered) {
             result.add(new Candidate(v.modelConfig(), String.valueOf(v.modelConfig().getId())));

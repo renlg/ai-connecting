@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS model_configs (
     name VARCHAR(100) NOT NULL,
     display_name VARCHAR(100),
     type VARCHAR(20) NOT NULL DEFAULT 'text',
+    vision_support BOOLEAN NOT NULL DEFAULT FALSE,
     input_credit_rate INT NOT NULL,
     output_credit_rate INT NOT NULL,
     description VARCHAR(500),

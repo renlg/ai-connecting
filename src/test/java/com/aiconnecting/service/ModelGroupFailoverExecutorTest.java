@@ -99,6 +99,24 @@ class ModelGroupFailoverExecutorTest {
     }
 
     @Test
+    void imagePartIsDetectedOnceBeforeRoutingAndCustomPassthroughStillWorks() throws Exception {
+        GroupFixture fixture = groupFixture("application/json", "{\"usage\":{\"total_tokens\":0}}"
+                .getBytes(StandardCharsets.UTF_8), 200);
+        String body = "{\"model\":\"public-group\",\"messages\":[{\"role\":\"user\","
+                + "\"content\":[{\"type\":\"text\",\"text\":\"describe\"},{\"type\":\"image_url\","
+                + "\"image_url\":{\"url\":\"https://example.test/image.png\"}}]}]}";
+
+        fixture.executor.relayRequest("client-key", "/v1/chat/completions", body,
+                "public-group", request(), new MockHttpServletResponse());
+
+        verify(fixture.routing).resolveOrderedCandidates(fixture.group, false, 1, true);
+        Request sent = fixture.sentRequest.getValue();
+        okio.Buffer sentBody = new okio.Buffer();
+        sent.body().writeTo(sentBody);
+        assertThat(sentBody.readUtf8()).contains("\"messages\"").contains("\"image_url\"");
+    }
+
+    @Test
     void customMemberStreamsSseBytesIncludingDoneVerbatimWithoutInjectingOptions() throws Exception {
         byte[] responseBytes = ("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
                 + "data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n"
@@ -339,7 +357,7 @@ class ModelGroupFailoverExecutorTest {
 
         when(groupService.findByName("public-group")).thenReturn(Optional.of(group));
         doReturn(context).when(support).prepareGroupContext("client-key", "public-group");
-        when(routing.resolveOrderedCandidates(group, false, 1)).thenReturn(List.of(
+        when(routing.resolveOrderedCandidates(eq(group), eq(false), eq(1), anyBoolean())).thenReturn(List.of(
                 new ModelGroupRoutingService.Candidate(member, "11")));
         when(router.selectChannel("11", Set.of(), 1)).thenReturn(channel);
         doReturn(false).when(support).isChannelRateLimited(channel);
@@ -351,7 +369,7 @@ class ModelGroupFailoverExecutorTest {
         ModelGroupFailoverExecutor executor = new ModelGroupFailoverExecutor(
                 support, groupService, routing, billing, usageLogs,
                 mock(VideoTaskRepository.class), mock(VideoTaskUsageLogService.class), passthrough);
-        return new GroupFixture(executor, support, usageLogs, billing, calls, sentRequest, channel);
+        return new GroupFixture(executor, support, usageLogs, billing, routing, group, calls, sentRequest, channel);
     }
 
     private StandardGroupFixture standardGroupFixture() {
@@ -374,7 +392,7 @@ class ModelGroupFailoverExecutorTest {
         when(groupService.findByName("public-group")).thenReturn(Optional.of(group));
         doReturn(new RelaySupport.RelayContext(token, null, 1, user, null))
                 .when(support).prepareGroupContext("client-key", "public-group");
-        when(routing.resolveOrderedCandidates(group, false, 1)).thenReturn(List.of(
+        when(routing.resolveOrderedCandidates(group, false, 1, false)).thenReturn(List.of(
                 new ModelGroupRoutingService.Candidate(first, "11"),
                 new ModelGroupRoutingService.Candidate(second, "12")));
         when(router.selectChannel("11", Set.of(), 1)).thenReturn(firstChannel);
@@ -390,6 +408,7 @@ class ModelGroupFailoverExecutorTest {
 
     private record GroupFixture(ModelGroupFailoverExecutor executor, RelaySupport support,
                                 UsageLogService usageLogs, ModelGroupBillingService billing,
+                                ModelGroupRoutingService routing, ModelGroup group,
                                 Call.Factory calls,
                                 org.mockito.ArgumentCaptor<Request> sentRequest, Channel channel) {}
 

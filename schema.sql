@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS "model_configs" (
     status INTEGER NOT NULL,
     -- 模型类型: text=文本(按 token 计费), image=图片(按分辨率档位计费), video=视频(按分辨率档位计费), audio=音频(按音质档位计费)
     type VARCHAR(20) NOT NULL DEFAULT 'text',
+    vision_support BOOLEAN NOT NULL DEFAULT FALSE,
     input_credit_rate INTEGER NOT NULL DEFAULT 0,
     output_credit_rate INTEGER NOT NULL DEFAULT 0,
     cache_credit_rate DECIMAL(5,4) NOT NULL DEFAULT 0.1,

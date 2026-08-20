@@ -33,6 +33,11 @@ public class ModelConfig {
     @Column(name = "type", nullable = false, length = 20, columnDefinition = "VARCHAR(20) NOT NULL DEFAULT 'text'")
     private String type = "text";
 
+    /** 文本模型是否支持图片输入；非文本模型始终为 false */
+    @Builder.Default
+    @Column(name = "vision_support", nullable = false, columnDefinition = "BOOLEAN NOT NULL DEFAULT FALSE")
+    private Boolean visionSupport = false;
+
     /** 输入积分兑换比例 (每百万token 消耗多少积分) */
     @Column(nullable = false)
     private Integer inputCreditRate;
@@ -123,6 +128,7 @@ public class ModelConfig {
         if (adminOnly == null) adminOnly = false;
         if (cacheCreditRate == null) cacheCreditRate = BigDecimal.ZERO;
         if (type == null || type.isBlank()) type = "text";
+        if (!"text".equals(type) || visionSupport == null) visionSupport = false;
         if (imagePrice1k == null) imagePrice1k = BigDecimal.ZERO;
         if (imagePrice2k == null) imagePrice2k = BigDecimal.ZERO;
         if (imagePrice4k == null) imagePrice4k = BigDecimal.ZERO;
@@ -137,5 +143,6 @@ public class ModelConfig {
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+        if (!"text".equals(type) || visionSupport == null) visionSupport = false;
     }
 }

@@ -156,6 +156,8 @@ public class ModelConfigController {
                 .displayName(request.getDisplayName())
                 .description(request.getDescription())
                 .type(type != null ? type : "text")
+                .visionSupport("text".equals(type != null ? type : "text")
+                        && Boolean.TRUE.equals(request.getVisionSupport()))
                 .inputCreditRate(request.getInputCreditRate() != null ? request.getInputCreditRate() : 0)
                 .outputCreditRate(request.getOutputCreditRate() != null ? request.getOutputCreditRate() : 0)
                 .adminOnly(Boolean.TRUE.equals(request.getAdminOnly()))
@@ -213,6 +215,11 @@ public class ModelConfigController {
         String type = validateType(request.getType());
         if (type != null) {
             config.setType(type);
+        }
+        if (!"text".equals(config.getType())) {
+            config.setVisionSupport(false);
+        } else if (request.getVisionSupport() != null) {
+            config.setVisionSupport(request.getVisionSupport());
         }
         if (request.getImagePrice1k() != null) {
             config.setImagePrice1k(request.getImagePrice1k());

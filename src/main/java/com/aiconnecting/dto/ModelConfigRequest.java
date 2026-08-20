@@ -32,6 +32,9 @@ public class ModelConfigRequest {
     /** 模型类型: text=文本, image=图片, video=视频, audio=音频 */
     private String type;
 
+    /** 文本模型是否支持图片输入 */
+    private Boolean visionSupport;
+
     /** 图片 1K 档价格 (积分/张) */
     private BigDecimal imagePrice1k;
 

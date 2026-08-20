@@ -19,7 +19,7 @@ import java.util.Set;
 
 /**
  * 模型类型/分辨率档位计费字段迁移：
- * 为 model_configs 补齐 type 及各分辨率档位价格列，并将存量模型的 type 回填为 'text'
+ * 为 model_configs 补齐 type、vision_support 及各分辨率档位价格列，并将存量模型的 type 回填为 'text'
  *
  * 与 {@link VideoTaskMigrationRunner} 相同的原因：必须在 Hibernate 创建 EntityManagerFactory
  * （ddl-auto=validate/update）之前运行，否则存量 MySQL 表缺列会导致 validate 直接启动失败，
@@ -44,6 +44,7 @@ public class ModelTypeMigrationRunner {
 
         Map<String, String> columns = new LinkedHashMap<>();
         columns.put("type", "VARCHAR(20) NOT NULL DEFAULT 'text'");
+        columns.put("vision_support", "BOOLEAN NOT NULL DEFAULT FALSE");
         for (String col : List.of("image_price_1k", "image_price_2k", "image_price_4k",
                 "video_price_480p", "video_price_720p", "video_price_1080p", "video_price_4k",
                 "audio_price_standard", "audio_price_hd")) {

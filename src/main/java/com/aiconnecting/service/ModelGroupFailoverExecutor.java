@@ -261,8 +261,9 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
         checkGroupLevel(group, ctx.userLevel(), isAdmin);
+        boolean requestHasImage = containsOpenAiImagePart(request.content());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
-                group, isAdmin, ctx.userLevel());
+                group, isAdmin, ctx.userLevel(), requestHasImage);
         if (candidates.isEmpty()) {
             throw new BusinessException(503, "模型组无可用成员: " + groupName,
                     "No available members in model group: " + groupName);
@@ -530,8 +531,9 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
         checkGroupLevel(group, ctx.userLevel(), isAdmin);
+        boolean requestHasImage = containsOpenAiImagePart(request.content());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
-                group, isAdmin, ctx.userLevel());
+                group, isAdmin, ctx.userLevel(), requestHasImage);
         if (candidates.isEmpty()) {
             adapter().writeError(request.protocol(), httpResponse, 503,
                     SseUtils.clientErrorMessage("模型组无可用成员: " + groupName,
@@ -725,6 +727,26 @@ public class ModelGroupFailoverExecutor {
     }
 
     private record GroupStreamResult(RelayServiceUtils.UsageInfo usage, boolean bytesWritten) {}
+
+    /** UnifiedRelayRequest.content 已由协议适配器在读取 body 时解析好，这里只遍历该缓存树。 */
+    private boolean containsOpenAiImagePart(JsonNode messages) {
+        if (messages == null || !messages.isArray()) {
+            return false;
+        }
+        for (JsonNode message : messages) {
+            JsonNode content = message.get("content");
+            if (content == null || !content.isArray()) {
+                continue;
+            }
+            for (JsonNode part : content) {
+                String type = part.path("type").asText("");
+                if ("image_url".equals(type) || "image".equals(type)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 
     /** Converts complete SSE data events at the protocol boundary and tracks the first client byte. */
     private GroupStreamResult streamGroupResponse(HttpURLConnection conn, HttpServletResponse response,

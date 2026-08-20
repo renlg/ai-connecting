@@ -36,6 +36,29 @@ class ModelGroupRoutingServiceTest {
                 .containsExactly("open-model", "level-one-model");
     }
 
+    @Test
+    void resolveOrderedCandidates_prefersVisionByRequestWithoutFilteringFallbackMembers() {
+        ModelGroupService groupService = mock(ModelGroupService.class);
+        ModelGroupRoutingService routingService = new ModelGroupRoutingService(groupService);
+        ModelGroup group = ModelGroup.builder().id(10L).strategy("priority").build();
+
+        ModelConfig textFirst = ModelConfig.builder()
+                .id(1L).name("text-first").status(1).visionSupport(false).build();
+        ModelConfig vision = ModelConfig.builder()
+                .id(2L).name("vision").status(1).visionSupport(true).build();
+        ModelConfig textLast = ModelConfig.builder()
+                .id(3L).name("text-last").status(1).visionSupport(false).build();
+        when(groupService.listMemberViews(10L)).thenReturn(List.of(
+                memberView(1L, textFirst), memberView(2L, vision), memberView(3L, textLast)));
+
+        assertThat(routingService.resolveOrderedCandidates(group, false, 1, true))
+                .extracting(candidate -> candidate.modelConfig().getName())
+                .containsExactly("vision", "text-first", "text-last");
+        assertThat(routingService.resolveOrderedCandidates(group, false, 1, false))
+                .extracting(candidate -> candidate.modelConfig().getName())
+                .containsExactly("text-first", "text-last", "vision");
+    }
+
     private ModelGroupService.MemberView memberView(Long id, ModelConfig config) {
         ModelGroupMember member = ModelGroupMember.builder()
                 .id(id).groupId(10L).modelConfigId(config.getId()).sortOrder(id.intValue()).weight(1).build();

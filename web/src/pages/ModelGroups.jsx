@@ -237,16 +237,25 @@ export default function ModelGroups() {
           </Space>}
 
           <Form.Item label="成员模型">
-            <Select mode="multiple" value={groupMembers.map(member => member.modelConfigId)} onChange={handleGroupMemberSelection} placeholder="只显示与模型组相同类型的模型" optionFilterProp="label" options={eligibleMemberModels.map(model => ({
+            <Select mode="multiple" value={groupMembers.map(member => member.modelConfigId)} onChange={handleGroupMemberSelection} placeholder="只显示与模型组相同类型的模型" optionFilterProp="label" optionRender={option => (
+              <Space size={6}>
+                <span>{option.data.label}</span>
+                {option.data.visionSupport && <Tag color="green" style={{ marginInlineEnd: 0 }}>视觉</Tag>}
+              </Space>
+            )} options={eligibleMemberModels.map(model => ({
               value: model.id,
               label: `${model.displayName || model.name}（${model.name}）`,
+              visionSupport: model.type === 'text' && model.visionSupport,
             }))} />
           </Form.Item>
           {groupMembers.map((member, index) => {
             const model = allModels.find(item => item.id === member.modelConfigId)
             return (
               <div key={member.modelConfigId} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 8, background: '#fafafa', borderRadius: 6 }}>
-                <Text style={{ flex: 1 }}>{index + 1}. {model?.displayName || model?.name || `模型 #${member.modelConfigId}`}</Text>
+                <Text style={{ flex: 1 }}>
+                  {index + 1}. {model?.displayName || model?.name || `模型 #${member.modelConfigId}`}
+                  {model?.type === 'text' && model?.visionSupport && <Tag color="green" style={{ marginLeft: 8 }}>视觉</Tag>}
+                </Text>
                 <Text type="secondary">权重</Text>
                 {groupStrategy === 'random'
                   ? <InputNumber min={1} value={member.weight} onChange={value => setGroupMembers(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, weight: value || 1 } : item))} style={{ width: 80 }} />

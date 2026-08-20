@@ -135,6 +135,12 @@ export default function Models() {
       }
     },
     {
+      title: '视觉', dataIndex: 'visionSupport', width: 90,
+      render: (value, record) => record.type === 'text'
+        ? <Tag color={value ? 'green' : 'default'}>{value ? '支持' : '不支持'}</Tag>
+        : '-',
+    },
+    {
       title: '价格摘要', width: 300,
       render: (_, r) => {
         if (r.type === 'text') return `输入 ${r.inputCreditRate ?? 0} / 输出 ${r.outputCreditRate ?? 0} / 缓存 ${r.cacheCreditRate ?? 0}（积分/百万token）`
@@ -148,7 +154,7 @@ export default function Models() {
       if (!v) return '全部'
       return v.split(',').map(l => l.trim()).filter(l => l).map(l => <Tag key={l} color="purple">Lv{l}</Tag>)
     } },
-    { title: '描述', dataIndex: 'description', ellipsis: true, render: v => v || '-' },
+    { title: '描述', dataIndex: 'description', width: 320, ellipsis: true, render: v => v || '-' },
     {
       title: '仅管理员', dataIndex: 'adminOnly', width: 100,
       render: (v, r) => <Switch checked={!!v} onChange={(checked) => {
@@ -200,7 +206,7 @@ export default function Models() {
         <Button type="primary" icon={<PlusOutlined />} onClick={() => {
           setEditing(null)
           form.resetFields()
-          form.setFieldsValue({ type: 'text', adminOnly: false, fallbackGroupId: 0, supportedLevels: ['1', '2', '3', '4', '5'] })
+          form.setFieldsValue({ type: 'text', visionSupport: false, adminOnly: false, fallbackGroupId: 0, supportedLevels: ['1', '2', '3', '4', '5'] })
           setModalOpen(true)
         }}>新增模型</Button>
       </div>
@@ -221,7 +227,7 @@ export default function Models() {
         ]} style={{ width: 140 }} />
       </Space>
 
-      <Table columns={columns} dataSource={filteredModels} rowKey="id" loading={loading} scroll={{ x: 1400 }} />
+      <Table columns={columns} dataSource={filteredModels} rowKey="id" loading={loading} scroll={{ x: 1950 }} />
 
       <Modal title={editing ? '编辑模型' : '新增模型'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} confirmLoading={saveLoading} okButtonProps={{ disabled: saveLoading }} width={520}>
         <Form form={form} layout="vertical">
@@ -239,13 +245,19 @@ export default function Models() {
             <Input placeholder="例如: GPT-4o" />
           </Form.Item>
           <Form.Item name="type" label="模型类型" initialValue="text">
-            <Select onChange={() => form.setFieldValue('fallbackGroupId', 0)} options={[
+            <Select onChange={(value) => {
+              form.setFieldValue('fallbackGroupId', 0)
+              if (value !== 'text') form.setFieldValue('visionSupport', false)
+            }} options={[
               { value: 'text', label: '文本（按 token 计费）' },
               { value: 'image', label: '图片（按分辨率档位计费）' },
               { value: 'video', label: '视频（按分辨率档位计费）' },
               { value: 'audio', label: '音频（按音质档位计费）' },
             ]} />
           </Form.Item>
+          {modelType === 'text' && <Form.Item name="visionSupport" label="支持视觉" valuePropName="checked" initialValue={false}>
+            <Switch />
+          </Form.Item>}
           <Form.Item name="fallbackGroupId" label="故障转移组" initialValue={0} tooltip="模型请求失败后，可转入同类型模型组继续尝试。">
             <Select options={[{ value: 0, label: '不启用' }, ...fallbackGroupOptions]} />
           </Form.Item>

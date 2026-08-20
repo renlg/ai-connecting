@@ -128,6 +128,7 @@ public class ModelGroupController {
             m.put("modelConfigId", member.getModelConfigId());
             m.put("modelName", config.getName());
             m.put("modelDisplayName", config.getDisplayName());
+            m.put("visionSupport", Boolean.TRUE.equals(config.getVisionSupport()));
             m.put("weight", member.getWeight());
             m.put("sortOrder", member.getSortOrder());
             return m;
