@@ -178,10 +178,7 @@ export default function CircuitBreakers() {
           allowClear
           placeholder="全部状态"
           style={{ width: 160 }}
-          options={[
-            { value: 'ACTIVE', label: '生效中 (ACTIVE)' },
-            { value: 'EXPIRED', label: '已过期 (EXPIRED)' },
-          ]}
+          options={Object.entries(RECORD_STATUS_LABEL).map(([value, label]) => ({ value, label }))}
         />
         <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查询</Button>
         <Button icon={<ReloadOutlined />} onClick={handleReset}>重置</Button>

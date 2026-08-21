@@ -169,6 +169,7 @@ public class OpenAiRelayService {
                                     String model, HttpServletRequest httpRequest, String mediaType) {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model, mediaType);
         boolean isVideo = "video".equals(mediaType);
+        String upstreamVideoBody = isVideo ? transformVideoRequestBody(model, requestBody) : null;
         RelaySupport.VideoChargeInfo videoChargeInfo = isVideo ? support.prepareVideoCharge(ctx, requestBody) : null;
         RelaySupport.MediaCharge charge = isVideo ? videoChargeInfo.charge() : support.prepareMediaCharge(ctx, requestBody);
 
@@ -178,7 +179,7 @@ public class OpenAiRelayService {
             result = forwardWithRetry(ctx, channel -> {
                 String upstreamBody = "image".equals(mediaType)
                         ? support.prepareImageRequestBody(channel, requestBody)
-                        : isVideo ? transformVideoRequestBody(model, requestBody) : requestBody;
+                        : isVideo ? upstreamVideoBody : requestBody;
                 return support.forwardRequest(channel, path, upstreamBody);
             });
         } catch (RuntimeException e) {

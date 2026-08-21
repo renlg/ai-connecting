@@ -16,9 +16,6 @@ public interface CircuitBreakerRecordRepository extends JpaRepository<CircuitBre
     @Query("SELECT r FROM CircuitBreakerRecord r WHERE r.status = 'ACTIVE' AND r.expiresAt > :now")
     List<CircuitBreakerRecord> findActiveNotExpired(@Param("now") LocalDateTime now);
 
-    @Query("SELECT r FROM CircuitBreakerRecord r ORDER BY r.triggeredAt DESC")
-    List<CircuitBreakerRecord> findAllOrderByTriggeredAtDesc();
-
     @Query("SELECT r FROM CircuitBreakerRecord r " +
             "WHERE (:channelId IS NULL OR r.channelId = :channelId) " +
             "AND (:modelName IS NULL OR LOWER(r.modelConfigName) LIKE LOWER(CONCAT('%', :modelName, '%'))) " +

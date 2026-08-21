@@ -27,7 +27,9 @@ import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -264,7 +266,7 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
         checkGroupLevel(group, ctx.userLevel(), isAdmin);
-        boolean requestHasImage = containsImagePart(request.protocol(), request.content());
+        Boolean requestHasImage = containsImagePart(request.protocol(), request.content()) ? Boolean.TRUE : null;
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
                 group, isAdmin, ctx.userLevel(), requestHasImage);
         if (candidates.isEmpty()) {
@@ -534,7 +536,7 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
         checkGroupLevel(group, ctx.userLevel(), isAdmin);
-        boolean requestHasImage = containsImagePart(request.protocol(), request.content());
+        Boolean requestHasImage = containsImagePart(request.protocol(), request.content()) ? Boolean.TRUE : null;
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
                 group, isAdmin, ctx.userLevel(), requestHasImage);
         if (candidates.isEmpty()) {
@@ -903,7 +905,7 @@ public class ModelGroupFailoverExecutor {
                     "No available members in model group: " + groupName);
         }
 
-        MediaAttemptResult result = attemptMedia(ctx, group, candidates, path, requestBody, creditCost);
+        MediaAttemptResult result = attemptMedia(ctx, group, candidates, path, requestBody, creditCost, null);
         RelaySupport.MediaCharge charge = result.charge();
 
         int actualCount = countReturnedImages(result.response());
@@ -1140,7 +1142,8 @@ public class ModelGroupFailoverExecutor {
                     "No available members in model group: " + groupName);
         }
 
-        MediaAttemptResult result = attemptMedia(ctx, group, candidates, path, requestBody, creditCost);
+        Map<String, String> preparedBodies = prepareVideoRequestBodies(candidates, requestBody);
+        MediaAttemptResult result = attemptMedia(ctx, group, candidates, path, requestBody, creditCost, preparedBodies);
         RelaySupport.MediaCharge charge = result.charge();
 
         JsonNode json;
@@ -1242,12 +1245,13 @@ public class ModelGroupFailoverExecutor {
                                             long startTime, RelaySupport.MediaCharge charge) {}
 
     /**
-     * 媒体（图片/视频）请求的成员切换骨架：预扣已在调用方完成，本方法只负责选成员+选渠道+转发，
-     * 失败时按快速失败/切换分类处理；调用方负责失败时退款
+     * 媒体（图片/视频）请求的成员切换骨架：请求体转换已在调用方完成，本方法负责选成员、
+     * 选渠道、按成员预扣并转发；失败时按快速失败/切换分类处理并释放本次预扣。
      */
     private MediaAttemptResult attemptMedia(RelaySupport.RelayContext ctx, ModelGroup group,
                                             List<ModelGroupRoutingService.Candidate> candidates,
-                                            String path, String requestBody, BigDecimal creditCost) {
+                                            String path, String requestBody, BigDecimal creditCost,
+                                            Map<String, String> preparedVideoBodies) {
         long startTime = System.currentTimeMillis();
         long deadline = startTime + WALL_CLOCK_BUDGET_MS;
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
@@ -1279,11 +1283,11 @@ public class ModelGroupFailoverExecutor {
             if (timeoutMs <= 0) break;
             RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
             try {
-                String upstreamBody = rewriteModelField(requestBody, memberModel);
+                String upstreamBody = "video".equals(group.getType()) && preparedVideoBodies != null
+                        ? preparedVideoBodies.get(memberModel)
+                        : rewriteModelField(requestBody, memberModel);
                 if ("image".equals(group.getType())) {
                     upstreamBody = support.prepareImageRequestBody(channel, upstreamBody);
-                } else if ("video".equals(group.getType()) && requestBodyTransformerRegistry != null) {
-                    upstreamBody = requestBodyTransformerRegistry.transform(memberModel, upstreamBody);
                 }
                 String response = support.forwardRequest(channel, path, upstreamBody, timeoutMs);
 
@@ -1304,6 +1308,22 @@ public class ModelGroupFailoverExecutor {
                 ? wrapFailure(lastFailure, exhaustedGroupMessage(group.getName()))
                 : new BusinessException(502, exhaustedGroupMessage(group.getName()),
                         exhaustedGroupEnglishMessage(group.getName()));
+    }
+
+    /** 视频转换在任何预扣或重试之前按平台成员模型预生成；同名成员只转换一次。 */
+    private Map<String, String> prepareVideoRequestBodies(
+            List<ModelGroupRoutingService.Candidate> candidates, String requestBody) {
+        Map<String, String> prepared = new LinkedHashMap<>();
+        for (ModelGroupRoutingService.Candidate candidate : candidates) {
+            String memberModel = candidate.modelConfig().getName();
+            prepared.computeIfAbsent(memberModel, model -> {
+                String memberBody = rewriteModelField(requestBody, model);
+                return requestBodyTransformerRegistry != null
+                        ? requestBodyTransformerRegistry.transform(model, memberBody)
+                        : memberBody;
+            });
+        }
+        return prepared;
     }
 
     private MediaBinaryAttemptResult attemptBinaryMedia(RelaySupport.RelayContext ctx, ModelGroup group,

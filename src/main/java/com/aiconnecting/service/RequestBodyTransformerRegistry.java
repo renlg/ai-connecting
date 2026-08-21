@@ -4,7 +4,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 
-/** 按模型查找请求体转换策略；没有匹配策略时保持原请求体不变。 */
+/** 按平台模型名查找请求体转换策略；匹配发生在渠道 modelMapping 之前，没有策略时原样透传。 */
 @Component
 public class RequestBodyTransformerRegistry {
 

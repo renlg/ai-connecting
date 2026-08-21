@@ -1109,7 +1109,7 @@ public class RelaySupport {
     }
 
     /** 每个出现的时长字段都必须独立通过正整数和共享上限校验；JSON null 视为未传 */
-    private static Integer readPositiveIntSeconds(JsonNode body, String field) {
+    static Integer readPositiveIntSeconds(JsonNode body, String field) {
         if (!body.has(field) || body.get(field).isNull()) {
             return null;
         }

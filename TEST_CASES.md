@@ -264,6 +264,26 @@
 | API-016 | 模型返回 displayName | 有 displayName 的模型 | id 字段返回 displayName |
 | API-017 | 渠道交集过滤 | 渠道仅支持部分模型 | 仅返回渠道支持的模型 |
 
+### 7.7 Videos `POST /v1/videos`
+
+| 用例编号 | 测试场景 | 输入 | 预期结果 |
+|---------|---------|------|---------|
+| API-018 | Agnes duration 转帧数 | model=agnes-video-v2.0, duration=5/10/18 | 分别转为 num_frames=121/241/441，移除 duration |
+| API-019 | Agnes seconds 转帧数 | seconds=10 | 转为 num_frames=241，同时移除 seconds 与 duration |
+| API-020 | 双时长字段一致 | duration=5, seconds=5 | 正常转换，两个时长字段均不转发上游 |
+| API-021 | 双时长字段冲突 | duration=5, seconds=10 | 400，提示只传其一或保持相等；不预扣、不重试、不记录渠道失败 |
+| API-022 | 时长字段为 null/缺省 | duration=null, seconds=null 或均缺省 | 不生成 num_frames，两个时长字段剥离；缺少 frame_rate 时补 24 |
+| API-023 | 保留显式帧参数 | num_frames=321, frame_rate=30 | 保留客户端值，不被转换器覆盖 |
+| API-024 | Agnes 帧数对齐与封顶 | 普通秒数及超长秒数 | num_frames 满足 8n+1，并封顶 441 |
+| API-025 | 视频转换时机 | 非法时长、存在多个可重试渠道/组成员 | 转换在预扣和重试前只执行一次，客户端错误不污染渠道失败日志 |
+
+### 7.8 文本模型组视觉路由
+
+| 用例编号 | 测试场景 | 输入 | 预期结果 |
+|---------|---------|------|---------|
+| API-026 | 带图文本请求 | content 含图片，组内混合视觉/非视觉成员 | 视觉成员稳定分区到前面，同分区内保持 strategy 顺序 |
+| API-027 | 纯文本请求 | content 不含图片，管理员配置明确成员顺序 | 不按 visionSupport 反向分区，完整保留 strategy 与成员顺序 |
+
 ---
 
 ## 八、Claude Code 协议模块

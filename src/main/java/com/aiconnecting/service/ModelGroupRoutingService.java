@@ -36,9 +36,9 @@ public class ModelGroupRoutingService {
     }
 
     /**
-     * 在原成员策略顺序之上应用视觉能力偏好。偏好只做稳定分区，不过滤任何成员：带图请求把
-     * visionSupport=true 放在前面，纯文本请求反之，同一分区内仍保持 priority/round-robin/random
-     * 生成的原始顺序。
+     * 在原成员策略顺序之上应用视觉能力偏好。偏好只做稳定分区，不过滤任何成员；调用方对
+     * 带图请求传 true，把 visionSupport=true 放在前面。纯文本请求传 null，不做分区，完整保留
+     * 管理端 strategy 与成员顺序。
      */
     public List<Candidate> resolveOrderedCandidates(ModelGroup group, boolean isAdmin, Integer userLevel,
                                                     Boolean requestHasImage) {

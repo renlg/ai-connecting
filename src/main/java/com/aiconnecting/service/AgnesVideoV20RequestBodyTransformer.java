@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 
-/** 将 agnes-video-v2.0 的 duration 参数转换为 Agnes 支持的帧数参数。 */
+/** 将 agnes-video-v2.0 的 duration/seconds 参数转换为 Agnes 支持的帧数参数。 */
 @Component
 public class AgnesVideoV20RequestBodyTransformer implements RequestBodyTransformer {
 
@@ -31,26 +31,26 @@ public class AgnesVideoV20RequestBodyTransformer implements RequestBodyTransform
     public String transform(String model, String requestBodyJson) {
         try {
             JsonNode body = objectMapper.readTree(requestBodyJson);
-            if (!(body instanceof ObjectNode objectBody) || !objectBody.has("duration")) {
+            if (!(body instanceof ObjectNode objectBody)) {
                 return requestBodyJson;
             }
 
-            JsonNode durationNode = objectBody.get("duration");
-            if (durationNode == null || durationNode.isNull()) {
-                objectBody.remove("duration");
-                return objectMapper.writeValueAsString(objectBody);
-            }
-            if (!durationNode.isIntegralNumber() || !durationNode.canConvertToInt() || durationNode.asInt() <= 0) {
-                throw new BusinessException(400, "duration 参数必须是正整数秒数",
-                        "duration must be a positive integer number of seconds");
+            Integer durationField = RelaySupport.readPositiveIntSeconds(objectBody, "duration");
+            Integer secondsField = RelaySupport.readPositiveIntSeconds(objectBody, "seconds");
+            if (durationField != null && secondsField != null && !durationField.equals(secondsField)) {
+                throw new BusinessException(400, "duration 与 seconds 参数值不一致，请只传其一或保持相等",
+                        "duration and seconds differ; provide only one or make them equal");
             }
 
-            int durationSeconds = durationNode.asInt();
             objectBody.remove("duration");
-            if (!objectBody.has("num_frames")) {
+            objectBody.remove("seconds");
+            Integer durationSeconds = durationField != null ? durationField : secondsField;
+            if (durationSeconds != null && !objectBody.has("num_frames")) {
                 objectBody.put("num_frames", toNumFrames(durationSeconds));
             }
-            objectBody.put("frame_rate", FRAME_RATE);
+            if (!objectBody.has("frame_rate")) {
+                objectBody.put("frame_rate", FRAME_RATE);
+            }
             return objectMapper.writeValueAsString(objectBody);
         } catch (BusinessException e) {
             throw e;
@@ -59,7 +59,7 @@ public class AgnesVideoV20RequestBodyTransformer implements RequestBodyTransform
         }
     }
 
-    private int toNumFrames(int durationSeconds) {
+    int toNumFrames(int durationSeconds) {
         if (durationSeconds == 5) {
             return 121;
         }

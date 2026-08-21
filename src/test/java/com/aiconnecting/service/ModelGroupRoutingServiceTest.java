@@ -37,7 +37,7 @@ class ModelGroupRoutingServiceTest {
     }
 
     @Test
-    void resolveOrderedCandidates_prefersVisionByRequestWithoutFilteringFallbackMembers() {
+    void resolveOrderedCandidates_prefersVisionForImagesAndPreservesAdminOrderForText() {
         ModelGroupService groupService = mock(ModelGroupService.class);
         ModelGroupRoutingService routingService = new ModelGroupRoutingService(groupService);
         ModelGroup group = ModelGroup.builder().id(10L).strategy("priority").build();
@@ -54,9 +54,9 @@ class ModelGroupRoutingServiceTest {
         assertThat(routingService.resolveOrderedCandidates(group, false, 1, true))
                 .extracting(candidate -> candidate.modelConfig().getName())
                 .containsExactly("vision", "text-first", "text-last");
-        assertThat(routingService.resolveOrderedCandidates(group, false, 1, false))
+        assertThat(routingService.resolveOrderedCandidates(group, false, 1, null))
                 .extracting(candidate -> candidate.modelConfig().getName())
-                .containsExactly("text-first", "text-last", "vision");
+                .containsExactly("text-first", "vision", "text-last");
     }
 
     private ModelGroupService.MemberView memberView(Long id, ModelConfig config) {

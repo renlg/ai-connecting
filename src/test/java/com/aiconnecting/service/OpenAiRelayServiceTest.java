@@ -120,6 +120,30 @@ class OpenAiRelayServiceTest {
     }
 
     @Test
+    void videoTransformationRunsOnceBeforePrechargeAndRetry() {
+        RelaySupport relaySupport = mock(RelaySupport.class);
+        OpenAiRelayService relayService = relayService(relaySupport);
+        RequestBodyTransformerRegistry registry = mock(RequestBodyTransformerRegistry.class);
+        FailureLogService failureLogs = mock(FailureLogService.class);
+        ReflectionTestUtils.setField(relayService, "requestBodyTransformerRegistry", registry);
+        ReflectionTestUtils.setField(relayService, "failureLogService", failureLogs);
+        RelaySupport.RelayContext ctx = new RelaySupport.RelayContext(
+                null, "agnes-video-v2.0", 1, null, ModelConfig.builder().id(42L).build());
+        when(relaySupport.validateAndPrepare("sk-test", "agnes-video-v2.0", "video")).thenReturn(ctx);
+        BusinessException invalid = new BusinessException(400, "duration 参数必须是正整数秒数",
+                "duration must be a positive integer number of seconds");
+        when(registry.transform("agnes-video-v2.0", "{\"duration\":0}")).thenThrow(invalid);
+
+        BusinessException thrown = assertThrows(BusinessException.class, () -> relayService.relayMediaRequest(
+                "sk-test", "/v1/videos", "{\"duration\":0}", "agnes-video-v2.0", null, "video"));
+
+        assertEquals(invalid, thrown);
+        verify(registry, times(1)).transform("agnes-video-v2.0", "{\"duration\":0}");
+        verify(relaySupport, never()).prepareVideoCharge(any(), any());
+        verify(failureLogs, never()).recordChannelFailure(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void mediaSwitchableFailureStillRetriesAnotherChannel() {
         ChannelRouter router = mock(ChannelRouter.class);
         RelaySupport relaySupport = relaySupport(router);

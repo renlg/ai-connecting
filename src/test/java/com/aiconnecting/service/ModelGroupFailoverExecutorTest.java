@@ -149,9 +149,48 @@ class ModelGroupFailoverExecutorTest {
     }
 
     @Test
-    void pureTextRequestStillPrefersNonVisionMembers() throws Exception {
+    void pureTextRequestPreservesConfiguredMemberOrderWithoutVisionPartition() throws Exception {
         assertVisionRouting(RelayProtocol.GEMINI, "/v1/models/public-group:generateContent", "public-group",
-                "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]}]}", false);
+                "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]}]}", null);
+    }
+
+    @Test
+    void videoTransformationRunsBeforeMemberPrechargeAndFailureRecording() {
+        RelaySupport support = spy(new RelaySupport(null, null, null, null, null, null, null, null));
+        ModelGroupService groupService = mock(ModelGroupService.class);
+        ModelGroupRoutingService routing = mock(ModelGroupRoutingService.class);
+        ModelGroupBillingService billing = mock(ModelGroupBillingService.class);
+        RequestBodyTransformerRegistry registry = mock(RequestBodyTransformerRegistry.class);
+        FailureLogService failureLogs = mock(FailureLogService.class);
+        ModelGroup group = ModelGroup.builder().id(10L).name("video-group").type("video")
+                .strategy("priority").maxAttempts(3).enabled(true).build();
+        ModelConfig member = ModelConfig.builder().id(11L).name("agnes-video-v2.0").status(1).build();
+        User user = User.builder().id(7L).role("user").level(1).build();
+        Token token = Token.builder().id(8L).userId(7L).build();
+        RelaySupport.RelayContext context = new RelaySupport.RelayContext(token, null, 1, user, null);
+        when(groupService.findByName("video-group")).thenReturn(Optional.of(group));
+        doReturn(context).when(support).prepareGroupContext("sk-test", "video-group");
+        doReturn(new RelaySupport.MediaParams("720p", 1, 0)).when(support)
+                .parseMediaParams("{\"model\":\"video-group\",\"duration\":0}");
+        when(routing.resolveOrderedCandidates(group, false, 1)).thenReturn(List.of(
+                new ModelGroupRoutingService.Candidate(member, "11")));
+        BusinessException invalid = new BusinessException(400, "duration 参数必须是正整数秒数",
+                "duration must be a positive integer number of seconds");
+        when(registry.transform(eq("agnes-video-v2.0"), anyString())).thenThrow(invalid);
+
+        ModelGroupFailoverExecutor executor = new ModelGroupFailoverExecutor(
+                support, groupService, routing, billing, mock(UsageLogService.class),
+                mock(VideoTaskRepository.class), mock(VideoTaskUsageLogService.class),
+                mock(PassthroughRelayService.class));
+        ReflectionTestUtils.setField(executor, "requestBodyTransformerRegistry", registry);
+        ReflectionTestUtils.setField(executor, "failureLogService", failureLogs);
+
+        assertThatThrownBy(() -> executor.relayVideoRequest("sk-test", "/v1/videos",
+                "{\"model\":\"video-group\",\"duration\":0}", "video-group", request()))
+                .isSameAs(invalid);
+        verify(registry, times(1)).transform(eq("agnes-video-v2.0"), anyString());
+        verify(support, never()).chargeMediaCredits(any(), any());
+        verify(failureLogs, never()).recordChannelFailure(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -365,7 +404,7 @@ class ModelGroupFailoverExecutorTest {
     }
 
     private void assertVisionRouting(RelayProtocol protocol, String path, String pathModel,
-                                     String body, boolean expectedHasImage) throws Exception {
+                                     String body, Boolean expectedHasImage) throws Exception {
         GroupFixture fixture = groupFixture("application/json",
                 "{\"usage\":{\"total_tokens\":0}}".getBytes(StandardCharsets.UTF_8), 200);
         UnifiedRelayRequest unified = new RelayProtocolAdapter(new ObjectMapper()).adaptRequest(
@@ -409,7 +448,7 @@ class ModelGroupFailoverExecutorTest {
 
         when(groupService.findByName("public-group")).thenReturn(Optional.of(group));
         doReturn(context).when(support).prepareGroupContext("client-key", "public-group");
-        when(routing.resolveOrderedCandidates(eq(group), eq(false), eq(1), anyBoolean())).thenReturn(List.of(
+        when(routing.resolveOrderedCandidates(eq(group), eq(false), eq(1), nullable(Boolean.class))).thenReturn(List.of(
                 new ModelGroupRoutingService.Candidate(member, "11")));
         when(router.selectChannel("11", Set.of(), 1)).thenReturn(channel);
         doReturn(false).when(support).isChannelRateLimited(channel);
@@ -444,7 +483,7 @@ class ModelGroupFailoverExecutorTest {
         when(groupService.findByName("public-group")).thenReturn(Optional.of(group));
         doReturn(new RelaySupport.RelayContext(token, null, 1, user, null))
                 .when(support).prepareGroupContext("client-key", "public-group");
-        when(routing.resolveOrderedCandidates(group, false, 1, false)).thenReturn(List.of(
+        when(routing.resolveOrderedCandidates(group, false, 1, null)).thenReturn(List.of(
                 new ModelGroupRoutingService.Candidate(first, "11"),
                 new ModelGroupRoutingService.Candidate(second, "12")));
         when(router.selectChannel("11", Set.of(), 1)).thenReturn(firstChannel);
