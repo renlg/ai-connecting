@@ -3,6 +3,7 @@ package com.aiconnecting.service;
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.ProtocolConverter;
 import com.aiconnecting.common.SseUtils;
+import com.aiconnecting.common.UpstreamErrorUtils;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Token;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -220,7 +221,7 @@ public class GeminiRelayService {
                 FailureLogContext.setChannelError(code, errorBody);
                 if (SseUtils.isEndUserRelayPath()) {
                     protocolAdapter.writeError(RelayProtocol.GEMINI, httpResponse, code,
-                            SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
+                            UpstreamErrorUtils.clientFacingMessage(code, errorBody), true);
                 } else {
                     httpResponse.setStatus(code);
                     httpResponse.setCharacterEncoding("UTF-8");
@@ -268,8 +269,11 @@ public class GeminiRelayService {
             conn = support.createSseConnection(channel, "/v1/chat/completions", openAiBody);
             int code = conn.getResponseCode();
             if (code != 200) {
+                String errorBody = conn.getErrorStream() != null
+                        ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
+                FailureLogContext.setChannelError(code, errorBody);
                 protocolAdapter.writeError(RelayProtocol.GEMINI, httpResponse, code,
-                        SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
+                        UpstreamErrorUtils.clientFacingMessage(code, errorBody), true);
                 return;
             }
             try (BufferedReader reader = new BufferedReader(
@@ -334,8 +338,11 @@ public class GeminiRelayService {
             conn = support.createSseConnection(channel, "/v1/messages", claudeBody);
             int code = conn.getResponseCode();
             if (code != 200) {
+                String errorBody = conn.getErrorStream() != null
+                        ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
+                FailureLogContext.setChannelError(code, errorBody);
                 protocolAdapter.writeError(RelayProtocol.GEMINI, httpResponse, code,
-                        SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
+                        UpstreamErrorUtils.clientFacingMessage(code, errorBody), true);
                 return;
             }
             try (BufferedReader reader = new BufferedReader(

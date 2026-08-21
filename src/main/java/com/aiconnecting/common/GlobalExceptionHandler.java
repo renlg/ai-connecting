@@ -39,7 +39,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<?> handleBusinessException(BusinessException e, HttpServletRequest request,
                                                      HttpServletResponse response) throws IOException {
         HttpStatusCode httpStatus = mapToHttpStatus(e.getCode());
-        // 终端用户中转接口（/v1/**）：真实上游错误隐藏细节，仅返回通用错误 + traceId；
+        // 终端用户中转接口（/v1/**）：除调用方可修正的 400 参数格式错误外，
+        // 真实上游错误隐藏细节，仅返回通用错误 + traceId；
         // 本地业务错误（模型不存在、Token 无效、余额不足等）返回具体错误信息；
         // 管理后台/自测接口（/api/**，如渠道测试）继续返回详细错误
         // SSE 请求在首字节前保留映射后的 HTTP 状态，并使用客户端协议的 error 事件。
@@ -48,17 +49,14 @@ public class GlobalExceptionHandler {
                 response.setStatus(httpStatus.value());
                 SseUtils.setSseHeaders(response);
             }
-            String message = e.isUpstreamResponse() || e.getEnglishMessage() == null
-                    ? SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE : e.getEnglishMessage();
+            String message = clientMessage(e);
             record(request, httpStatus.value(), message, channelError(e));
             protocolAdapter().writeSseError(protocol(request), response, httpStatus.value(), message,
                     e.isUpstreamResponse());
             return null;
         }
         if (isEndUserRelayPath(request)) {
-            String message = e.isUpstreamResponse() || e.getEnglishMessage() == null
-                    ? SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE
-                    : e.getEnglishMessage();
+            String message = clientMessage(e);
             record(request, httpStatus.value(), message, channelError(e));
             return ResponseEntity.status(httpStatus).body(protocolAdapter().errorEnvelope(
                     protocol(request), httpStatus.value(), message, e.isUpstreamResponse()));
@@ -213,6 +211,16 @@ public class GlobalExceptionHandler {
             return "Upstream API error: " + e.getCode() + " - " + e.getUpstreamResponseBody();
         }
         return e.getMessage();
+    }
+
+    private String clientMessage(BusinessException e) {
+        if (e.getEnglishMessage() == null || e.getEnglishMessage().isBlank()) {
+            return SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE;
+        }
+        if (!e.isUpstreamResponse() || UpstreamErrorUtils.isClientFixableUpstreamError(e)) {
+            return e.getEnglishMessage();
+        }
+        return SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE;
     }
 
     private void record(HttpServletRequest request, int status, String userError, String channelError) {

@@ -3,6 +3,7 @@ package com.aiconnecting.service;
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.ProtocolConverter;
 import com.aiconnecting.common.SseUtils;
+import com.aiconnecting.common.UpstreamErrorUtils;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Token;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -210,7 +211,7 @@ public class ClaudeRelayService {
                 log.warn("渠道 {} Claude 流式请求失败: {} - {}", channel.getId(), code, errorBody);
                 if (SseUtils.isEndUserRelayPath()) {
                     protocolAdapter.writeError(RelayProtocol.CLAUDE, httpResponse, code,
-                            SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
+                            UpstreamErrorUtils.clientFacingMessage(code, errorBody), true);
                 } else {
                     httpResponse.setStatus(code);
                     httpResponse.setCharacterEncoding("UTF-8");
@@ -260,9 +261,12 @@ public class ClaudeRelayService {
             int code = conn.getResponseCode();
             log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
             if (code != 200) {
+                String errorBody = conn.getErrorStream() != null
+                        ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
+                FailureLogContext.setChannelError(code, errorBody);
                 log.warn("渠道 {} OpenAI-as-Claude 流式请求失败: {}", channel.getId(), code);
                 protocolAdapter.writeError(RelayProtocol.CLAUDE, httpResponse, code,
-                        SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
+                        UpstreamErrorUtils.clientFacingMessage(code, errorBody), true);
                 return;
             }
             SseUtils.setSseHeaders(httpResponse);
@@ -387,8 +391,11 @@ public class ClaudeRelayService {
 
             int code = conn.getResponseCode();
             if (code != 200) {
+                String errorBody = conn.getErrorStream() != null
+                        ? new String(conn.getErrorStream().readAllBytes(), StandardCharsets.UTF_8) : "";
+                FailureLogContext.setChannelError(code, errorBody);
                 protocolAdapter.writeError(RelayProtocol.CLAUDE, httpResponse, code,
-                        SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
+                        UpstreamErrorUtils.clientFacingMessage(code, errorBody), true);
                 return;
             }
             SseUtils.setSseHeaders(httpResponse);

@@ -6,6 +6,7 @@ import com.aiconnecting.common.MediaDurationLimits;
 import com.aiconnecting.common.ProtocolConverter;
 import com.aiconnecting.common.RedisDistributedLock;
 import com.aiconnecting.common.SseUtils;
+import com.aiconnecting.common.UpstreamErrorUtils;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.VideoTask;
@@ -1022,7 +1023,7 @@ public class OpenAiRelayService {
                     if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                     if (SseUtils.isEndUserRelayPath()) {
                         protocolAdapter.writeError(RelayProtocol.OPENAI, httpResponse, code,
-                                SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE, true);
+                                UpstreamErrorUtils.clientFacingMessage(code, errorBody), true);
                     } else {
                         httpResponse.setStatus(code);
                         httpResponse.setCharacterEncoding("UTF-8");
