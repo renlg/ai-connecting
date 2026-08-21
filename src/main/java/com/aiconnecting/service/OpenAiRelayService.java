@@ -65,6 +65,9 @@ public class OpenAiRelayService {
     private RelayProtocolAdapter protocolAdapter;
 
     @Autowired(required = false)
+    private RequestBodyTransformerRegistry requestBodyTransformerRegistry;
+
+    @Autowired(required = false)
     private FailureLogService failureLogService;
 
     /**
@@ -174,7 +177,7 @@ public class OpenAiRelayService {
             result = forwardWithRetry(ctx, channel -> {
                 String upstreamBody = "image".equals(mediaType)
                         ? support.prepareImageRequestBody(channel, requestBody)
-                        : requestBody;
+                        : isVideo ? transformVideoRequestBody(model, requestBody) : requestBody;
                 return support.forwardRequest(channel, path, upstreamBody);
             });
         } catch (RuntimeException e) {
@@ -242,6 +245,12 @@ public class OpenAiRelayService {
         long duration = System.currentTimeMillis() - startTime;
         recordPrepaidUsageSafely(ctx.token(), result.channel(), model, charge, duration, httpRequest, path);
         return response;
+    }
+
+    private String transformVideoRequestBody(String model, String requestBody) {
+        return requestBodyTransformerRegistry != null
+                ? requestBodyTransformerRegistry.transform(model, requestBody)
+                : requestBody;
     }
 
     /**

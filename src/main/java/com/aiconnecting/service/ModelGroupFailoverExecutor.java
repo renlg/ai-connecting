@@ -56,6 +56,9 @@ public class ModelGroupFailoverExecutor {
     private RelayProtocolAdapter protocolAdapter;
 
     @Autowired(required = false)
+    private RequestBodyTransformerRegistry requestBodyTransformerRegistry;
+
+    @Autowired(required = false)
     private FailureLogService failureLogService;
 
     @Autowired(required = false)
@@ -1242,9 +1245,12 @@ public class ModelGroupFailoverExecutor {
             if (timeoutMs <= 0) break;
             RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
             try {
-                String upstreamBody = "image".equals(group.getType())
-                        ? support.prepareImageRequestBody(channel, rewriteModelField(requestBody, memberModel))
-                        : rewriteModelField(requestBody, memberModel);
+                String upstreamBody = rewriteModelField(requestBody, memberModel);
+                if ("image".equals(group.getType())) {
+                    upstreamBody = support.prepareImageRequestBody(channel, upstreamBody);
+                } else if ("video".equals(group.getType()) && requestBodyTransformerRegistry != null) {
+                    upstreamBody = requestBodyTransformerRegistry.transform(memberModel, upstreamBody);
+                }
                 String response = support.forwardRequest(channel, path, upstreamBody, timeoutMs);
 
                 return new MediaAttemptResult(response, channel, memberModel, startTime, charge);
