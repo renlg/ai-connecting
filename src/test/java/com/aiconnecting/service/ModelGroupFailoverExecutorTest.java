@@ -142,6 +142,14 @@ class ModelGroupFailoverExecutorTest {
     }
 
     @Test
+    void geminiCamelCaseInlineDataImageIsDetectedBeforeRouting() throws Exception {
+        assertVisionRouting(RelayProtocol.GEMINI, "/v1/models/public-group:generateContent", "public-group",
+                "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"describe\"},"
+                        + "{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":\"aW1hZ2U=\"}}]}]}",
+                true);
+    }
+
+    @Test
     void geminiFileDataImageIsDetectedBeforeRouting() throws Exception {
         assertVisionRouting(RelayProtocol.GEMINI, "/v1/models/public-group:generateContent", "public-group",
                 "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"fileData\":{"

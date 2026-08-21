@@ -1059,17 +1059,9 @@ public class RelaySupport {
             if (body.hasNonNull("n")) {
                 n = body.get("n").asInt(1);
             }
-            // duration 与 seconds 各自独立校验；同时出现时必须相等，防止用小值预扣、大值转发绕过按秒计费
-            Integer durationField = readPositiveIntSeconds(body, "duration");
-            Integer secondsField = readPositiveIntSeconds(body, "seconds");
-            if (durationField != null && secondsField != null && !durationField.equals(secondsField)) {
-                throw new BusinessException(400, "duration 与 seconds 参数值不一致，请只传其一或保持相等",
-                        "duration and seconds differ; provide only one or make them equal");
-            }
-            if (durationField != null) {
-                durationSeconds = durationField;
-            } else if (secondsField != null) {
-                durationSeconds = secondsField;
+            Integer requestedDurationSeconds = readDurationSeconds(body);
+            if (requestedDurationSeconds != null) {
+                durationSeconds = requestedDurationSeconds;
             }
         } catch (BusinessException e) {
             throw e;
@@ -1124,6 +1116,19 @@ public class RelaySupport {
                     field + " cannot exceed " + MediaDurationLimits.MAX_VIDEO_DURATION_SECONDS + " seconds");
         }
         return node.asInt();
+    }
+
+    /**
+     * duration 与 seconds 各自独立校验；同时出现时必须相等，防止用小值预扣、大值转发绕过按秒计费。
+     */
+    static Integer readDurationSeconds(JsonNode body) {
+        Integer durationField = readPositiveIntSeconds(body, "duration");
+        Integer secondsField = readPositiveIntSeconds(body, "seconds");
+        if (durationField != null && secondsField != null && !durationField.equals(secondsField)) {
+            throw new BusinessException(400, "duration 与 seconds 参数值不一致，请只传其一或保持相等",
+                    "duration and seconds differ; provide only one or make them equal");
+        }
+        return durationField != null ? durationField : secondsField;
     }
 
     private MediaCharge finishPrepareMediaCharge(RelayContext ctx, ModelConfig config,

@@ -35,16 +35,10 @@ public class AgnesVideoV20RequestBodyTransformer implements RequestBodyTransform
                 return requestBodyJson;
             }
 
-            Integer durationField = RelaySupport.readPositiveIntSeconds(objectBody, "duration");
-            Integer secondsField = RelaySupport.readPositiveIntSeconds(objectBody, "seconds");
-            if (durationField != null && secondsField != null && !durationField.equals(secondsField)) {
-                throw new BusinessException(400, "duration 与 seconds 参数值不一致，请只传其一或保持相等",
-                        "duration and seconds differ; provide only one or make them equal");
-            }
+            Integer durationSeconds = RelaySupport.readDurationSeconds(objectBody);
 
             objectBody.remove("duration");
             objectBody.remove("seconds");
-            Integer durationSeconds = durationField != null ? durationField : secondsField;
             if (durationSeconds != null && !objectBody.has("num_frames")) {
                 objectBody.put("num_frames", toNumFrames(durationSeconds));
             }

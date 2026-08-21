@@ -779,7 +779,8 @@ public class ModelGroupFailoverExecutor {
             for (JsonNode part : parts) {
                 String type = part.path("type").asText("");
                 if ("inline_data".equals(type) || "file_data".equals(type)
-                        || part.has("inline_data") || part.has("fileData") || part.has("file_data")) {
+                        || part.has("inlineData") || part.has("inline_data")
+                        || part.has("fileData") || part.has("file_data")) {
                     return true;
                 }
             }
@@ -1284,7 +1285,7 @@ public class ModelGroupFailoverExecutor {
             RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
             try {
                 String upstreamBody = "video".equals(group.getType()) && preparedVideoBodies != null
-                        ? preparedVideoBodies.get(memberModel)
+                        ? preparedVideoBodies.getOrDefault(memberModel, rewriteModelField(requestBody, memberModel))
                         : rewriteModelField(requestBody, memberModel);
                 if ("image".equals(group.getType())) {
                     upstreamBody = support.prepareImageRequestBody(channel, upstreamBody);
@@ -1310,7 +1311,11 @@ public class ModelGroupFailoverExecutor {
                         exhaustedGroupEnglishMessage(group.getName()));
     }
 
-    /** 视频转换在任何预扣或重试之前按平台成员模型预生成；同名成员只转换一次。 */
+    /**
+     * 视频转换在任何预扣或重试之前按平台成员模型预生成；同名成员只转换一次。
+     * 当前 Agnes 转换中可能抛错的校验均为请求级校验，与候选成员/渠道无关，因此任一成员转换失败
+     * 等价于整组请求无效，直接按整组 400 处理；若未来引入成员特有转换需改为逐成员降级。
+     */
     private Map<String, String> prepareVideoRequestBodies(
             List<ModelGroupRoutingService.Candidate> candidates, String requestBody) {
         Map<String, String> prepared = new LinkedHashMap<>();
