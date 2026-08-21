@@ -117,6 +117,44 @@ class ModelGroupFailoverExecutorTest {
     }
 
     @Test
+    void openAiToolResultNestedImageIsDetectedBeforeRouting() throws Exception {
+        assertVisionRouting(RelayProtocol.OPENAI, "/v1/chat/completions", null,
+                "{\"model\":\"public-group\",\"messages\":[{\"role\":\"tool\",\"content\":["
+                        + "{\"type\":\"tool_result\",\"content\":[{\"type\":\"image_url\","
+                        + "\"image_url\":{\"url\":\"https://example.test/image.png\"}}]}]}]}", true);
+    }
+
+    @Test
+    void claudeToolResultNestedImageIsDetectedBeforeRouting() throws Exception {
+        assertVisionRouting(RelayProtocol.CLAUDE, "/v1/messages", null,
+                "{\"model\":\"public-group\",\"messages\":[{\"role\":\"user\",\"content\":["
+                        + "{\"type\":\"tool_result\",\"tool_use_id\":\"tool-1\",\"content\":["
+                        + "{\"type\":\"image\",\"source\":{\"type\":\"base64\","
+                        + "\"media_type\":\"image/png\",\"data\":\"aW1hZ2U=\"}}]}]}]}", true);
+    }
+
+    @Test
+    void geminiInlineDataImageIsDetectedBeforeRouting() throws Exception {
+        assertVisionRouting(RelayProtocol.GEMINI, "/v1/models/public-group:generateContent", "public-group",
+                "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"describe\"},"
+                        + "{\"inline_data\":{\"mime_type\":\"image/png\",\"data\":\"aW1hZ2U=\"}}]}]}",
+                true);
+    }
+
+    @Test
+    void geminiFileDataImageIsDetectedBeforeRouting() throws Exception {
+        assertVisionRouting(RelayProtocol.GEMINI, "/v1/models/public-group:generateContent", "public-group",
+                "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"fileData\":{"
+                        + "\"mimeType\":\"image/jpeg\",\"fileUri\":\"gs://bucket/image.jpg\"}}]}]}", true);
+    }
+
+    @Test
+    void pureTextRequestStillPrefersNonVisionMembers() throws Exception {
+        assertVisionRouting(RelayProtocol.GEMINI, "/v1/models/public-group:generateContent", "public-group",
+                "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]}]}", false);
+    }
+
+    @Test
     void customMemberStreamsSseBytesIncludingDoneVerbatimWithoutInjectingOptions() throws Exception {
         byte[] responseBytes = ("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
                 + "data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n"
@@ -324,6 +362,20 @@ class ModelGroupFailoverExecutorTest {
         request.setContentType("application/json");
         request.addHeader("Authorization", "Bearer client-key");
         return request;
+    }
+
+    private void assertVisionRouting(RelayProtocol protocol, String path, String pathModel,
+                                     String body, boolean expectedHasImage) throws Exception {
+        GroupFixture fixture = groupFixture("application/json",
+                "{\"usage\":{\"total_tokens\":0}}".getBytes(StandardCharsets.UTF_8), 200);
+        UnifiedRelayRequest unified = new RelayProtocolAdapter(new ObjectMapper()).adaptRequest(
+                protocol, path, body, pathModel);
+
+        fixture.executor.relayRequest(
+                "client-key", unified, request(), new MockHttpServletResponse());
+
+        verify(fixture.routing).resolveOrderedCandidates(
+                fixture.group, false, 1, expectedHasImage);
     }
 
     private GroupFixture groupFixture(String contentType, byte[] responseBytes, int status) throws Exception {

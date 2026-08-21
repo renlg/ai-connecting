@@ -264,7 +264,7 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
         checkGroupLevel(group, ctx.userLevel(), isAdmin);
-        boolean requestHasImage = containsOpenAiImagePart(request.content());
+        boolean requestHasImage = containsImagePart(request.protocol(), request.content());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
                 group, isAdmin, ctx.userLevel(), requestHasImage);
         if (candidates.isEmpty()) {
@@ -534,7 +534,7 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
         checkGroupLevel(group, ctx.userLevel(), isAdmin);
-        boolean requestHasImage = containsOpenAiImagePart(request.content());
+        boolean requestHasImage = containsImagePart(request.protocol(), request.content());
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
                 group, isAdmin, ctx.userLevel(), requestHasImage);
         if (candidates.isEmpty()) {
@@ -731,19 +731,53 @@ public class ModelGroupFailoverExecutor {
 
     private record GroupStreamResult(RelayServiceUtils.UsageInfo usage, boolean bytesWritten) {}
 
-    /** UnifiedRelayRequest.content 已由协议适配器在读取 body 时解析好，这里只遍历该缓存树。 */
-    private boolean containsOpenAiImagePart(JsonNode messages) {
-        if (messages == null || !messages.isArray()) {
+    /** UnifiedRelayRequest.content 已由协议适配器按协议提取，这里只遍历该缓存树。 */
+    private boolean containsImagePart(RelayProtocol protocol, JsonNode content) {
+        if (protocol == null || content == null || !content.isArray()) {
             return false;
         }
+        if (protocol == RelayProtocol.GEMINI) {
+            return containsGeminiImagePart(content);
+        }
+        return containsMessageImagePart(protocol, content);
+    }
+
+    private boolean containsMessageImagePart(RelayProtocol protocol, JsonNode messages) {
         for (JsonNode message : messages) {
-            JsonNode content = message.get("content");
-            if (content == null || !content.isArray()) {
+            JsonNode parts = message.get("content");
+            if (parts != null && parts.isArray() && containsMessageImageParts(protocol, parts)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsMessageImageParts(RelayProtocol protocol, JsonNode parts) {
+        for (JsonNode part : parts) {
+            String type = part.path("type").asText("");
+            if ((protocol == RelayProtocol.OPENAI && "image_url".equals(type))
+                    || (protocol == RelayProtocol.CLAUDE && "image".equals(type))) {
+                return true;
+            }
+            JsonNode nestedContent = part.get("content");
+            if ("tool_result".equals(type) && nestedContent != null && nestedContent.isArray()
+                    && containsMessageImageParts(protocol, nestedContent)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsGeminiImagePart(JsonNode contents) {
+        for (JsonNode content : contents) {
+            JsonNode parts = content.get("parts");
+            if (parts == null || !parts.isArray()) {
                 continue;
             }
-            for (JsonNode part : content) {
+            for (JsonNode part : parts) {
                 String type = part.path("type").asText("");
-                if ("image_url".equals(type) || "image".equals(type)) {
+                if ("inline_data".equals(type) || "file_data".equals(type)
+                        || part.has("inline_data") || part.has("fileData") || part.has("file_data")) {
                     return true;
                 }
             }
