@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.SseUtils;
+import com.aiconnecting.common.UpstreamErrorUtils;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelGroup;
 import com.aiconnecting.entity.Token;
@@ -191,16 +192,20 @@ public class ModelGroupFailoverExecutor {
     /** 包裹重试耗尽后的汇总错误，保留原始异常的 upstreamResponse 标记，避免真实上游错误被误判为本地错误而向终端用户泄露细节 */
     private BusinessException wrapFailure(BusinessException cause, String message) {
         boolean upstream = cause.isUpstreamResponse() || FailureClassifier.isSwitchable(cause);
-        return new BusinessException(cause.getCode(), message,
-                "All members of the model group are unavailable, please try again later",
+        boolean clientFixable = UpstreamErrorUtils.isClientFixableUpstreamError(cause);
+        String clientFacingMessage = UpstreamErrorUtils.clientFacingMessage(
+                cause.getCode(), cause.getUpstreamResponseBody());
+        return new BusinessException(cause.getCode(), clientFixable ? clientFacingMessage : message,
+                clientFixable ? clientFacingMessage
+                        : "All members of the model group are unavailable, please try again later",
                 cause, cause.getUpstreamResponseBody(),
                 cause.getRetryAfterSeconds(), upstream);
     }
 
     /**
      * 成员切换耗尽后的终端用户可见消息：绝不能包含成员模型名 / 渠道 id（这些是内部实现细节，
-     * 只应出现在日志里），因此固定为不带 lastError 细节的通用文案；真实的失败细节交给
-     * 调用处的 log.error/log.warn 记录
+     * 只应出现在日志里），因此固定为不带 lastError 细节的通用文案；仅由
+     * {@link UpstreamErrorUtils} 判定为客户端可修正的参数错误可在调用处透传上游 message
      */
     private String exhaustedGroupMessage(String groupName) {
         return "模型组 " + groupName + " 所有成员均不可用，请稍后重试";
@@ -549,6 +554,7 @@ public class ModelGroupFailoverExecutor {
         long deadline = startTime + WALL_CLOCK_BUDGET_MS;
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
         String lastError = null;
+        String lastErrorBody = null;
         int lastStatus = 502;
         boolean lastErrorUpstream = false;
         int attempts = 0;
@@ -567,6 +573,7 @@ public class ModelGroupFailoverExecutor {
                 channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), ctx.userLevel());
             } catch (BusinessException e) {
                 lastError = e.getMessage();
+                lastErrorBody = null;
                 lastErrorUpstream = false;
                 continue;
             }
@@ -574,6 +581,7 @@ public class ModelGroupFailoverExecutor {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", groupName, candidate.modelConfig().getName(), channel.getId());
                 if (lastError == null) {
                     lastError = "该成员暂不可用";
+                    lastErrorBody = null;
                     lastErrorUpstream = false;
                 }
                 continue;
@@ -604,10 +612,12 @@ public class ModelGroupFailoverExecutor {
                         return;
                     }
                     lastError = "上游响应在首字节前中断";
+                    lastErrorBody = null;
                     lastErrorUpstream = true;
                     continue;
                 } catch (BusinessException memberError) {
                     lastError = memberError.getMessage();
+                    lastErrorBody = memberError.getUpstreamResponseBody();
                     lastStatus = memberError.getCode();
                     lastErrorUpstream = memberError.isUpstreamResponse();
                     log.warn("模型组 {} 透传成员 {} (渠道 {}) 请求失败 (尝试 {}/{}): {}",
@@ -617,6 +627,7 @@ public class ModelGroupFailoverExecutor {
                     continue;
                 } catch (IOException connectionFailure) {
                     lastError = connectionFailure.getMessage();
+                    lastErrorBody = null;
                     lastErrorUpstream = true;
                     BusinessException connError = new BusinessException(502, "渠道请求失败: " + connectionFailure.getMessage(),
                             "Channel request failed: " + connectionFailure.getMessage(), connectionFailure);
@@ -645,6 +656,7 @@ public class ModelGroupFailoverExecutor {
                         modifiedBody, attemptTimeoutMs);
             } catch (IOException e) {
                 lastError = e.getMessage();
+                lastErrorBody = null;
                 lastErrorUpstream = true;
                 log.warn("模型组 {} 成员 {} (渠道 {}) 建立上游连接失败: {}",
                         groupName, memberModel, channel.getId(), e.getMessage());
@@ -661,6 +673,7 @@ public class ModelGroupFailoverExecutor {
                             ? new String(conn.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8) : "";
                     FailureLogContext.setChannelError(code, errorBody);
                     lastError = "HTTP " + code + " - " + errorBody;
+                    lastErrorBody = errorBody;
                     lastStatus = code;
                     lastErrorUpstream = true;
                     BusinessException upstreamError = upstreamFailure(code, errorBody,
@@ -682,6 +695,7 @@ public class ModelGroupFailoverExecutor {
                 if (!streamResult.bytesWritten()) {
                     // 上游返回 200 但立即 EOF，客户端从未收到任何数据：视为失败，仍可安全切换成员
                     lastError = "上游返回空响应（HTTP 200 但无数据流）";
+                    lastErrorBody = null;
                     lastErrorUpstream = true;
                     recordFailure(channel, modelConfigId, new BusinessException(502, lastError,
                             "Upstream returned an empty response (HTTP 200 with no data stream)",
@@ -698,6 +712,7 @@ public class ModelGroupFailoverExecutor {
             } catch (RelaySupport.SseStreamingException e) {
                 conn.disconnect();
                 lastError = e.getMessage();
+                lastErrorBody = null;
                 lastErrorUpstream = true;
                 log.error("模型组 {} 成员 {} (渠道 {}) 流式请求异常: {}", groupName, memberModel, channel.getId(), e.getMessage());
                 recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(),
@@ -711,6 +726,7 @@ public class ModelGroupFailoverExecutor {
             } catch (Exception e) {
                 conn.disconnect();
                 lastError = e.getMessage();
+                lastErrorBody = null;
                 lastErrorUpstream = true;
                 log.error("模型组 {} 成员 {} (渠道 {}) 流式请求异常: {}", groupName, memberModel, channel.getId(), e.getMessage());
                 recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(),
@@ -725,9 +741,18 @@ public class ModelGroupFailoverExecutor {
         }
         if (!httpResponse.isCommitted()) {
             log.error("模型组 {} 流式请求所有成员均不可用，最后错误: {}", groupName, lastError);
+            boolean clientFixable = lastStatus >= 400 && lastStatus < 500
+                    && UpstreamErrorUtils.isClientFixableUpstreamError(lastStatus, lastErrorBody);
+            String clientMessage;
+            if (clientFixable) {
+                String upstreamMessage = UpstreamErrorUtils.clientFacingMessage(lastStatus, lastErrorBody);
+                clientMessage = SseUtils.clientErrorMessage(upstreamMessage, upstreamMessage, false);
+            } else {
+                clientMessage = SseUtils.clientErrorMessage(exhaustedGroupMessage(groupName),
+                        exhaustedGroupEnglishMessage(groupName), lastErrorUpstream);
+            }
             adapter().writeError(request.protocol(), httpResponse, lastStatus,
-                    SseUtils.clientErrorMessage(exhaustedGroupMessage(groupName),
-                            exhaustedGroupEnglishMessage(groupName), lastErrorUpstream), lastErrorUpstream);
+                    clientMessage, lastErrorUpstream);
         }
     }
 
