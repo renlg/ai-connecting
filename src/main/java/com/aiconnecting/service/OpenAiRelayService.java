@@ -69,6 +69,9 @@ public class OpenAiRelayService {
     private RequestBodyTransformerRegistry requestBodyTransformerRegistry;
 
     @Autowired(required = false)
+    private ResponseTransformerRegistry responseTransformerRegistry;
+
+    @Autowired(required = false)
     private FailureLogService failureLogService;
 
     /**
@@ -241,7 +244,11 @@ public class OpenAiRelayService {
             int actualCount = countReturnedImages(response);
             BigDecimal finalCost = support.settleImageCharge(ctx, charge, requestBody, actualCount);
             charge = new RelaySupport.MediaCharge(finalCost, charge.deducted());
-            // 计费按上游原始 data 数组长度结算（已在上一行完成），转存 OSS 仅替换地址字段，不影响计费
+            // 计费按上游原始 data 数组长度结算（已在上一行完成），转存 OSS 仅替换地址字段，不影响计费；
+            // 先应用响应改写策略器（如 xAI imgen 图片地址反代），再由 OSS 转存兜底
+            response = responseTransformerRegistry != null
+                    ? responseTransformerRegistry.transform(model, response)
+                    : response;
             response = ossMediaStorageService.rewriteImageResponse(response);
         }
         long duration = System.currentTimeMillis() - startTime;
