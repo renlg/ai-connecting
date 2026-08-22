@@ -54,6 +54,9 @@ public class ChannelService {
     @Autowired(required = false)
     private ModelConfigService modelConfigService;
 
+    @Autowired(required = false)
+    private ResponseTransformerRegistry responseTransformerRegistry;
+
     private OkHttpClient httpClient;
     private OkHttpClient streamHttpClient;
     private OkHttpClient videoDownloadHttpClient;
@@ -522,7 +525,13 @@ public class ChannelService {
                         }
                     }
                     if (response.isSuccessful()) {
-                        result.put("data", parseTestJsonOrText(responseBody));
+                        String parsedBody = responseBody;
+                        // 图片测试直连上游返回原始 URL；应用响应改写策略器（如 xAI imgen 图片地址反代），
+                        // 保证渠道测试按钮展示的图片地址与中转路径一致可访问
+                        if ("image".equals(modelType) && responseTransformerRegistry != null) {
+                            parsedBody = responseTransformerRegistry.transform(model, responseBody);
+                        }
+                        result.put("data", parseTestJsonOrText(parsedBody));
                     } else {
                         result.put("error", abbreviateTestError(responseBody));
                     }
