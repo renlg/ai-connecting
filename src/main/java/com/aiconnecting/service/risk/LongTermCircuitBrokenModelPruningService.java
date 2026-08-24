@@ -21,13 +21,15 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
  * Removes model-group members whose model is unavailable on every enabled channel because each
- * channel has a long-term circuit breaker. Model configurations and channels are left untouched.
+ * channel has a long-term circuit breaker. If no enabled channel remains bound after pruning, the
+ * model configuration is disabled; channels and billing/usage data are left untouched.
  */
 @Service
 @RequiredArgsConstructor
@@ -40,6 +42,8 @@ public class LongTermCircuitBrokenModelPruningService {
     private static final long LOCK_TTL_SECONDS = 300;
     private static final String PRUNING_REASON =
             "all enabled channels have ACTIVE circuit breakers lasting at least 360 days";
+    private static final String DISABLING_REASON =
+            "long-term circuit-broken model has no bound enabled channel after group pruning";
 
     private final ModelGroupMemberRepository modelGroupMemberRepository;
     private final ModelGroupRepository modelGroupRepository;
@@ -67,15 +71,26 @@ public class LongTermCircuitBrokenModelPruningService {
     }
 
     void pruneNow() {
-        Integer removed = transactionTemplate.execute(status -> pruneEligibleMembers(LocalDateTime.now()));
+        List<DisabledModel> disabledModels = new ArrayList<>();
+        Integer removed = transactionTemplate.execute(
+                status -> pruneEligibleMembers(LocalDateTime.now(), disabledModels));
         if (removed != null && removed > 0) {
-            // Publish after the pruning transaction has committed so other instances cannot reload stale rows.
+            // Publish after the pruning/disable transaction has committed so other instances cannot reload stale rows.
             cacheInvalidationService.publish(CacheInvalidationService.MODEL_CONFIG);
-            log.info("长期全渠道熔断模型剔除完成: removedMembers={}", removed);
+            for (DisabledModel model : disabledModels) {
+                log.info("长期熔断模型自动禁用: modelId={}, model={}, reason={}",
+                        model.id(), model.name(), DISABLING_REASON);
+            }
+            log.info("长期全渠道熔断模型剔除完成: removedMembers={}, disabledModels={}",
+                    removed, disabledModels.size());
         }
     }
 
     int pruneEligibleMembers(LocalDateTime now) {
+        return pruneEligibleMembers(now, new ArrayList<>());
+    }
+
+    private int pruneEligibleMembers(LocalDateTime now, List<DisabledModel> disabledModels) {
         List<ModelGroupMember> allMembers = modelGroupMemberRepository.findAll();
         if (allMembers.isEmpty()) {
             return 0;
@@ -107,6 +122,16 @@ public class LongTermCircuitBrokenModelPruningService {
             }
             modelGroupMemberRepository.deleteAllInBatch(modelMembers);
             removedMembers += modelMembers.size();
+
+            // Re-check after removing every membership. A model that has lost all currently enabled
+            // channel bindings is disabled, while the channel rows and all billing/usage data remain intact.
+            List<Channel> remainingEnabledChannels = channelRepository
+                    .findActiveChannelsByModel("%," + model.getId() + ",%");
+            if (remainingEnabledChannels.isEmpty() && !Integer.valueOf(0).equals(model.getStatus())) {
+                model.setStatus(0);
+                modelConfigRepository.save(model);
+                disabledModels.add(new DisabledModel(model.getId(), model.getName()));
+            }
         }
         return removedMembers;
     }
@@ -128,5 +153,8 @@ public class LongTermCircuitBrokenModelPruningService {
         }
         return Duration.between(record.getTriggeredAt(), record.getExpiresAt()).getSeconds()
                 >= LONG_TERM_BREAKER_SECONDS;
+    }
+
+    private record DisabledModel(Long id, String name) {
     }
 }
