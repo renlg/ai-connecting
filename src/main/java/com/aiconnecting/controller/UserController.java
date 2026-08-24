@@ -52,8 +52,4 @@ public class UserController {
         return ApiResponse.success(result);
     }
 
-    @GetMapping("/invite-code")
-    public ApiResponse<Map<String, Object>> getInviteCode(@AuthenticationPrincipal User user) {
-        return ApiResponse.success(userService.getInviteCodeInfo(user.getId()));
-    }
 }

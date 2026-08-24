@@ -26,6 +26,20 @@ CREATE TABLE IF NOT EXISTS users (
     UNIQUE KEY uk_users_invite_code (invite_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- 管理员统一生成和管理的注册邀请码
+CREATE TABLE IF NOT EXISTS invite_codes (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    code VARCHAR(16) NOT NULL,
+    max_uses INT NOT NULL,
+    used_count INT NOT NULL DEFAULT 0,
+    expiry_date DATETIME(6),
+    created_by BIGINT NOT NULL,
+    status INT NOT NULL DEFAULT 1,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6),
+    UNIQUE KEY uk_invite_codes_code (code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- OAuth2 client registry. client_secret is plaintext for the current internal-only integration.
 CREATE TABLE IF NOT EXISTS oauth_clients (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

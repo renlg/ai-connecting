@@ -33,7 +33,6 @@ export const register = (data) => api.post('/api/auth/register', data);
 export const getProfile = () => api.get('/api/user/profile');
 export const updateProfile = (data) => api.put('/api/user/profile', data);
 export const changePassword = (data) => api.put('/api/user/password', data);
-export const getInviteCode = () => api.get('/api/user/invite-code');
 
 // Channels (Admin)
 export const getChannels = (params) => api.get('/api/admin/channels', { params });
@@ -164,6 +163,12 @@ export const getCoupons = () => api.get('/api/admin/coupons');
 export const generateCoupon = (data) => api.post('/api/admin/coupons', data);
 export const updateCouponStatus = (id, status) => api.put(`/api/admin/coupons/${id}/status`, { status });
 export const getCouponRedemptions = (id) => api.get(`/api/admin/coupons/${id}/redemptions`);
+
+// Invitation Codes (Admin)
+export const getInviteCodes = () => api.get('/api/admin/invite-codes');
+export const generateInviteCodes = (data) => api.post('/api/admin/invite-codes', data);
+export const updateInviteCodeStatus = (id, status) => api.put(`/api/admin/invite-codes/${id}/status`, { status });
+export const deleteInviteCode = (id) => api.delete(`/api/admin/invite-codes/${id}`);
 
 // Risk Management - Rate Limit Policies
 export const getRiskPolicies = () => api.get('/api/admin/risk/policies');

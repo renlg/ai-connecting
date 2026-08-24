@@ -1,15 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom'
-import { Layout, Menu, Avatar, Dropdown, Space, theme, Modal, Input, message, Alert, Typography, Button, Drawer, Grid } from 'antd'
+import { Layout, Menu, Avatar, Dropdown, Space, theme, Modal, Input, message, Button, Drawer, Grid } from 'antd'
 import {
   DashboardOutlined, ApiOutlined, KeyOutlined,
   UserOutlined, TeamOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
-  RobotOutlined, GiftOutlined, CopyOutlined, BugOutlined, ReadOutlined, MenuOutlined, DollarOutlined,
+  RobotOutlined, GiftOutlined, BugOutlined, ReadOutlined, MenuOutlined, DollarOutlined,
   SafetyOutlined, AlertOutlined, StopOutlined, ThunderboltOutlined
 } from '@ant-design/icons'
-import { redeemCoupon, getLatestAnnouncements, getInviteCode } from '../api'
-
-const { Text } = Typography
+import { redeemCoupon, getLatestAnnouncements } from '../api'
 
 const { Header, Sider, Content } = Layout
 
@@ -22,11 +20,6 @@ export default function AppLayout() {
   const [announcements, setAnnouncements] = useState([])
   const [announcementModalOpen, setAnnouncementModalOpen] = useState(false)
   const [selectedAnnouncement, setSelectedAnnouncement] = useState(null)
-  const [inviteCodeModalOpen, setInviteCodeModalOpen] = useState(false)
-  const [inviteCode, setInviteCode] = useState('')
-  const [inviteCodeUnlimited, setInviteCodeUnlimited] = useState(false)
-  const [inviteCodeUsed, setInviteCodeUsed] = useState(false)
-  const [inviteCodeLoading, setInviteCodeLoading] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
   const { token: themeToken } = theme.useToken()
@@ -70,6 +63,7 @@ export default function AppLayout() {
     { key: '/tokens', icon: <KeyOutlined />, label: 'Token 管理' },
     ...(isAdmin ? [
       { key: '/users', icon: <TeamOutlined />, label: '用户管理' },
+      { key: '/invite-codes', icon: <KeyOutlined />, label: '邀请码管理' },
       { key: '/coupons', icon: <GiftOutlined />, label: '积分券管理' },
       { key: '/announcements', icon: <DashboardOutlined />, label: '公告管理' },
       {
@@ -94,7 +88,6 @@ export default function AppLayout() {
 
   const userMenu = {
     items: [
-      { key: 'invite', icon: <KeyOutlined />, label: '我的邀请码', onClick: () => showInviteCode() },
       { key: 'redeem', icon: <GiftOutlined />, label: '积分兑换', onClick: () => setRedeemOpen(true) },
       { key: 'profile', icon: <UserOutlined />, label: '个人中心', onClick: () => navigate('/profile') },
       { type: 'divider' },
@@ -130,30 +123,6 @@ export default function AppLayout() {
       message.error(err?.message || '兑换失败')
     } finally {
       setRedeemLoading(false)
-    }
-  }
-
-  const showInviteCode = async () => {
-    setInviteCodeModalOpen(true)
-    setInviteCodeLoading(true)
-    try {
-      const res = await getInviteCode()
-      if (res.code === 200) {
-        setInviteCode(res.data.inviteCode)
-        setInviteCodeUnlimited(Boolean(res.data.unlimited))
-        setInviteCodeUsed(Boolean(res.data.used))
-      }
-    } catch (err) {
-      message.error(err?.message || '获取邀请码失败')
-    } finally {
-      setInviteCodeLoading(false)
-    }
-  }
-
-  const copyInviteCode = () => {
-    if (inviteCode) {
-      navigator.clipboard.writeText(inviteCode)
-      message.success('邀请码已复制到剪贴板')
     }
   }
 
@@ -307,42 +276,6 @@ export default function AppLayout() {
             </div>
           </div>
         )}
-      </Modal>
-      <Modal
-        title="我的邀请码"
-        open={inviteCodeModalOpen}
-        onCancel={() => setInviteCodeModalOpen(false)}
-        footer={null}
-        width={400}
-      >
-        <div style={{ textAlign: 'center', padding: '20px 0' }}>
-          <p style={{ marginBottom: 16, color: '#666' }}>
-            {inviteCodeUnlimited ? '管理员邀请码，可无限次使用' : '普通邀请码，仅限成功邀请 1 人'}
-          </p>
-          {inviteCodeLoading ? (
-            <p>加载中...</p>
-          ) : (
-            <div style={{
-              background: '#f5f5f5',
-              padding: '16px 24px',
-              borderRadius: 8,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 12,
-            }}>
-              <Text strong style={{ fontSize: 24, letterSpacing: 2 }}>{inviteCode}</Text>
-              {!inviteCodeUsed && (
-                <CopyOutlined
-                  style={{ fontSize: 20, cursor: 'pointer', color: '#1890ff' }}
-                  onClick={copyInviteCode}
-                />
-              )}
-            </div>
-          )}
-          {!inviteCodeLoading && inviteCodeUsed && (
-            <Alert style={{ marginTop: 16 }} type="info" showIcon message="该邀请码已使用" />
-          )}
-        </div>
       </Modal>
     </Layout>
   )

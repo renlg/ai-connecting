@@ -2,7 +2,6 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
-import com.aiconnecting.common.RedisDistributedLock;
 import com.aiconnecting.dto.RegisterRequest;
 import com.aiconnecting.entity.User;
 import com.aiconnecting.repository.UserRepository;
@@ -11,6 +10,7 @@ import com.aiconnecting.security.JwtUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -30,7 +30,7 @@ class UserServiceTest {
     @Mock private JwtUtils jwtUtils;
     @Mock private JwtAuthenticationFilter jwtAuthenticationFilter;
     @Mock private CacheInvalidationService cacheInvalidationService;
-    @Mock private RedisDistributedLock distributedLock;
+    @Mock private InviteCodeService inviteCodeService;
 
     @InjectMocks private UserService userService;
 
@@ -38,84 +38,54 @@ class UserServiceTest {
     void setUp() {
         lenient().when(passwordEncoder.encode(any())).thenReturn("encoded");
         lenient().when(userRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        lenient().when(userRepository.existsByUsername(any())).thenReturn(false);
     }
 
     @Test
-    void adminInviteCodeCanBeUsedUnlimitedTimesRegardlessOfLevel() {
-        User admin = inviter(1L, 2, "admin", "ADMIN123");
-        when(userRepository.findByInviteCode("ADMIN123")).thenReturn(Optional.of(admin));
-
+    void registerConsumesAdminManagedInviteCode() {
         userService.register(request("first", "ADMIN123"));
-        userService.register(request("second", "ADMIN123"));
 
-        assertFalse(Boolean.TRUE.equals(admin.getInviteCodeUsed()));
-        verify(userRepository, times(2)).findByInviteCode("ADMIN123");
-        verify(userRepository, never()).consumeInviteCode(any());
+        verify(inviteCodeService).consume("ADMIN123");
+        verify(userRepository).save(any(User.class));
     }
 
     @Test
-    void regularInviteCodeIsConsumedAfterFirstSuccessfulRegistration() {
-        User regular = inviter(2L, 1, "USER1234");
-        when(userRepository.findByInviteCode("USER1234")).thenReturn(Optional.of(regular));
-        when(userRepository.consumeInviteCode(2L)).thenReturn(1, 0);
+    void registerSavesNewUserWithoutPersonalInviteCode() {
+        userService.register(request("newuser", "CODE123"));
 
-        userService.register(request("first", "USER1234"));
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        assertNull(captor.getValue().getInviteCode());
+    }
+
+    @Test
+    void registerPropagatesConsumeFailure() {
+        doThrow(new BusinessException("邀请码使用次数已耗尽", "Invitation code usage limit has been reached"))
+                .when(inviteCodeService).consume("CODE123");
 
         BusinessException exception = assertThrows(BusinessException.class,
-                () -> userService.register(request("second", "USER1234")));
-        assertEquals("邀请码已被使用", exception.getMessage());
-        verify(userRepository, times(2)).consumeInviteCode(2L);
+                () -> userService.register(request("newuser", "CODE123")));
+
+        assertEquals("邀请码使用次数已耗尽", exception.getMessage());
+        verify(userRepository, never()).save(any());
     }
 
     @Test
-    void consumedFlagDoesNotRestrictAdminInviteCode() {
-        User admin = inviter(1L, 2, "admin", "ADMIN123");
-        admin.setInviteCodeUsed(true);
-        when(userRepository.findByInviteCode("ADMIN123")).thenReturn(Optional.of(admin));
+    void registerPassesBlankInviteCodeToConsume() {
+        userService.register(request("newuser", ""));
 
-        assertDoesNotThrow(() -> userService.register(request("newuser", "ADMIN123")));
+        verify(inviteCodeService).consume("");
     }
 
     @Test
-    void levelFiveRegularUserInviteIsStillSingleUse() {
-        User regular = inviter(3L, 5, "user", "LEVEL5");
-        when(userRepository.findByInviteCode("LEVEL5")).thenReturn(Optional.of(regular));
-        when(userRepository.consumeInviteCode(3L)).thenReturn(1);
+    void registerRejectsDuplicateUsernameBeforeConsumingCode() {
+        when(userRepository.existsByUsername("taken")).thenReturn(true);
 
-        userService.register(request("first", "LEVEL5"));
+        BusinessException exception = assertThrows(BusinessException.class,
+                () -> userService.register(request("taken", "CODE123")));
 
-        verify(userRepository).consumeInviteCode(3L);
-    }
-
-    @Test
-    void disabledInviterIsRejectedBeforeConsumedFlag() {
-        User disabled = inviter(4L, 1, "user", "DISABLED");
-        disabled.setStatus(0);
-        disabled.setInviteCodeUsed(true);
-        when(userRepository.findByInviteCode("DISABLED")).thenReturn(Optional.of(disabled));
-
-        BusinessException error = assertThrows(BusinessException.class,
-                () -> userService.register(request("newuser", "DISABLED")));
-
-        assertEquals("邀请码无效", error.getMessage());
-        verify(userRepository, never()).consumeInviteCode(any());
-    }
-
-    private User inviter(Long id, int level, String code) {
-        return inviter(id, level, level == 5 ? "admin" : "user", code);
-    }
-
-    private User inviter(Long id, int level, String role, String code) {
-        return User.builder()
-                .id(id)
-                .username("inviter" + id)
-                .password("encoded")
-                .role(role)
-                .status(1)
-                .level(level)
-                .inviteCode(code)
-                .inviteCodeUsed(false)
-                .build();
+        assertEquals("用户名已存在", exception.getMessage());
+        verify(inviteCodeService, never()).consume(any());
     }
 
     private RegisterRequest request(String username, String code) {

@@ -10,6 +10,7 @@ import Users from './pages/Users'
 import Models from './pages/Models'
 import ModelGroups from './pages/ModelGroups'
 import Coupons from './pages/Coupons'
+import InviteCodes from './pages/InviteCodes'
 import Announcements from './pages/Announcements'
 import FailureLogs from './pages/FailureLogs'
 import ChannelFailureLogs from './pages/ChannelFailureLogs'
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="models" element={<Models />} />
           <Route path="model-groups" element={<ModelGroups />} />
           <Route path="coupons" element={<Coupons />} />
+          <Route path="invite-codes" element={<AdminRoute><InviteCodes /></AdminRoute>} />
           <Route path="announcements" element={<Announcements />} />
           <Route path="failure-logs" element={<Navigate to="/failure-logs/request" replace />} />
           <Route path="failure-logs/channel" element={<ChannelFailureLogs />} />

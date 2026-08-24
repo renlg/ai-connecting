@@ -18,6 +18,7 @@ import com.aiconnecting.service.TokenService;
 import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.OperationLogService;
 import com.aiconnecting.service.FailureLogService;
+import com.aiconnecting.service.InviteCodeService;
 import com.aiconnecting.repository.ChannelFailureRecordRepository;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
@@ -71,6 +72,7 @@ class AdminControllerTest {
     @MockBean private StatsAggregationService statsAggregationService;
     @MockBean private FailureLogService failureLogService;
     @MockBean private ChannelFailureRecordRepository channelFailureRecordRepository;
+    @MockBean private InviteCodeService inviteCodeService;
     @MockBean private DuplicateSubmitGuard duplicateSubmitGuard;
 
     private User adminUser;

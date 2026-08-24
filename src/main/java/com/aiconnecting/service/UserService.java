@@ -2,7 +2,6 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
-import com.aiconnecting.common.RedisDistributedLock;
 import com.aiconnecting.dto.LoginRequest;
 import com.aiconnecting.dto.LoginResponse;
 import com.aiconnecting.dto.RegisterRequest;
@@ -21,10 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.annotation.PostConstruct;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import java.math.BigDecimal;
-import java.security.SecureRandom;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,18 +37,13 @@ public class UserService {
     private final JwtUtils jwtUtils;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final CacheInvalidationService cacheInvalidationService;
-    private final RedisDistributedLock distributedLock;
+    private final InviteCodeService inviteCodeService;
 
     @Autowired(required = false)
     private RedisTemplate<String, Long> redisTemplate;
 
     private static final int LOGIN_MAX_FAIL_ATTEMPTS = 5;
     private static final long LOGIN_FAIL_LOCK_SECONDS = 3600;
-
-    /** 启动时补齐邀请码任务的分布式锁 key */
-    private static final String INVITE_CODE_LOCK_KEY = "job:ensureInviteCode";
-    /** 锁 TTL：5 分钟，覆盖启动时全表扫描 + 逐个补齐邀请码的预期耗时 */
-    private static final long INVITE_CODE_LOCK_TTL_SECONDS = 5 * 60L;
 
     /** 用户缓存，转发请求验证时避免每次查库，缓存 30 秒 */
     private final ConcurrentHashMap<Long, CachedUser> userCache = new ConcurrentHashMap<>();
@@ -108,15 +99,6 @@ public class UserService {
         }
     }
 
-    /**
-     * 应用完全启动后（Hibernate schema 已更新），为缺少邀请码的用户补生邀请码
-     */
-    @EventListener(ApplicationReadyEvent.class)
-    public void onApplicationReady() {
-        distributedLock.runIfLocked(INVITE_CODE_LOCK_KEY, INVITE_CODE_LOCK_TTL_SECONDS,
-                this::ensureAllUsersHaveInviteCode);
-    }
-
     public LoginResponse login(LoginRequest request, String clientIp) {
         String loginFailKey = "login_fail:" + request.getUsername();
 
@@ -148,7 +130,6 @@ public class UserService {
                 .username(user.getUsername())
                 .nickname(user.getNickname())
                 .role(user.getRole())
-                .inviteCode(user.getInviteCode())
                 .build();
     }
 
@@ -178,22 +159,7 @@ public class UserService {
             throw new BusinessException("用户名已存在", "Username already exists");
         }
 
-        // 验证邀请码
-        if (request.getInviteCode() == null || request.getInviteCode().isBlank()) {
-            throw new BusinessException("邀请码不能为空", "Invitation code cannot be empty");
-        }
-        User inviter = userRepository.findByInviteCode(request.getInviteCode().trim())
-                .orElseThrow(() -> new BusinessException("邀请码无效", "Invalid invitation code"));
-        boolean adminInviteCode = "admin".equals(inviter.getRole());
-        if (!java.util.Objects.equals(inviter.getStatus(), 1)) {
-            throw new BusinessException("邀请码无效", "Invalid invitation code");
-        }
-        if (!adminInviteCode && Boolean.TRUE.equals(inviter.getInviteCodeUsed())) {
-            throw new BusinessException("邀请码已被使用", "Invitation code has already been used");
-        }
-        if (!adminInviteCode && userRepository.consumeInviteCode(inviter.getId()) == 0) {
-            throw new BusinessException("邀请码已被使用", "Invitation code has already been used");
-        }
+        inviteCodeService.consume(request.getInviteCode());
 
         User user = User.builder()
                 .username(request.getUsername())
@@ -204,13 +170,9 @@ public class UserService {
                 .quota(-1L)
                 .usedQuota(0L)
                 .status(1)
-                .inviteCode(generateInviteCode())
                 .build();
 
         User saved = userRepository.save(user);
-        if (!adminInviteCode) {
-            cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + inviter.getId());
-        }
         cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + saved.getId());
         return saved;
     }
@@ -393,66 +355,6 @@ public class UserService {
         if (userIds == null || userIds.isEmpty()) return Map.of();
         return userRepository.findAllById(userIds).stream()
                 .collect(Collectors.toMap(User::getId, User::getUsername));
-    }
-
-    /**
-     * 获取用户邀请码
-     */
-    public String getInviteCode(Long userId) {
-        User user = getById(userId);
-        return user.getInviteCode();
-    }
-
-    /** 返回邀请码的使用规则和当前状态，供个人中心展示。 */
-    public Map<String, Object> getInviteCodeInfo(Long userId) {
-        User user = getById(userId);
-        boolean unlimited = Integer.valueOf(5).equals(user.getLevel());
-        Map<String, Object> result = new java.util.HashMap<>();
-        result.put("inviteCode", user.getInviteCode());
-        result.put("unlimited", unlimited);
-        result.put("used", !unlimited && Boolean.TRUE.equals(user.getInviteCodeUsed()));
-        return result;
-    }
-
-    private static final String INVITE_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    private static final int INVITE_CODE_LENGTH = 8;
-    private final SecureRandom secureRandom = new SecureRandom();
-
-    private String generateInviteCode() {
-        StringBuilder sb = new StringBuilder(INVITE_CODE_LENGTH);
-        for (int i = 0; i < INVITE_CODE_LENGTH; i++) {
-            sb.append(INVITE_CODE_CHARS.charAt(secureRandom.nextInt(INVITE_CODE_CHARS.length())));
-        }
-        String code = sb.toString();
-        if (userRepository.existsByInviteCode(code)) {
-            return generateInviteCode();
-        }
-        return code;
-    }
-
-    private void ensureAllUsersHaveInviteCode() {
-        List<User> usersWithoutCode = userRepository.findAll().stream()
-                .filter(u -> u.getInviteCode() == null || u.getInviteCode().isBlank())
-                .toList();
-        for (User u : usersWithoutCode) {
-            u.setInviteCode(generateInviteCode());
-            try {
-                userRepository.save(u);
-            } catch (DataIntegrityViolationException e) {
-                // 分布式锁租约过期或跨实例竞态时，两边都可能给同一用户补生邀请码，后完成的一方
-                // 在 uk_users_invite_code 唯一约束上冲突：重新查一次该用户是否已有邀请码，
-                // 已有则说明是另一实例写入的良性竞态，跳过继续处理下一个用户；
-                // 否则说明是真实错误（如约束不匹配），继续抛出中止整个批次。
-                User reloaded = userRepository.findById(u.getId()).orElse(null);
-                if (reloaded != null && reloaded.getInviteCode() != null && !reloaded.getInviteCode().isBlank()) {
-                    log.info("用户 {} 的邀请码已被其他实例补齐，跳过: {}", u.getUsername(), e.getMessage());
-                    continue;
-                }
-                throw e;
-            }
-            cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + u.getId());
-            log.info("为用户 {} 生成邀请码: {}", u.getUsername(), u.getInviteCode());
-        }
     }
 
     @org.springframework.context.event.EventListener

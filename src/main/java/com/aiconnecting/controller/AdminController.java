@@ -11,6 +11,7 @@ import com.aiconnecting.dto.DashboardStats;
 import com.aiconnecting.dto.LevelRequest;
 import com.aiconnecting.dto.StatusRequest;
 import com.aiconnecting.dto.AnnouncementRequest;
+import com.aiconnecting.dto.InviteCodeGenerateRequest;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Coupon;
 import com.aiconnecting.entity.OperationLog;
@@ -19,6 +20,7 @@ import com.aiconnecting.entity.UsageLog;
 import com.aiconnecting.entity.Announcement;
 import com.aiconnecting.entity.ChannelFailureRecord;
 import com.aiconnecting.entity.FailureLog;
+import com.aiconnecting.entity.InviteCode;
 import com.aiconnecting.service.DashboardService;
 import com.aiconnecting.service.UserService;
 import com.aiconnecting.service.UsageLogService;
@@ -27,6 +29,7 @@ import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.OperationLogService;
 import com.aiconnecting.service.StatsAggregationService;
 import com.aiconnecting.service.FailureLogService;
+import com.aiconnecting.service.InviteCodeService;
 import com.aiconnecting.repository.AnnouncementRepository;
 import com.aiconnecting.repository.ChannelFailureRecordRepository;
 import lombok.RequiredArgsConstructor;
@@ -54,6 +57,7 @@ public class AdminController {
     private final UserService userService;
     private final UsageLogService usageLogService;
     private final CouponService couponService;
+    private final InviteCodeService inviteCodeService;
     private final DashboardService dashboardService;
     private final AnnouncementRepository announcementRepository;
     private final OperationLogService operationLogService;
@@ -239,6 +243,43 @@ public class AdminController {
         operationLogService.record(currentUser.getId(), "UPDATE_COUPON_STATUS", "coupon:" + id,
                 "status=" + request.getStatus());
         return ApiResponse.success(coupon);
+    }
+
+    // ==================== 邀请码管理 ====================
+
+    @PostMapping("/invite-codes")
+    public ApiResponse<List<InviteCode>> generateInviteCodes(
+            @AuthenticationPrincipal User currentUser,
+            @Valid @RequestBody InviteCodeGenerateRequest request) {
+        List<InviteCode> codes = inviteCodeService.generate(currentUser, request.getCount(),
+                request.getMaxUses(), request.getExpiryDate());
+        operationLogService.record(currentUser.getId(), "GENERATE_INVITE_CODES", "invite-code:batch",
+                "count=" + codes.size() + ", maxUses=" + request.getMaxUses()
+                        + ", expiryDate=" + request.getExpiryDate());
+        return ApiResponse.success(codes);
+    }
+
+    @GetMapping("/invite-codes")
+    public ApiResponse<List<InviteCode>> listInviteCodes() {
+        return ApiResponse.success(inviteCodeService.list());
+    }
+
+    @PutMapping("/invite-codes/{id}/status")
+    public ApiResponse<InviteCode> updateInviteCodeStatus(
+            @AuthenticationPrincipal User currentUser,
+            @PathVariable Long id,
+            @Valid @RequestBody StatusRequest request) {
+        InviteCode inviteCode = inviteCodeService.updateStatus(id, request.getStatus());
+        operationLogService.record(currentUser.getId(), "UPDATE_INVITE_CODE_STATUS", "invite-code:" + id,
+                "status=" + request.getStatus());
+        return ApiResponse.success(inviteCode);
+    }
+
+    @DeleteMapping("/invite-codes/{id}")
+    public ApiResponse<Void> deleteInviteCode(@AuthenticationPrincipal User currentUser, @PathVariable Long id) {
+        inviteCodeService.delete(id);
+        operationLogService.record(currentUser.getId(), "DELETE_INVITE_CODE", "invite-code:" + id, null);
+        return ApiResponse.success();
     }
 
     // ==================== 公告管理 ====================

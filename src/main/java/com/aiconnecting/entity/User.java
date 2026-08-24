@@ -52,11 +52,13 @@ public class User {
     @Column(nullable = false)
     private Integer status;
 
-    /** 邀请码（唯一，每个用户一个） */
+    /** 旧版用户邀请码，仅用于升级时迁移管理员邀请码，不再对外提供或生成。 */
+    @JsonIgnore
     @Column(unique = true, length = 16)
     private String inviteCode;
 
-    /** 普通用户的邀请码是否已被使用；管理员邀请码不受此字段限制 */
+    /** 旧版邀请码使用标记，保留用于兼容已有数据库。 */
+    @JsonIgnore
     @Builder.Default
     @Column(nullable = false, columnDefinition = "BOOLEAN DEFAULT FALSE")
     private Boolean inviteCodeUsed = false;
