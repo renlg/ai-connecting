@@ -136,6 +136,8 @@ export default function FailureStrategies() {
     { title: '模型', dataIndex: 'modelConfigId', width: 120,
       render: (v) => getModelName(v) },
     { title: '失败状态码', dataIndex: 'httpCodes', width: 120 },
+    { title: '排除状态码', dataIndex: 'excludedHttpCodes', width: 120,
+      render: (v) => v || '-' },
     { title: '窗口', width: 140,
       render: (_, r) => `${WINDOW_DIM_LABEL[r.windowDimension] || r.windowDimension} / ${WINDOW_TYPE_LABEL[r.windowType] || r.windowType}` },
     { title: '阈值', dataIndex: 'failureThreshold', width: 70 },
@@ -165,7 +167,7 @@ export default function FailureStrategies() {
         <Button type="primary" icon={<PlusOutlined />} onClick={() => {
           setEditing(null)
           form.resetFields()
-          form.setFieldsValue({ scope: 'GLOBAL', windowType: 'SLIDING', windowDimension: 'MINUTE', priority: 0, enabled: true })
+          form.setFieldsValue({ scope: 'GLOBAL', excludedHttpCodes: '', windowType: 'SLIDING', windowDimension: 'MINUTE', priority: 0, enabled: true })
           setModalOpen(true)
         }}>新增策略</Button>
       </div>
@@ -215,6 +217,10 @@ export default function FailureStrategies() {
           <Form.Item name="httpCodes" label="失败状态码" rules={[{ required: true, message: '请输入失败状态码' }]}
             extra="支持末位 x 通配，如 5xx,429 表示 500-599 和 429">
             <Input placeholder="例如: 5xx,429" />
+          </Form.Item>
+          <Form.Item name="excludedHttpCodes" label="排除状态码（可选）"
+            extra="这些码不计入熔断，支持逗号分隔和 x 通配，如 400,4xx">
+            <Input placeholder="例如: 400,4xx" />
           </Form.Item>
           <Space style={{ width: '100%' }} direction="vertical">
             <Form.Item name="windowType" label="窗口类型" initialValue="SLIDING" rules={[{ required: true }]}>

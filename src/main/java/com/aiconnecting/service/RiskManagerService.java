@@ -701,6 +701,7 @@ public class RiskManagerService {
         List<FailureStrategy> result = new ArrayList<>();
         for (FailureStrategy strategy : strategies) {
             if (!matchesHttpCodes(strategy.getHttpCodes(), httpCode)) continue;
+            if (matchesHttpCodes(strategy.getExcludedHttpCodes(), httpCode)) continue;
             if ("GLOBAL".equals(strategy.getScope())) {
                 if (matchesModel(strategy, modelConfigId)) {
                     result.add(strategy);
@@ -752,6 +753,7 @@ public class RiskManagerService {
         List<FailureStrategy> strategies = getEnabledFailureStrategies();
         for (FailureStrategy strategy : strategies) {
             if (!matchesHttpCodes(strategy.getHttpCodes(), httpCode)) continue;
+            if (matchesHttpCodes(strategy.getExcludedHttpCodes(), httpCode)) continue;
             if ("GLOBAL".equals(strategy.getScope())) return true;
             if ("CHANNEL".equals(strategy.getScope()) && channelId.equals(strategy.getChannelId())) return true;
         }

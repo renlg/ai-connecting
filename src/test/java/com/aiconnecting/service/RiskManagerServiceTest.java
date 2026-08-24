@@ -273,6 +273,70 @@ class RiskManagerServiceTest {
     }
 
     @Test
+    void excludedHttpCodeDoesNotCountOrTriggerFailureCircuitBreaker() {
+        FailureStrategy strategy = FailureStrategy.builder()
+                .id(1L).scope("GLOBAL").httpCodes("4xx,5xx").excludedHttpCodes("400,4xx")
+                .windowType("SLIDING").windowDimension("MINUTE")
+                .failureThreshold(2).fuseDurationSeconds(300)
+                .priority(0).enabled(true)
+                .build();
+
+        when(failureStrategyRepo.findAllEnabledOrderByPriorityAsc()).thenReturn(List.of(strategy));
+        when(recordRepo.save(any())).thenAnswer(inv -> {
+            CircuitBreakerRecord r = inv.getArgument(0);
+            if (r.getId() == null) r.setId(200L);
+            return r;
+        });
+
+        service.recordFailureEvent(10L, "gpt-4", 400);
+        service.recordFailureEvent(10L, "gpt-4", 429);
+        service.recordFailureEvent(10L, "gpt-4", 500);
+
+        assertFalse(service.isChannelFusedForModel(10L, "gpt-4"));
+        verify(recordRepo, never()).save(argThat(r -> "AUTO_FAILURE".equals(r.getSource())));
+
+        service.recordFailureEvent(10L, "gpt-4", 500);
+
+        assertTrue(service.isChannelFusedForModel(10L, "gpt-4"));
+        verify(recordRepo).save(argThat(r -> "AUTO_FAILURE".equals(r.getSource())));
+    }
+
+    @Test
+    void blankExcludedHttpCodesPreservesFailureStrategyMatching() {
+        FailureStrategy strategy = FailureStrategy.builder()
+                .id(1L).scope("GLOBAL").httpCodes("5xx").excludedHttpCodes(" ")
+                .windowType("SLIDING").windowDimension("MINUTE")
+                .failureThreshold(1).fuseDurationSeconds(300)
+                .priority(0).enabled(true)
+                .build();
+
+        when(failureStrategyRepo.findAllEnabledOrderByPriorityAsc()).thenReturn(List.of(strategy));
+        when(recordRepo.save(any())).thenAnswer(inv -> {
+            CircuitBreakerRecord r = inv.getArgument(0);
+            if (r.getId() == null) r.setId(200L);
+            return r;
+        });
+
+        service.recordFailureEvent(10L, "gpt-4", 500);
+
+        assertTrue(service.isChannelFusedForModel(10L, "gpt-4"));
+        verify(recordRepo).save(argThat(r -> "AUTO_FAILURE".equals(r.getSource())));
+    }
+
+    @Test
+    void hasFailureStrategyForChannelHonorsExcludedHttpCodes() {
+        FailureStrategy excludedStrategy = FailureStrategy.builder()
+                .id(1L).scope("GLOBAL").httpCodes("4xx,5xx").excludedHttpCodes("4xx")
+                .priority(0).enabled(true)
+                .build();
+
+        when(failureStrategyRepo.findAllEnabledOrderByPriorityAsc()).thenReturn(List.of(excludedStrategy));
+
+        assertFalse(service.hasFailureStrategyForChannel(10L, 429));
+        assertTrue(service.hasFailureStrategyForChannel(10L, 500));
+    }
+
+    @Test
     void channelFailureStrategyOnlyMatchesSpecificChannel() {
         FailureStrategy strategy = FailureStrategy.builder()
                 .id(1L).scope("CHANNEL").channelId(10L)

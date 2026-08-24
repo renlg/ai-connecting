@@ -28,6 +28,9 @@ public class FailureStrategy {
     @Column(nullable = false, length = 200)
     private String httpCodes;
 
+    @Column(length = 200)
+    private String excludedHttpCodes;
+
     @Column(nullable = false, length = 20)
     private String windowType;
 

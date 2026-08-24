@@ -309,6 +309,7 @@ CREATE TABLE IF NOT EXISTS failure_strategies (
     channel_id BIGINT,
     model_config_id BIGINT,
     http_codes VARCHAR(200) NOT NULL,
+    excluded_http_codes VARCHAR(200),
     window_type VARCHAR(20) NOT NULL DEFAULT 'SLIDING',
     window_dimension VARCHAR(20) NOT NULL,
     failure_threshold INT NOT NULL,
