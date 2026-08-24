@@ -7,47 +7,36 @@ import static org.assertj.core.api.Assertions.assertThat;
 class UpstreamErrorUtilsTest {
 
     @Test
-    void recognizesExplicitJsonAndMalformedRequestErrors() {
+    void recognizesAnyNonEmptyFourHundredResponse() {
         assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400,
-                "{\"error\":{\"message\":\"Assistant tool call arguments must be valid JSON\"}}"))
+                "{\"error\":{\"message\":\"Argument not supported: size\"}}"))
                 .isTrue();
         assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400,
-                "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\","
-                        + "\"message\":\"JSON parsing failed for tools[0].input_schema\"}}"))
+                "{\"error\":{\"message\":\"Insufficient quota\"}}"))
                 .isTrue();
-        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400,
-                "{\"error\":{\"status\":\"INVALID_ARGUMENT\","
-                        + "\"message\":\"Request body malformed: invalid parameter format\"}}"))
+        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400, "bad request"))
                 .isTrue();
-        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400,
-                "400 - JSON parse error in tool call arguments"))
-                .isTrue();
+        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400, " ")).isFalse();
+        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400, null)).isFalse();
     }
 
     @Test
-    void recognizesCombinedParameterAndValidationSemantics() {
-        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400,
-                "{\"error\":{\"message\":\"Tool call parameter has an invalid format\"}}"))
-                .isTrue();
-        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400,
-                "{\"error\":{\"message\":\"Missing required argument: location\"}}"))
-                .isTrue();
-    }
-
-    @Test
-    void rejectsNonFourHundredAndUnrelatedFourHundredErrors() {
+    void rejectsNonFourHundredAndLocalBusinessErrors() {
         assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(500,
                 "{\"error\":{\"message\":\"arguments must be valid JSON\"}}"))
                 .isFalse();
-        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400,
-                "{\"error\":{\"message\":\"Insufficient quota\"}}"))
-                .isFalse();
-        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(400,
-                "{\"error\":{\"type\":\"invalid_request_error\","
-                        + "\"message\":\"This model is unavailable\"}}"))
-                .isFalse();
         assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(
                 new BusinessException(400, "本地参数错误", "Invalid parameter format")))
+                .isFalse();
+    }
+
+    @Test
+    void recognizesAnyUpstreamBusinessExceptionWithCodeFourHundred() {
+        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(
+                BusinessException.upstream(400, "上游错误", null, null)))
+                .isTrue();
+        assertThat(UpstreamErrorUtils.isClientFixableUpstreamError(
+                BusinessException.upstream(500, "上游错误", "bad gateway", null)))
                 .isFalse();
     }
 
@@ -59,5 +48,18 @@ class UpstreamErrorUtilsTest {
                 .isEqualTo("tools.0.input_schema is invalid");
         assertThat(UpstreamErrorUtils.extractUpstreamMessage("malformed request body"))
                 .isEqualTo("malformed request body");
+    }
+
+    @Test
+    void exposesRealFourHundredMessageAndFallsBackWhenEmpty() {
+        assertThat(UpstreamErrorUtils.clientFacingMessage(400,
+                "{\"error\":{\"message\":\"Argument not supported: size\"}}"))
+                .isEqualTo("Argument not supported: size");
+        assertThat(UpstreamErrorUtils.clientFacingMessage(400, "bad request"))
+                .isEqualTo("bad request");
+        assertThat(UpstreamErrorUtils.clientFacingMessage(400, " "))
+                .isEqualTo(SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE);
+        assertThat(UpstreamErrorUtils.clientFacingMessage(500, "internal details"))
+                .isEqualTo(SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE);
     }
 }

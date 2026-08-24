@@ -69,7 +69,7 @@ class GlobalExceptionHandlerTest {
                 BusinessException.upstream(400, "上游 API 错误", "Upstream API error", upstreamBody, null),
                 request, new MockHttpServletResponse());
 
-        verify(failureLogService).record(request, 400, SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE,
+        verify(failureLogService).record(request, 400, "Upstream API error",
                 "Upstream API error: 400 - " + upstreamBody);
     }
 
@@ -132,7 +132,7 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    void unrelatedUpstreamFourHundredRemainsGeneric() throws Exception {
+    void anyUpstreamFourHundredKeepsRealMessage() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/models/gemini:generateContent");
         String upstreamBody = "{\"error\":{\"status\":\"INVALID_ARGUMENT\","
                 + "\"message\":\"This model is unavailable\"}}";
@@ -143,7 +143,7 @@ class GlobalExceptionHandlerTest {
 
         JsonNode body = mapper.valueToTree(response.getBody());
         assertThat(body.path("error").path("message").asText())
-                .isEqualTo(SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE);
+                .isEqualTo("Upstream model unavailable");
         assertThat(body.path("error").path("traceId").asText()).isNotBlank();
     }
 
