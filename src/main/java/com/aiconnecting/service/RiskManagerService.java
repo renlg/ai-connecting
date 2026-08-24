@@ -146,6 +146,7 @@ public class RiskManagerService {
         existing.setChannelId(updated.getChannelId());
         existing.setModelConfigId(updated.getModelConfigId());
         existing.setHttpCodes(updated.getHttpCodes());
+        existing.setExcludedHttpCodes(updated.getExcludedHttpCodes());
         existing.setWindowType(updated.getWindowType());
         existing.setWindowDimension(updated.getWindowDimension());
         existing.setFailureThreshold(updated.getFailureThreshold());

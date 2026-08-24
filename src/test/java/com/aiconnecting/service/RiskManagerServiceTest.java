@@ -826,4 +826,21 @@ class RiskManagerServiceTest {
         assertNotNull(dqRef, "清理后 key 必须仍存在");
         assertSame(dq1, dqRef, "必须是同一个 deque 引用（computeIfAbsent 语义安全）");
     }
+
+    @Test
+    void updateFailureStrategy_preservesExcludedHttpCodes() {
+        FailureStrategy existing = FailureStrategy.builder()
+                .id(7L).scope("GLOBAL").httpCodes("5xx").enabled(true).build();
+        FailureStrategy updated = FailureStrategy.builder()
+                .scope("GLOBAL").httpCodes("4xx,5xx").excludedHttpCodes("400,4xx").enabled(true).build();
+
+        when(failureStrategyRepo.findById(7L)).thenReturn(Optional.of(existing));
+        when(failureStrategyRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateFailureStrategy(7L, updated);
+
+        verify(failureStrategyRepo).save(argThat(saved ->
+                "400,4xx".equals(saved.getExcludedHttpCodes())
+                        && "4xx,5xx".equals(saved.getHttpCodes())));
+    }
 }
