@@ -151,6 +151,9 @@ cd web && npm install && npm run dev
 | `CORS_ALLOWED_ORIGINS` | 允许的跨域源（逗号分隔，默认允许所有） | 否 |
 | `TRUSTED_PROXIES` | 信任的代理 IP（逗号分隔，默认 127.0.0.1,::1） | 否 |
 | `ZIPKIN_ENDPOINT` | Zipkin 服务地址 | 否 |
+| `XAI_IMAGE_PROXY_BASE_URL` | xAI 图片地址反代基址（默认 `http://207.57.184.239`）；仅支持 `scheme://host[:port]`，不能包含 path | 否 |
+| `MODEL_GROUP_PRUNING_ENABLED` | 长期全渠道熔断模型自动剔除开关（默认 true） | 否 |
+| `MODEL_GROUP_PRUNING_INTERVAL_MS` | 长期全渠道熔断模型自动剔除任务周期，单位毫秒（默认 600000，即 10 分钟） | 否 |
 | `OSS_ENABLED` | 是否将媒体产物（图片/视频）转存至阿里云 OSS（默认 true，关闭则按上游原样透传） | 否 |
 | `OSS_ACCESS_KEY_ID` | 阿里云 OSS AccessKey ID | OSS 功能需要 |
 | `OSS_ACCESS_KEY_SECRET` | 阿里云 OSS AccessKey Secret | OSS 功能需要 |

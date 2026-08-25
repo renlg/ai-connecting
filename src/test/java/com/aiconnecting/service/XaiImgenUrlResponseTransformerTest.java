@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class XaiImgenUrlResponseTransformerTest {
@@ -65,6 +66,14 @@ class XaiImgenUrlResponseTransformerTest {
 
         assertThat(result.path("data").get(0).path("url").asText())
                 .isEqualTo("https://images-proxy.example:8443/image.png");
+    }
+
+    @Test
+    void constructor_rejectsProxyBaseUrlContainingPath() {
+        assertThatThrownBy(() ->
+                new XaiImgenUrlResponseTransformer(objectMapper, "http://proxy.example/prefix/"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not contain a path");
     }
 
     @Test

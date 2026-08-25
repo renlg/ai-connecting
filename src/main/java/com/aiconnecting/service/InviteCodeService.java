@@ -1,6 +1,7 @@
 package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
+import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.entity.InviteCode;
 import com.aiconnecting.entity.User;
@@ -32,6 +33,7 @@ public class InviteCodeService {
     private final InviteCodeRepository inviteCodeRepository;
     private final UserRepository userRepository;
     private final DuplicateSubmitGuard duplicateSubmitGuard;
+    private final CacheInvalidationService cacheInvalidationService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public List<InviteCode> generate(User admin, Integer count, Integer maxUses, LocalDateTime expiryDate) {
@@ -170,6 +172,7 @@ public class InviteCodeService {
 
     private void markLegacyCodeMigrated(User admin) {
         admin.setInviteCode(null);
-        userRepository.save(admin);
+        User saved = userRepository.save(admin);
+        cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + saved.getId());
     }
 }

@@ -101,6 +101,10 @@ public class XaiImgenUrlResponseTransformer implements ResponseTransformer {
         if (uri.getScheme() == null || uri.getHost() == null) {
             throw new IllegalArgumentException("app.xai-image-proxy-base-url must be an absolute URL");
         }
+        if (uri.getRawPath() != null && !uri.getRawPath().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "app.xai-image-proxy-base-url must not contain a path; use scheme://host[:port]");
+        }
         return uri;
     }
 }

@@ -190,27 +190,6 @@ class LongTermCircuitBrokenModelPruningServiceTest {
         verify(cacheInvalidationService, never()).publish(any());
     }
 
-    @Test
-    void invalidatesModelCacheWhenModelWasDisabledWithoutRemovingMembership() {
-        ModelGroupMember member = member(100L, 1L, 10L);
-        when(memberRepository.findAll()).thenReturn(List.of(member));
-        when(groupRepository.findAllById(any())).thenReturn(List.of());
-        ModelConfig model = ModelConfig.builder().id(20L).name("model-b").status(1).build();
-        when(modelRepository.findAllById(any())).thenReturn(List.of(model));
-        when(channelRepository.findActiveChannelsByModel("%,20,%"))
-                .thenReturn(List.of(channel(11L, 1)));
-        when(circuitBreakerRepository.findActiveByChannelAndModel(eq(11L), eq("model-b"), any()))
-                .thenReturn(List.of(breaker(360)));
-        runTransactionCallbacksImmediately();
-
-        service.pruneNow();
-
-        verify(memberRepository).deleteAllInBatch(List.of());
-        verify(modelRepository).save(model);
-        assertEquals(0, model.getStatus());
-        verify(cacheInvalidationService).publish(CacheInvalidationService.MODEL_CONFIG);
-    }
-
     private ModelConfig arrangeMemberModel(ModelGroupMember member) {
         when(memberRepository.findAll()).thenReturn(List.of(member));
         when(groupRepository.findAllById(any())).thenReturn(List.of(

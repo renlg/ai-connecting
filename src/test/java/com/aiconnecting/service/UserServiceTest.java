@@ -10,6 +10,7 @@ import com.aiconnecting.security.JwtUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -45,8 +46,9 @@ class UserServiceTest {
     void registerConsumesAdminManagedInviteCode() {
         userService.register(request("first", "ADMIN123"));
 
-        verify(inviteCodeService).consume("ADMIN123");
-        verify(userRepository).save(any(User.class));
+        InOrder registration = inOrder(inviteCodeService, userRepository);
+        registration.verify(inviteCodeService).consume("ADMIN123");
+        registration.verify(userRepository).save(any(User.class));
     }
 
     @Test
@@ -68,6 +70,7 @@ class UserServiceTest {
 
         assertEquals("邀请码使用次数已耗尽", exception.getMessage());
         verify(userRepository, never()).save(any());
+        verifyNoInteractions(cacheInvalidationService);
     }
 
     @Test
