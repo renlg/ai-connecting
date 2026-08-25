@@ -28,8 +28,8 @@ import java.util.stream.Collectors;
 
 /**
  * Removes model-group members whose model is unavailable on every enabled channel because each
- * channel has a long-term circuit breaker. If no enabled channel remains bound after pruning, the
- * model configuration is disabled; channels and billing/usage data are left untouched.
+ * channel has a long-term circuit breaker. The model configuration is disabled in the same
+ * transaction; channels and billing/usage data are left untouched.
  */
 @Service
 @RequiredArgsConstructor
@@ -43,7 +43,7 @@ public class LongTermCircuitBrokenModelPruningService {
     private static final String PRUNING_REASON =
             "all enabled channels have ACTIVE circuit breakers lasting at least 360 days";
     private static final String DISABLING_REASON =
-            "long-term circuit-broken model has no bound enabled channel after group pruning";
+            "all enabled channels have long-term circuit breakers";
 
     private final ModelGroupMemberRepository modelGroupMemberRepository;
     private final ModelGroupRepository modelGroupRepository;
@@ -74,7 +74,7 @@ public class LongTermCircuitBrokenModelPruningService {
         List<DisabledModel> disabledModels = new ArrayList<>();
         Integer removed = transactionTemplate.execute(
                 status -> pruneEligibleMembers(LocalDateTime.now(), disabledModels));
-        if (removed != null && removed > 0) {
+        if ((removed != null && removed > 0) || !disabledModels.isEmpty()) {
             // Publish after the pruning/disable transaction has committed so other instances cannot reload stale rows.
             cacheInvalidationService.publish(CacheInvalidationService.MODEL_CONFIG);
             for (DisabledModel model : disabledModels) {
@@ -123,11 +123,9 @@ public class LongTermCircuitBrokenModelPruningService {
             modelGroupMemberRepository.deleteAllInBatch(modelMembers);
             removedMembers += modelMembers.size();
 
-            // Re-check after removing every membership. A model that has lost all currently enabled
-            // channel bindings is disabled, while the channel rows and all billing/usage data remain intact.
-            List<Channel> remainingEnabledChannels = channelRepository
-                    .findActiveChannelsByModel("%," + model.getId() + ",%");
-            if (remainingEnabledChannels.isEmpty() && !Integer.valueOf(0).equals(model.getStatus())) {
+            // The model is unavailable everywhere once every enabled channel is long-term broken.
+            // Disable it in the same transaction as pruning; channel and billing/usage rows remain intact.
+            if (!Integer.valueOf(0).equals(model.getStatus())) {
                 model.setStatus(0);
                 modelConfigRepository.save(model);
                 disabledModels.add(new DisabledModel(model.getId(), model.getName()));
@@ -138,6 +136,11 @@ public class LongTermCircuitBrokenModelPruningService {
 
     private boolean allChannelsHaveLongTermBreaker(List<Channel> channels, String modelName, LocalDateTime now) {
         for (Channel channel : channels) {
+            List<CircuitBreakerRecord> channelRecords = circuitBreakerRecordRepository
+                    .findActiveByChannelIdAndModelIsNull(channel.getId(), now);
+            if (channelRecords.stream().anyMatch(this::isLongTermBreaker)) {
+                continue;
+            }
             List<CircuitBreakerRecord> activeRecords = circuitBreakerRecordRepository
                     .findActiveByChannelAndModel(channel.getId(), modelName, now);
             if (activeRecords.stream().noneMatch(this::isLongTermBreaker)) {

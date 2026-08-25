@@ -5,6 +5,7 @@ import dayjs from 'dayjs'
 import { deleteInviteCode, generateInviteCodes, getInviteCodes, updateInviteCodeStatus } from '../api'
 
 const { Text } = Typography
+const UNLIMITED_MAX_USES = 2147483647
 
 export default function InviteCodes() {
   const [codes, setCodes] = useState([])
@@ -104,7 +105,7 @@ export default function InviteCodes() {
     },
     { title: '创建时间', dataIndex: 'createdAt', width: 170, render: value => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-' },
     { title: '过期时间', dataIndex: 'expiryDate', width: 170, render: value => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : <Tag color="green">永不过期</Tag> },
-    { title: '最大次数', dataIndex: 'maxUses', width: 100 },
+    { title: '最大次数', dataIndex: 'maxUses', width: 100, render: value => value === UNLIMITED_MAX_USES ? '不限' : value },
     { title: '已用次数', dataIndex: 'usedCount', width: 100 },
     { title: '状态', width: 90, render: (_, record) => statusTag(record) },
     {

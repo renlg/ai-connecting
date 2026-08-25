@@ -61,7 +61,7 @@ class LongTermCircuitBrokenModelPruningServiceTest {
     @Test
     void prunesModelWhenEveryEnabledChannelHasLongTermBreaker() {
         ModelGroupMember member = member(100L, 1L, 10L);
-        arrangeMemberModel(member);
+        ModelConfig model = arrangeMemberModel(member);
         Channel first = channel(11L, 1);
         Channel second = channel(12L, 1);
         when(channelRepository.findActiveChannelsByModel("%,10,%")).thenReturn(List.of(first, second));
@@ -74,6 +74,8 @@ class LongTermCircuitBrokenModelPruningServiceTest {
 
         assertEquals(1, removed);
         verify(memberRepository).deleteAllInBatch(List.of(member));
+        verify(modelRepository).save(model);
+        assertEquals(0, model.getStatus());
     }
 
     @Test
@@ -125,6 +127,21 @@ class LongTermCircuitBrokenModelPruningServiceTest {
     }
 
     @Test
+    void channelLevelLongTermBreakerAppliesToEveryModelOnChannel() {
+        ModelGroupMember member = member(100L, 1L, 10L);
+        arrangeMemberModel(member);
+        when(channelRepository.findActiveChannelsByModel("%,10,%"))
+                .thenReturn(List.of(channel(11L, 1)));
+        when(circuitBreakerRepository.findActiveByChannelIdAndModelIsNull(11L, NOW))
+                .thenReturn(List.of(channelBreaker(360)));
+
+        assertEquals(1, service.pruneEligibleMembers(NOW));
+
+        verify(memberRepository).deleteAllInBatch(List.of(member));
+        verify(circuitBreakerRepository, never()).findActiveByChannelAndModel(any(), any(), any());
+    }
+
+    @Test
     void modelWithoutEnabledChannelsIsRetained() {
         ModelGroupMember member = member(100L, 1L, 10L);
         arrangeMemberModel(member);
@@ -173,12 +190,34 @@ class LongTermCircuitBrokenModelPruningServiceTest {
         verify(cacheInvalidationService, never()).publish(any());
     }
 
-    private void arrangeMemberModel(ModelGroupMember member) {
+    @Test
+    void invalidatesModelCacheWhenModelWasDisabledWithoutRemovingMembership() {
+        ModelGroupMember member = member(100L, 1L, 10L);
+        when(memberRepository.findAll()).thenReturn(List.of(member));
+        when(groupRepository.findAllById(any())).thenReturn(List.of());
+        ModelConfig model = ModelConfig.builder().id(20L).name("model-b").status(1).build();
+        when(modelRepository.findAllById(any())).thenReturn(List.of(model));
+        when(channelRepository.findActiveChannelsByModel("%,20,%"))
+                .thenReturn(List.of(channel(11L, 1)));
+        when(circuitBreakerRepository.findActiveByChannelAndModel(eq(11L), eq("model-b"), any()))
+                .thenReturn(List.of(breaker(360)));
+        runTransactionCallbacksImmediately();
+
+        service.pruneNow();
+
+        verify(memberRepository).deleteAllInBatch(List.of());
+        verify(modelRepository).save(model);
+        assertEquals(0, model.getStatus());
+        verify(cacheInvalidationService).publish(CacheInvalidationService.MODEL_CONFIG);
+    }
+
+    private ModelConfig arrangeMemberModel(ModelGroupMember member) {
         when(memberRepository.findAll()).thenReturn(List.of(member));
         when(groupRepository.findAllById(any())).thenReturn(List.of(
                 ModelGroup.builder().id(1L).name("group-a").build()));
-        when(modelRepository.findAllById(any())).thenReturn(List.of(
-                ModelConfig.builder().id(10L).name("model-a").build()));
+        ModelConfig model = ModelConfig.builder().id(10L).name("model-a").status(1).build();
+        when(modelRepository.findAllById(any())).thenReturn(List.of(model));
+        return model;
     }
 
     private ModelGroupMember member(Long id, Long groupId, Long modelId) {
@@ -197,6 +236,12 @@ class LongTermCircuitBrokenModelPruningServiceTest {
                 .triggeredAt(NOW.minusDays(1))
                 .expiresAt(NOW.minusDays(1).plusDays(days))
                 .build();
+    }
+
+    private CircuitBreakerRecord channelBreaker(long days) {
+        CircuitBreakerRecord record = breaker(days);
+        record.setModelConfigName(null);
+        return record;
     }
 
     @SuppressWarnings("unchecked")

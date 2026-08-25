@@ -10,7 +10,7 @@ class XaiImgenUrlResponseTransformerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final XaiImgenUrlResponseTransformer transformer =
-            new XaiImgenUrlResponseTransformer(objectMapper);
+            new XaiImgenUrlResponseTransformer(objectMapper, "http://207.57.184.239");
 
     @Test
     void supports_onlyMatchesGrokImagineImageV20() {
@@ -40,6 +40,44 @@ class XaiImgenUrlResponseTransformerTest {
     }
 
     @Test
+    void transform_rewritesHttpUrlWithoutTrailingSlash() throws Exception {
+        JsonNode result = transform("{\"data\":[{\"url\":\"http://imgen.x.ai\"}]}");
+
+        assertThat(result.path("data").get(0).path("url").asText())
+                .isEqualTo("http://207.57.184.239");
+    }
+
+    @Test
+    void transform_preservesTrailingSlash() throws Exception {
+        JsonNode result = transform("{\"data\":[{\"url\":\"https://imgen.x.ai/\"}]}");
+
+        assertThat(result.path("data").get(0).path("url").asText())
+                .isEqualTo("http://207.57.184.239/");
+    }
+
+    @Test
+    void transform_usesConfiguredProxyBaseUrl() throws Exception {
+        XaiImgenUrlResponseTransformer configured =
+                new XaiImgenUrlResponseTransformer(objectMapper, "https://images-proxy.example:8443");
+        JsonNode result = objectMapper.readTree(configured.transform(
+                "grok-imagine-image-2.0",
+                "{\"data\":[{\"url\":\"https://imgen.x.ai/image.png\"}]}"));
+
+        assertThat(result.path("data").get(0).path("url").asText())
+                .isEqualTo("https://images-proxy.example:8443/image.png");
+    }
+
+    @Test
+    void transform_matchesHostCaseInsensitivelyAndPreservesQuery() throws Exception {
+        JsonNode result = transform("""
+                {"data":[{"url":"https://IMGEN.X.AI/a/b.png?token=A%2FB&size=1024"}]}
+                """);
+
+        assertThat(result.path("data").get(0).path("url").asText())
+                .isEqualTo("http://207.57.184.239/a/b.png?token=A%2FB&size=1024");
+    }
+
+    @Test
     void transform_leavesNonImgenDomainUntouched() {
         String input = "{\"data\":[{\"url\":\"https://example.com/xai-imgen/xxx.jpeg\"}]}";
 
@@ -63,6 +101,13 @@ class XaiImgenUrlResponseTransformerTest {
     @Test
     void transform_returnsOriginalWhenUrlIsNotString() {
         String input = "{\"data\":[{\"url\":123}]}";
+
+        assertThat(transformer.transform("grok-imagine-image-2.0", input)).isEqualTo(input);
+    }
+
+    @Test
+    void transform_returnsOriginalForNonUrlContainingUpstreamText() {
+        String input = "{\"data\":[{\"url\":\"not a URL mentioning imgen.x.ai\"}]}";
 
         assertThat(transformer.transform("grok-imagine-image-2.0", input)).isEqualTo(input);
     }

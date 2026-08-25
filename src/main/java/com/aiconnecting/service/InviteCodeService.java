@@ -139,6 +139,7 @@ public class InviteCodeService {
 
     /** 将旧版本管理员用户的邀请码迁移为不失效的管理邀请码，避免升级后原管理员码立即失效。 */
     @EventListener(ApplicationReadyEvent.class)
+    @Transactional
     public void migrateLegacyAdminCodes() {
         userRepository.findByRoleIgnoreCase("admin").stream()
                 .filter(user -> user.getInviteCode() != null && !user.getInviteCode().isBlank())
@@ -147,6 +148,7 @@ public class InviteCodeService {
 
     private void migrateLegacyAdminCode(User admin, String code) {
         if (inviteCodeRepository.existsByCode(code)) {
+            markLegacyCodeMigrated(admin);
             return;
         }
         try {
@@ -155,12 +157,19 @@ public class InviteCodeService {
                     .maxUses(LEGACY_UNLIMITED_MAX_USES)
                     .createdBy(admin.getId())
                     .build());
+            markLegacyCodeMigrated(admin);
             log.info("已迁移管理员 {} 的旧邀请码", admin.getUsername());
         } catch (DataIntegrityViolationException e) {
             if (!inviteCodeRepository.existsByCode(code)) {
                 throw e;
             }
+            markLegacyCodeMigrated(admin);
             log.debug("旧管理员邀请码已被其他实例迁移，跳过");
         }
+    }
+
+    private void markLegacyCodeMigrated(User admin) {
+        admin.setInviteCode(null);
+        userRepository.save(admin);
     }
 }
