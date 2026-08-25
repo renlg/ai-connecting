@@ -9,6 +9,9 @@ import com.aiconnecting.repository.InviteCodeRepository;
 import com.aiconnecting.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -25,6 +28,7 @@ class InviteCodeServiceTest {
     private UserRepository userRepository;
     private DuplicateSubmitGuard duplicateSubmitGuard;
     private CacheInvalidationService cacheInvalidationService;
+    private TransactionTemplate transactionTemplate;
     private InviteCodeService service;
 
     @BeforeEach
@@ -33,9 +37,12 @@ class InviteCodeServiceTest {
         userRepository = mock(UserRepository.class);
         duplicateSubmitGuard = mock(DuplicateSubmitGuard.class);
         cacheInvalidationService = mock(CacheInvalidationService.class);
+        transactionTemplate = mock(TransactionTemplate.class);
         when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        runTransactionCallbacksImmediately();
         service = new InviteCodeService(
-                inviteCodeRepository, userRepository, duplicateSubmitGuard, cacheInvalidationService);
+                inviteCodeRepository, userRepository, duplicateSubmitGuard, cacheInvalidationService,
+                transactionTemplate);
     }
 
     @Test
@@ -175,6 +182,22 @@ class InviteCodeServiceTest {
                 .expiryDate(LocalDateTime.now().plusDays(1)).createdBy(1L).build());
 
         assertBusinessFailure(() -> service.consume("exhausted"), "邀请码使用次数已耗尽");
+    }
+
+    @SuppressWarnings("unchecked")
+    private void runTransactionCallbacksImmediately() {
+        when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<List<Long>> callback = invocation.getArgument(0);
+            long publishesBeforeTransaction = mockingDetails(cacheInvalidationService).getInvocations().stream()
+                    .filter(call -> call.getMethod().getName().equals("publish"))
+                    .count();
+            List<Long> result = callback.doInTransaction(mock(TransactionStatus.class));
+            long publishesAfterTransaction = mockingDetails(cacheInvalidationService).getInvocations().stream()
+                    .filter(call -> call.getMethod().getName().equals("publish"))
+                    .count();
+            assertEquals(publishesBeforeTransaction, publishesAfterTransaction);
+            return result;
+        });
     }
 
     private void arrangeRejectedConsume(InviteCode inviteCode) {

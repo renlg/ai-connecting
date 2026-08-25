@@ -14,6 +14,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
@@ -34,6 +35,7 @@ public class InviteCodeService {
     private final UserRepository userRepository;
     private final DuplicateSubmitGuard duplicateSubmitGuard;
     private final CacheInvalidationService cacheInvalidationService;
+    private final TransactionTemplate transactionTemplate;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public List<InviteCode> generate(User admin, Integer count, Integer maxUses, LocalDateTime expiryDate) {
@@ -141,17 +143,22 @@ public class InviteCodeService {
 
     /** 将旧版本管理员用户的邀请码迁移为不失效的管理邀请码，避免升级后原管理员码立即失效。 */
     @EventListener(ApplicationReadyEvent.class)
-    @Transactional
     public void migrateLegacyAdminCodes() {
-        userRepository.findByRoleIgnoreCase("admin").stream()
-                .filter(user -> user.getInviteCode() != null && !user.getInviteCode().isBlank())
-                .forEach(user -> migrateLegacyAdminCode(user, user.getInviteCode().trim().toUpperCase()));
+        List<Long> migratedAdminIds = transactionTemplate.execute(status ->
+                userRepository.findByRoleIgnoreCase("admin").stream()
+                        .filter(user -> user.getInviteCode() != null && !user.getInviteCode().isBlank())
+                        .map(user -> migrateLegacyAdminCode(
+                                user, user.getInviteCode().trim().toUpperCase()))
+                        .toList());
+        if (migratedAdminIds != null) {
+            migratedAdminIds.forEach(id -> cacheInvalidationService.publish(
+                    CacheInvalidationService.USER_PREFIX + id));
+        }
     }
 
-    private void migrateLegacyAdminCode(User admin, String code) {
+    private Long migrateLegacyAdminCode(User admin, String code) {
         if (inviteCodeRepository.existsByCode(code)) {
-            markLegacyCodeMigrated(admin);
-            return;
+            return markLegacyCodeMigrated(admin);
         }
         try {
             inviteCodeRepository.save(InviteCode.builder()
@@ -159,20 +166,22 @@ public class InviteCodeService {
                     .maxUses(LEGACY_UNLIMITED_MAX_USES)
                     .createdBy(admin.getId())
                     .build());
-            markLegacyCodeMigrated(admin);
+            Long adminId = markLegacyCodeMigrated(admin);
             log.info("已迁移管理员 {} 的旧邀请码", admin.getUsername());
+            return adminId;
         } catch (DataIntegrityViolationException e) {
             if (!inviteCodeRepository.existsByCode(code)) {
                 throw e;
             }
-            markLegacyCodeMigrated(admin);
+            Long adminId = markLegacyCodeMigrated(admin);
             log.debug("旧管理员邀请码已被其他实例迁移，跳过");
+            return adminId;
         }
     }
 
-    private void markLegacyCodeMigrated(User admin) {
+    private Long markLegacyCodeMigrated(User admin) {
         admin.setInviteCode(null);
         User saved = userRepository.save(admin);
-        cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + saved.getId());
+        return saved.getId();
     }
 }
