@@ -53,16 +53,14 @@ public class RiskAiAnalyzerService {
     @Value("${app.risk-ai.max-records:200}")
     private int maxRecords;
 
-    @Value("${app.risk-ai.fuse-years:10}")
-    private int fuseYears;
+    @Value("${app.risk-ai.fuse-days:360}")
+    private int fuseDays;
 
     private static final String LOCK_KEY = "job:riskAiAnalysis";
     private static final long LOCK_TTL_SECONDS = 300;
     private static final String CLEAN_LOCK_KEY = "job:channelFailureRecordsClean";
     private static final long CLEAN_LOCK_TTL_SECONDS = 120;
     private static final int RETENTION_DAYS = 3;
-
-    private static final long FUSE_DURATION_SECONDS = 10L * 365 * 24 * 60 * 60;
 
     private final OkHttpClient aiClient = new OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -99,9 +97,9 @@ public class RiskAiAnalyzerService {
                     + "|" + nullSafe(r.getErrorCode()) + "|" + msg);
         }
 
-        Set<ChannelModel> quotaExhausted;
+        Set<ChannelModel> fuseTargets;
         try {
-            quotaExhausted = callAi(lines);
+            fuseTargets = callAi(lines);
         } catch (Exception e) {
             log.warn("AI分析调用失败，本轮跳过: {}", e.getMessage());
             markAnalyzed(recordIds);
@@ -110,22 +108,23 @@ public class RiskAiAnalyzerService {
 
         markAnalyzed(recordIds);
 
-        if (quotaExhausted.isEmpty()) {
-            log.info("AI分析完成: 分析{}条记录，未识别出免费额度耗尽", records.size());
+        if (fuseTargets.isEmpty()) {
+            log.info("AI分析完成: 分析{}条记录，未识别出免费额度耗尽或模型不存在", records.size());
             return;
         }
 
-        for (ChannelModel cm : quotaExhausted) {
+        int fuseDurationSeconds = Math.toIntExact(fuseDays * 24L * 60 * 60);
+        for (ChannelModel cm : fuseTargets) {
             try {
-                String reason = "AI识别免费额度耗尽(渠道=" + cm.channelId + ", 模型=" + cm.model + ")";
+                String reason = "AI识别免费额度耗尽/模型不存在(渠道=" + cm.channelId + ", 模型=" + cm.model + ")";
                 riskManagerService.createAutoQuotaCircuitBreaker(cm.channelId, cm.model,
-                        (int) FUSE_DURATION_SECONDS, reason);
-                log.warn("AI自动熔断: channelId={}, model={}, 熔断{}年", cm.channelId, cm.model, fuseYears);
+                        fuseDurationSeconds, reason);
+                log.warn("AI自动熔断: channelId={}, model={}, 熔断{}天", cm.channelId, cm.model, fuseDays);
             } catch (Exception e) {
                 log.warn("AI自动熔断写入失败: channelId={}, model={}, error={}", cm.channelId, cm.model, e.getMessage());
             }
         }
-        log.info("AI分析完成: 分析{}条记录，熔断{}个渠道+模型", records.size(), quotaExhausted.size());
+        log.info("AI分析完成: 分析{}条记录，熔断{}个渠道+模型", records.size(), fuseTargets.size());
     }
 
     private Set<ChannelModel> callAi(List<String> lines) throws IOException {
@@ -136,10 +135,11 @@ public class RiskAiAnalyzerService {
 
         String dataBlock = String.join("\n", lines);
         String systemPrompt = """
-                你是一个分析渠道API失败日志的助手。根据提供的失败记录，判断哪些"渠道+模型"组合是**免费额度耗尽**。
-                特征关键词（不区分大小写）：insufficient_quota, Free quota exhausted, quota exhausted, 免费额度, \
-                quota exceeded, You exceeded your current quota, free tier, no remaining free, \
-                free_plan_limit, billing_hard_limit, balance too low, credit limit reached.
+                你是一个分析渠道API失败日志的助手。只判断哪些"渠道+模型"组合属于以下两类：**免费额度耗尽**或**模型不存在**。
+                免费额度耗尽特征（不区分大小写）：insufficient_quota, Free quota exhausted, quota exhausted, 免费额度, \
+                quota exceeded, You exceeded your current quota, free tier, no remaining free, insufficient_user_quota.
+                模型不存在特征（不区分大小写）：model_not_found, model not found, 模型不存在, unknown model, no such model.
+                除这两类明确特征外，其它情况一律不识别为熔断目标。
                 只返回JSON数组，格式：[{"channelId":数字,"model":"模型名"}]
                 如果没有识别到，返回空数组 []。不要返回其他内容。""";
 

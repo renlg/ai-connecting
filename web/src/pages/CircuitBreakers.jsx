@@ -124,6 +124,8 @@ export default function CircuitBreakers() {
       render: (v) => <Tag color={SOURCE_COLOR[v] || 'default'}>{SOURCE_LABEL[v] || v}</Tag> },
     { title: '渠道', dataIndex: 'channelId', width: 150,
       render: (v) => getChannelName(v) },
+    { title: '备注', dataIndex: 'reason', width: 150,
+      render: (v) => v || '-' },
     { title: '模型', dataIndex: 'modelConfigName', width: 150,
       render: (v) => v || '渠道级' },
     { title: '触发时间', dataIndex: 'triggeredAt', width: 180,
@@ -132,8 +134,6 @@ export default function CircuitBreakers() {
       render: (v) => v ? dayjs(v).format('YYYY-MM-DD HH:mm:ss') : '-' },
     { title: '状态', dataIndex: 'status', width: 100,
       render: (v) => <Tag color={RECORD_STATUS_COLOR[v] || 'default'}>{RECORD_STATUS_LABEL[v] || v}</Tag> },
-    { title: '备注', dataIndex: 'reason', width: 150, ellipsis: true,
-      render: (v) => v || '-' },
     { title: '操作', width: 100, fixed: 'right',
       render: (_, r) => r.status === 'ACTIVE' ? (
         <Popconfirm title="确定解除熔断？" onConfirm={() => handleRelease(r.id)}>
