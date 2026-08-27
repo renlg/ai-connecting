@@ -53,8 +53,8 @@ public class RiskAiAnalyzerService {
     @Value("${app.risk-ai.max-records:200}")
     private int maxRecords;
 
-    @Value("${app.risk-ai.fuse-days:360}")
-    private int fuseDays;
+    @Value("${app.risk-ai.fuse-years:10}")
+    private int fuseYears;
 
     private static final String LOCK_KEY = "job:riskAiAnalysis";
     private static final long LOCK_TTL_SECONDS = 300;
@@ -113,13 +113,13 @@ public class RiskAiAnalyzerService {
             return;
         }
 
-        int fuseDurationSeconds = Math.toIntExact(fuseDays * 24L * 60 * 60);
+        int fuseDurationSeconds = Math.toIntExact(fuseYears * 365L * 24 * 60 * 60);
         for (ChannelModel cm : fuseTargets) {
             try {
                 String reason = "AI识别免费额度耗尽/模型不存在(渠道=" + cm.channelId + ", 模型=" + cm.model + ")";
                 riskManagerService.createAutoQuotaCircuitBreaker(cm.channelId, cm.model,
                         fuseDurationSeconds, reason);
-                log.warn("AI自动熔断: channelId={}, model={}, 熔断{}天", cm.channelId, cm.model, fuseDays);
+                log.warn("AI自动熔断: channelId={}, model={}, 熔断{}年", cm.channelId, cm.model, fuseYears);
             } catch (Exception e) {
                 log.warn("AI自动熔断写入失败: channelId={}, model={}, error={}", cm.channelId, cm.model, e.getMessage());
             }

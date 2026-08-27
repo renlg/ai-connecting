@@ -37,12 +37,11 @@ import java.util.stream.Collectors;
 public class LongTermCircuitBrokenModelPruningService {
 
     static final long LONG_TERM_BREAKER_SECONDS = 360L * 24 * 60 * 60;
-    static final long AUTO_QUOTA_LONG_TERM_BREAKER_SECONDS = 720L * 24 * 60 * 60;
 
     private static final String LOCK_KEY = "job:longTermCircuitBrokenModelPruning";
     private static final long LOCK_TTL_SECONDS = 300;
     private static final String PRUNING_REASON =
-            "all enabled channels have ACTIVE long-term circuit breakers";
+            "all enabled channels have ACTIVE circuit breakers lasting at least 360 days";
     private static final String DISABLING_REASON =
             "all enabled channels have long-term circuit breakers";
 
@@ -155,11 +154,8 @@ public class LongTermCircuitBrokenModelPruningService {
         if (record.getTriggeredAt() == null || record.getExpiresAt() == null) {
             return false;
         }
-        long thresholdSeconds = "AUTO_QUOTA".equals(record.getSource())
-                ? AUTO_QUOTA_LONG_TERM_BREAKER_SECONDS
-                : LONG_TERM_BREAKER_SECONDS;
         return Duration.between(record.getTriggeredAt(), record.getExpiresAt()).getSeconds()
-                >= thresholdSeconds;
+                >= LONG_TERM_BREAKER_SECONDS;
     }
 
     private record DisabledModel(Long id, String name) {
