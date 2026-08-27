@@ -19,10 +19,10 @@ export default function CircuitBreakers() {
   const [loading, setLoading] = useState(false)
   const [filterChannelId, setFilterChannelId] = useState()
   const [filterModelName, setFilterModelName] = useState('')
-  const [filterStatus, setFilterStatus] = useState()
+  const [filterStatus, setFilterStatus] = useState('ACTIVE')
   const [pagination, setPagination] = useState({ current: 1, pageSize: 10, total: 0 })
   const paginationRef = useRef({ current: 1, pageSize: 10 })
-  const appliedFiltersRef = useRef({})
+  const appliedFiltersRef = useRef({ status: 'ACTIVE' })
   const [modalOpen, setModalOpen] = useState(false)
   const [saveLoading, setSaveLoading] = useState(false)
   const saveLockRef = useRef(false)
@@ -68,9 +68,9 @@ export default function CircuitBreakers() {
   const handleReset = () => {
     setFilterChannelId(undefined)
     setFilterModelName('')
-    setFilterStatus(undefined)
-    appliedFiltersRef.current = {}
-    loadRecords(1, pagination.pageSize, {})
+    setFilterStatus('ACTIVE')
+    appliedFiltersRef.current = { status: 'ACTIVE' }
+    loadRecords(1, pagination.pageSize, { status: 'ACTIVE' })
   }
 
   const loadChannels = () => {
