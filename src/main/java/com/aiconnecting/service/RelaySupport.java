@@ -4,6 +4,7 @@ import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.common.MediaDurationLimits;
 import com.aiconnecting.common.OpenAiUrlUtils;
+import com.aiconnecting.config.RelayTimeoutProperties;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.ModelGroup;
@@ -82,6 +83,9 @@ public class RelaySupport {
     @Autowired(required = false)
     private ChannelFailureRecorder channelFailureRecorder;
 
+    @Autowired(required = false)
+    private RelayTimeoutProperties timeoutProperties = new RelayTimeoutProperties();
+
     private OkHttpClient httpClient;
     final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -133,9 +137,9 @@ public class RelaySupport {
     @jakarta.annotation.PostConstruct
     void initHttpClient() {
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(120, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS);
+                .connectTimeout(positive(timeoutProperties.getConnectMs()), TimeUnit.MILLISECONDS)
+                .readTimeout(positive(timeoutProperties.getReadMs()), TimeUnit.MILLISECONDS)
+                .writeTimeout(positive(timeoutProperties.getWriteMs()), TimeUnit.MILLISECONDS);
         if (tracingInterceptor != null) {
             builder.addInterceptor(tracingInterceptor);
         }
@@ -489,17 +493,25 @@ public class RelaySupport {
     }
 
     /** 将连接、写入、读取及整个 call 都收窄到本次尝试的剩余总预算。 */
-    private OkHttpClient boundedReadTimeoutClient(Long readTimeoutMs) {
-        if (readTimeoutMs == null || readTimeoutMs <= 0) {
+    private OkHttpClient boundedReadTimeoutClient(Long callTimeoutMs) {
+        if (callTimeoutMs == null || callTimeoutMs <= 0) {
             return httpClient;
         }
-        long budget = Math.max(1L, readTimeoutMs);
+        return timeoutClient(callTimeoutMs, httpClient.readTimeoutMillis());
+    }
+
+    private OkHttpClient timeoutClient(long callTimeoutMs, long readTimeoutMs) {
+        long budget = positive(callTimeoutMs);
         return httpClient.newBuilder()
                 .connectTimeout(boundedTimeout(budget, httpClient.connectTimeoutMillis()), TimeUnit.MILLISECONDS)
                 .writeTimeout(boundedTimeout(budget, httpClient.writeTimeoutMillis()), TimeUnit.MILLISECONDS)
-                .readTimeout(boundedTimeout(budget, httpClient.readTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .readTimeout(boundedTimeout(budget, positive(readTimeoutMs)), TimeUnit.MILLISECONDS)
                 .callTimeout(budget, TimeUnit.MILLISECONDS)
                 .build();
+    }
+
+    private long positive(long value) {
+        return Math.max(1L, value);
     }
 
     private long boundedTimeout(long budget, long configuredMs) {
@@ -519,10 +531,10 @@ public class RelaySupport {
         HttpURLConnection conn = (HttpURLConnection) urlObj.openConnection();
         try {
             conn.setRequestMethod("POST");
-            long budget = readTimeoutMs != null && readTimeoutMs > 0 ? readTimeoutMs : 120_000L;
-            conn.setConnectTimeout((int) Math.max(1L, Math.min(budget, 15_000L)));
-            conn.setReadTimeout(readTimeoutMs != null && readTimeoutMs > 0
-                    ? (int) Math.min(readTimeoutMs, 120_000L) : 120000);
+            long budget = readTimeoutMs != null && readTimeoutMs > 0
+                    ? readTimeoutMs : positive(timeoutProperties.getReadMs());
+            conn.setConnectTimeout(toIntTimeout(boundedTimeout(budget, timeoutProperties.getConnectMs())));
+            conn.setReadTimeout(toIntTimeout(boundedTimeout(budget, timeoutProperties.getReadMs())));
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Accept", "text/event-stream");
@@ -532,7 +544,7 @@ public class RelaySupport {
             // Disable HttpURLConnection's request buffering so the bounded phase below covers the
             // actual socket write, rather than only a copy into its internal buffer.
             conn.setFixedLengthStreamingMode(requestBytes.length);
-            long configuredWriteTimeout = httpClient != null ? httpClient.writeTimeoutMillis() : 30_000L;
+            long configuredWriteTimeout = positive(timeoutProperties.getWriteMs());
             long writeTimeoutMs = boundedTimeout(budget, configuredWriteTimeout);
             writeSseRequestBody(conn, requestBytes, writeTimeoutMs);
         } catch (IOException e) {
@@ -547,7 +559,7 @@ public class RelaySupport {
      * deadline-bound worker; on timeout disconnecting the connection closes the socket while leaving
      * the successful response streaming/read path on the caller thread.
      */
-    private void writeSseRequestBody(HttpURLConnection conn, byte[] body, long timeoutMs) throws IOException {
+    static void writeSseRequestBody(HttpURLConnection conn, byte[] body, long timeoutMs) throws IOException {
         Future<?> write = SSE_WRITE_EXECUTOR.submit(() -> {
             try {
                 var output = conn.getOutputStream();
@@ -578,10 +590,50 @@ public class RelaySupport {
         }
     }
 
+    long singleModelTextBudgetMs() { return positive(timeoutProperties.getSingleModelTextBudgetMs()); }
+    long modelGroupBudgetMs() { return positive(timeoutProperties.getModelGroupBudgetMs()); }
+    long imageTimeoutMs() { return positive(timeoutProperties.getImageMs()); }
+    long videoCreateTimeoutMs() { return positive(timeoutProperties.getVideoCreateMs()); }
+    long videoSynchronousTimeoutMs() { return positive(timeoutProperties.getVideoSynchronousMs()); }
+    long audioTimeoutMs() { return positive(timeoutProperties.getAudioMs()); }
+
+    long videoTimeoutMs(String requestBody) {
+        try {
+            JsonNode body = objectMapper.readTree(requestBody);
+            boolean synchronous = (body.has("async") && !body.path("async").asBoolean(true))
+                    || body.path("wait").asBoolean(false)
+                    || "synchronous".equalsIgnoreCase(body.path("response_mode").asText());
+            return synchronous ? videoSynchronousTimeoutMs() : videoCreateTimeoutMs();
+        } catch (Exception ignored) {
+            return videoCreateTimeoutMs();
+        }
+    }
+
+    long sseDeadline() {
+        long duration = positive(timeoutProperties.getSseMaxDurationMs());
+        long now = System.currentTimeMillis();
+        return duration >= Long.MAX_VALUE - now ? Long.MAX_VALUE : now + duration;
+    }
+
+    void prepareSseRead(HttpURLConnection conn, long deadline) throws SocketTimeoutException {
+        long remaining = deadline - System.currentTimeMillis();
+        if (remaining <= 0) {
+            conn.disconnect();
+            throw new SocketTimeoutException("SSE maximum duration exceeded");
+        }
+        conn.setReadTimeout(toIntTimeout(boundedTimeout(remaining, timeoutProperties.getReadMs())));
+    }
+
+    private int toIntTimeout(long timeoutMs) {
+        return (int) Math.min(Integer.MAX_VALUE, positive(timeoutMs));
+    }
+
     private void applyChannelAuth(Request.Builder builder, Channel channel) {
         if ("claude".equalsIgnoreCase(channel.getType()) || "anthropic".equalsIgnoreCase(channel.getType())) {
             builder.addHeader("x-api-key", channel.getApiKey());
             builder.addHeader("anthropic-version", "2023-06-01");
+        } else if (isGeminiTypeChannel(channel)) {
+            builder.addHeader("X-Goog-Api-Key", channel.getApiKey());
         } else {
             builder.addHeader("Authorization", "Bearer " + channel.getApiKey());
         }
@@ -591,6 +643,8 @@ public class RelaySupport {
         if ("claude".equalsIgnoreCase(channel.getType()) || "anthropic".equalsIgnoreCase(channel.getType())) {
             conn.setRequestProperty("x-api-key", channel.getApiKey());
             conn.setRequestProperty("anthropic-version", "2023-06-01");
+        } else if (isGeminiTypeChannel(channel)) {
+            conn.setRequestProperty("X-Goog-Api-Key", channel.getApiKey());
         } else {
             conn.setRequestProperty("Authorization", "Bearer " + channel.getApiKey());
         }
@@ -637,6 +691,32 @@ public class RelaySupport {
                     "Channel request timed out: " + e.getMessage(), e, null, null, true);
         } catch (IOException e) {
             log.error("Failed to forward request to channel {}: {}", channel.getId(), e.getMessage());
+            throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
+                    "Channel request failed: " + e.getMessage(), e, null, null, true);
+        }
+    }
+
+    String forwardMediaRequest(Channel channel, String path, String requestBody, long timeoutMs) {
+        captureChannelModel(requestBody);
+        String url = upstreamUrl(channel.getBaseUrl(), path);
+        RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
+        Request.Builder builder = new Request.Builder().url(url)
+                .addHeader("Content-Type", "application/json").post(body);
+        applyChannelAuth(builder, channel);
+        OkHttpClient client = timeoutClient(timeoutMs, timeoutMs);
+        try (okhttp3.Response response = client.newCall(builder.build()).execute()) {
+            String responseBody = response.body() != null ? response.body().string() : "";
+            if (!response.isSuccessful()) {
+                FailureLogContext.setChannelError(response.code(), responseBody);
+                throw BusinessException.upstream(response.code(), "上游 API 错误: " + responseBody,
+                        "Upstream API error: " + responseBody, responseBody,
+                        parseRetryAfterSeconds(response, responseBody));
+            }
+            return responseBody;
+        } catch (SocketTimeoutException e) {
+            throw new BusinessException(504, "渠道请求超时: " + e.getMessage(),
+                    "Channel request timed out: " + e.getMessage(), e, null, null, true);
+        } catch (IOException e) {
             throw new BusinessException(502, "渠道请求失败: " + e.getMessage(),
                     "Channel request failed: " + e.getMessage(), e, null, null, true);
         }
@@ -701,6 +781,16 @@ public class RelaySupport {
         return executeBinary(channel, requestBuilder.build(), MAX_AUDIO_RESPONSE_BYTES, readTimeoutMs);
     }
 
+    BinaryResponse forwardMediaBinaryRequest(Channel channel, String path, String requestBody, long timeoutMs) {
+        captureChannelModel(requestBody);
+        String url = upstreamUrl(channel.getBaseUrl(), path);
+        RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
+        Request.Builder requestBuilder = new Request.Builder().url(url)
+                .addHeader("Content-Type", "application/json").post(body);
+        applyChannelAuth(requestBuilder, channel);
+        return executeBinary(channel, requestBuilder.build(), MAX_AUDIO_RESPONSE_BYTES, timeoutMs, timeoutMs);
+    }
+
     /**
      * 转发 multipart/form-data 请求并以原始字节返回上游响应
      * （供 /v1/audio/transcriptions、/v1/audio/translations 文件上传端点使用）
@@ -718,6 +808,13 @@ public class RelaySupport {
         return executeBinary(channel, requestBuilder.build(), MAX_TRANSCRIPTION_RESPONSE_BYTES, timeoutMs);
     }
 
+    BinaryResponse forwardMediaMultipartRequest(Channel channel, String path, MultipartBody multipartBody, long timeoutMs) {
+        String url = upstreamUrl(channel.getBaseUrl(), path);
+        Request.Builder requestBuilder = new Request.Builder().url(url).post(multipartBody);
+        applyChannelAuth(requestBuilder, channel);
+        return executeBinary(channel, requestBuilder.build(), MAX_TRANSCRIPTION_RESPONSE_BYTES, timeoutMs, timeoutMs);
+    }
+
     /** TTS 二进制音频响应上限，避免与请求体等副本叠加造成单请求内存峰值过高 */
     static final long MAX_AUDIO_RESPONSE_BYTES = 32L * 1024 * 1024;
 
@@ -725,7 +822,14 @@ public class RelaySupport {
     static final long MAX_TRANSCRIPTION_RESPONSE_BYTES = 4L * 1024 * 1024;
 
     private BinaryResponse executeBinary(Channel channel, Request request, long maxResponseBytes, Long readTimeoutMs) {
-        OkHttpClient client = boundedReadTimeoutClient(readTimeoutMs);
+        return executeBinary(channel, request, maxResponseBytes, readTimeoutMs, null);
+    }
+
+    private BinaryResponse executeBinary(Channel channel, Request request, long maxResponseBytes,
+                                         Long callTimeoutMs, Long explicitReadTimeoutMs) {
+        OkHttpClient client = explicitReadTimeoutMs != null
+                ? timeoutClient(callTimeoutMs, explicitReadTimeoutMs)
+                : boundedReadTimeoutClient(callTimeoutMs);
         try (okhttp3.Response response = client.newCall(request).execute()) {
             byte[] bytes = response.body() != null
                     ? readCapped(response.body().byteStream(), maxResponseBytes)
@@ -978,11 +1082,15 @@ public class RelaySupport {
                                                            Predicate<String> usageFilter) throws IOException {
         String lastUsageData = null;
         boolean bytesWritten = false;
+        long deadline = sseDeadline();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
             var writer = httpResponse.getWriter();
             String line;
-            while ((line = reader.readLine()) != null) {
+            while (true) {
+                prepareSseRead(conn, deadline);
+                line = reader.readLine();
+                if (line == null) break;
                 if (line.isEmpty()) {
                     writer.write("\n");
                 } else {

@@ -57,6 +57,20 @@ management:
 
 app:
   xai-image-proxy-base-url: ${XAI_IMAGE_PROXY_BASE_URL:http://207.57.184.239}
+  relay-timeouts:
+    connect-ms: ${RELAY_CONNECT_TIMEOUT_MS:30000}
+    read-ms: ${RELAY_READ_TIMEOUT_MS:120000}
+    write-ms: ${RELAY_WRITE_TIMEOUT_MS:30000}
+    single-model-text-budget-ms: ${RELAY_SINGLE_MODEL_TEXT_BUDGET_MS:180000}
+    model-group-budget-ms: ${RELAY_MODEL_GROUP_BUDGET_MS:130000}
+    passthrough-read-ms: ${RELAY_PASSTHROUGH_READ_TIMEOUT_MS:300000}
+    passthrough-text-call-ms: ${RELAY_PASSTHROUGH_TEXT_CALL_TIMEOUT_MS:300000}
+    passthrough-media-call-ms: ${RELAY_PASSTHROUGH_MEDIA_CALL_TIMEOUT_MS:600000}
+    sse-max-duration-ms: ${RELAY_SSE_MAX_DURATION_MS:1800000}
+    image-ms: ${RELAY_IMAGE_TIMEOUT_MS:300000}
+    video-create-ms: ${RELAY_VIDEO_CREATE_TIMEOUT_MS:120000}
+    video-synchronous-ms: ${RELAY_VIDEO_SYNCHRONOUS_TIMEOUT_MS:600000}
+    audio-ms: ${RELAY_AUDIO_TIMEOUT_MS:300000}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:}  # 逗号分隔的允许源，未配置时默认允许所有
   security:

@@ -5,6 +5,7 @@ import com.aiconnecting.common.CacheInvalidationService;
 import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.common.OpenAiUrlUtils;
 import com.aiconnecting.common.SseUtils;
+import com.aiconnecting.config.RelayTimeoutProperties;
 import com.aiconnecting.dto.ChannelRequest;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelConfig;
@@ -57,6 +58,9 @@ public class ChannelService {
     @Autowired(required = false)
     private ResponseTransformerRegistry responseTransformerRegistry;
 
+    @Autowired(required = false)
+    private RelayTimeoutProperties relayTimeouts = new RelayTimeoutProperties();
+
     private OkHttpClient httpClient;
     private OkHttpClient streamHttpClient;
     private OkHttpClient videoDownloadHttpClient;
@@ -64,12 +68,14 @@ public class ChannelService {
     @jakarta.annotation.PostConstruct
     void initHttpClients() {
         OkHttpClient.Builder baseBuilder = new OkHttpClient.Builder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS);
+                .connectTimeout(Math.max(1L, relayTimeouts.getConnectMs()), TimeUnit.MILLISECONDS)
+                .readTimeout(Math.max(1L, relayTimeouts.getReadMs()), TimeUnit.MILLISECONDS)
+                .writeTimeout(Math.max(1L, relayTimeouts.getWriteMs()), TimeUnit.MILLISECONDS);
         OkHttpClient.Builder streamBuilder = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(300, TimeUnit.SECONDS)
-                .callTimeout(120, TimeUnit.SECONDS)
+                .connectTimeout(Math.max(1L, relayTimeouts.getConnectMs()), TimeUnit.MILLISECONDS)
+                .readTimeout(Math.max(1L, relayTimeouts.getPassthroughReadMs()), TimeUnit.MILLISECONDS)
+                .writeTimeout(Math.max(1L, relayTimeouts.getWriteMs()), TimeUnit.MILLISECONDS)
+                .callTimeout(Math.max(1L, relayTimeouts.getVideoCreateMs()), TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(false);
         // 禁用连接池复用，防止陈旧连接导致请求卡死
         streamBuilder.connectionPool(new okhttp3.ConnectionPool(5, 10, TimeUnit.SECONDS));
@@ -80,7 +86,10 @@ public class ChannelService {
         httpClient = baseBuilder.build();
         streamHttpClient = streamBuilder.build();
         // 视频文件下载：禁止自动跟随重定向，避免重定向目标绕过主机校验
-        videoDownloadHttpClient = streamHttpClient.newBuilder().followRedirects(false).build();
+        videoDownloadHttpClient = streamHttpClient.newBuilder()
+                .readTimeout(Math.max(1L, relayTimeouts.getVideoSynchronousMs()), TimeUnit.MILLISECONDS)
+                .callTimeout(Math.max(1L, relayTimeouts.getVideoSynchronousMs()), TimeUnit.MILLISECONDS)
+                .followRedirects(false).build();
     }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -495,7 +504,13 @@ public class ChannelService {
         try {
             Request upstreamRequest = buildTestRequest(baseUrl, apiKey, channelType, path,
                     objectMapper.writeValueAsString(body), false);
-            try (Response response = streamHttpClient.newCall(upstreamRequest).execute()) {
+            long mediaTimeoutMs = "image".equals(modelType) ? relayTimeouts.getImageMs()
+                    : "audio".equals(modelType) ? relayTimeouts.getAudioMs()
+                    : relayTimeouts.getVideoCreateMs();
+            OkHttpClient mediaClient = streamHttpClient.newBuilder()
+                    .readTimeout(Math.max(1L, mediaTimeoutMs), TimeUnit.MILLISECONDS)
+                    .callTimeout(Math.max(1L, mediaTimeoutMs), TimeUnit.MILLISECONDS).build();
+            try (Response response = mediaClient.newCall(upstreamRequest).execute()) {
                 long duration = System.currentTimeMillis() - startTime;
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("success", response.isSuccessful());
@@ -1126,14 +1141,15 @@ public class ChannelService {
         try {
             conn = (java.net.HttpURLConnection) urlObj.openConnection();
             conn.setRequestMethod("POST");
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(120000);
+            conn.setConnectTimeout((int) Math.min(Integer.MAX_VALUE, Math.max(1L, relayTimeouts.getConnectMs())));
+            conn.setReadTimeout((int) Math.min(Integer.MAX_VALUE, Math.max(1L, relayTimeouts.getReadMs())));
             conn.setDoOutput(true);
             conn.setRequestProperty("Authorization", "Bearer " + apiKey);
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Connection", "close");
-            conn.getOutputStream().write(jsonBody.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            conn.getOutputStream().flush();
+            byte[] requestBytes = jsonBody.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(requestBytes.length);
+            RelaySupport.writeSseRequestBody(conn, requestBytes, relayTimeouts.getWriteMs());
 
             int code = conn.getResponseCode();
             long httpDuration = System.currentTimeMillis() - httpStart;
@@ -1154,7 +1170,14 @@ public class ChannelService {
             String line;
             int chunkCount = 0;
             int lineCount = 0;
-            while ((line = reader.readLine()) != null) {
+            long streamDeadline = System.currentTimeMillis() + Math.max(1L, relayTimeouts.getSseMaxDurationMs());
+            while (true) {
+                long remaining = streamDeadline - System.currentTimeMillis();
+                if (remaining <= 0) throw new java.net.SocketTimeoutException("SSE maximum duration exceeded");
+                conn.setReadTimeout((int) Math.min(Integer.MAX_VALUE,
+                        Math.max(1L, Math.min(remaining, relayTimeouts.getReadMs()))));
+                line = reader.readLine();
+                if (line == null) break;
                 lineCount++;
                 line = line.trim();
                 if (!line.startsWith("data:")) continue;

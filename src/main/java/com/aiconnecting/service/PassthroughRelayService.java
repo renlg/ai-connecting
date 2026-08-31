@@ -2,6 +2,7 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.OpenAiUrlUtils;
+import com.aiconnecting.config.RelayTimeoutProperties;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Token;
 import com.fasterxml.jackson.core.JsonParser;
@@ -27,6 +28,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.HashSet;
@@ -46,23 +48,29 @@ public class PassthroughRelayService {
     private final ChannelService channelService;
     private final ObjectMapper objectMapper;
     private final okhttp3.Call.Factory callFactory;
+    private final RelayTimeoutProperties timeoutProperties;
 
     @Autowired(required = false)
     private FailureLogService failureLogService;
 
     @org.springframework.beans.factory.annotation.Autowired
-    public PassthroughRelayService(RelaySupport support, ChannelService channelService, ObjectMapper objectMapper) {
-        this(support, channelService, objectMapper, buildPassthroughClient());
+    public PassthroughRelayService(RelaySupport support, ChannelService channelService, ObjectMapper objectMapper,
+                                   RelayTimeoutProperties timeoutProperties) {
+        this(support, channelService, objectMapper, buildPassthroughClient(timeoutProperties), timeoutProperties);
     }
 
-    private static OkHttpClient buildPassthroughClient() {
+    public PassthroughRelayService(RelaySupport support, ChannelService channelService, ObjectMapper objectMapper) {
+        this(support, channelService, objectMapper, new RelayTimeoutProperties());
+    }
+
+    private static OkHttpClient buildPassthroughClient(RelayTimeoutProperties timeouts) {
         Dispatcher dispatcher = new Dispatcher();
         dispatcher.setMaxRequests(128);
         dispatcher.setMaxRequestsPerHost(32);
         return new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(300, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
+                .connectTimeout(Math.max(1L, timeouts.getConnectMs()), TimeUnit.MILLISECONDS)
+                .readTimeout(Math.max(1L, timeouts.getPassthroughReadMs()), TimeUnit.MILLISECONDS)
+                .writeTimeout(Math.max(1L, timeouts.getWriteMs()), TimeUnit.MILLISECONDS)
                 .retryOnConnectionFailure(false)
                 .connectionPool(new ConnectionPool(32, 5, TimeUnit.MINUTES))
                 .dispatcher(dispatcher)
@@ -71,10 +79,16 @@ public class PassthroughRelayService {
 
     PassthroughRelayService(RelaySupport support, ChannelService channelService, ObjectMapper objectMapper,
                             okhttp3.Call.Factory callFactory) {
+        this(support, channelService, objectMapper, callFactory, new RelayTimeoutProperties());
+    }
+
+    PassthroughRelayService(RelaySupport support, ChannelService channelService, ObjectMapper objectMapper,
+                            okhttp3.Call.Factory callFactory, RelayTimeoutProperties timeoutProperties) {
         this.support = support;
         this.channelService = channelService;
         this.objectMapper = objectMapper;
         this.callFactory = callFactory;
+        this.timeoutProperties = timeoutProperties;
     }
 
     /**
@@ -118,8 +132,15 @@ public class PassthroughRelayService {
         Long modelConfigId = context.modelConfig() != null ? context.modelConfig().getId() : null;
         Set<Long> attempted = new HashSet<>();
         IOException lastConnectionFailure = null;
+        String requestType = endpointType(request.getRequestURI());
+        boolean mediaRequest = !"text".equals(requestType);
+        boolean sseRequest = acceptsSse(request);
+        long callBudgetMs = sseRequest ? timeoutProperties.getSseMaxDurationMs()
+                : mediaRequest ? timeoutProperties.getPassthroughMediaCallMs()
+                : timeoutProperties.getPassthroughTextCallMs();
+        long deadline = System.currentTimeMillis() + Math.max(1L, callBudgetMs);
 
-        for (int attempt = 0; attempt < RelaySupport.MAX_RETRIES; attempt++) {
+        for (int attempt = 0; attempt < RelaySupport.MAX_RETRIES && System.currentTimeMillis() < deadline; attempt++) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(
@@ -148,12 +169,17 @@ public class PassthroughRelayService {
 
             final Response upstreamResponse;
             try {
-                upstreamResponse = executePassthrough(upstreamRequest);
+                upstreamResponse = executePassthrough(upstreamRequest,
+                        Math.max(1L, deadline - System.currentTimeMillis()));
             } catch (IOException e) {
                 lastConnectionFailure = e;
-                BusinessException failure = new BusinessException(502, "渠道连接失败: " + e.getMessage(),
-                        "Channel connection failed: " + e.getMessage(), e, null, null, true);
+                boolean timedOut = e instanceof InterruptedIOException;
+                BusinessException failure = new BusinessException(timedOut ? 504 : 502,
+                        timedOut ? "渠道请求超时: " + e.getMessage() : "渠道连接失败: " + e.getMessage(),
+                        timedOut ? "Channel request timed out: " + e.getMessage()
+                                : "Channel connection failed: " + e.getMessage(), e, null, null, true);
                 support.dispatchRelayFailure(channel.getId(), channel.getName(), modelConfigId, failure);
+                if (mediaRequest && timedOut) throw failure;
                 continue; // no response bytes exist yet; another custom channel may be attempted
             }
 
@@ -356,7 +382,8 @@ public class PassthroughRelayService {
 
     Response executePassthrough(Request request, long timeoutMs) throws IOException {
         okhttp3.Call call = callFactory.newCall(request);
-        call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS);
+        okio.Timeout timeout = call.timeout();
+        if (timeout != null) timeout.timeout(timeoutMs, TimeUnit.MILLISECONDS);
         return call.execute();
     }
 
@@ -373,6 +400,13 @@ public class PassthroughRelayService {
         if (path.equals("/v1/videos") || path.startsWith("/v1/videos/")) return "video";
         if (path.equals("/v1/audio") || path.startsWith("/v1/audio/")) return "audio";
         return "text";
+    }
+
+    private boolean acceptsSse(HttpServletRequest request) {
+        String accept = request.getHeader("Accept");
+        if (accept != null && accept.toLowerCase(Locale.ROOT).contains("text/event-stream")) return true;
+        String uri = request.getRequestURI();
+        return uri != null && uri.contains("streamGenerateContent");
     }
 
     private BusinessException invalidModelRequest() {

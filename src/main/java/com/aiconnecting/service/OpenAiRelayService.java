@@ -89,7 +89,7 @@ public class OpenAiRelayService {
         try {
             return relayRequestSingleModel(ctx, path, requestBody, model, httpRequest);
         } catch (BusinessException e) {
-            if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
+            if (e.getCode() != 504 && modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
                     && FailureClassifier.isSwitchable(e)) {
                 var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(
                         ctx.modelConfig().getFallbackGroupId(), "text", "admin".equals(ctx.user().getRole()), ctx.userLevel());
@@ -108,11 +108,12 @@ public class OpenAiRelayService {
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long startTime = System.currentTimeMillis();
+        long deadline = startTime + support.singleModelTextBudgetMs();
         String lastError = null;
         BusinessException lastFailure = null;
         int attempt = 0;
 
-        while (attempt < RelaySupport.MAX_RETRIES) {
+        while (attempt < RelaySupport.MAX_RETRIES && System.currentTimeMillis() < deadline) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -135,13 +136,18 @@ public class OpenAiRelayService {
 
             attempt++;
             try {
+                long remainingMs = deadline - System.currentTimeMillis();
+                if (remainingMs <= 0) {
+                    throw new BusinessException(504, "单模型请求超过总耗时预算",
+                            "Single-model request exceeded its total time budget");
+                }
                 String response;
                 if (support.isGeminiTypeChannel(channel)) {
                     String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(requestBody);
-                    response = support.forwardGeminiRequest(channel, geminiBody);
+                    response = support.forwardGeminiRequest(channel, geminiBody, remainingMs);
                     response = ProtocolConverter.convertGeminiToOpenAiResponse(response);
                 } else {
-                    response = support.forwardRequest(channel, path, requestBody);
+                    response = support.forwardRequest(channel, path, requestBody, remainingMs);
                 }
                 long duration = System.currentTimeMillis() - startTime;
                 support.recordUsage(ctx.token(), channel, model, response, duration, httpRequest, path);
@@ -152,6 +158,9 @@ public class OpenAiRelayService {
                 recordChannelFailure(httpRequest, channel, modelConfigId, model, e);
                 log.error("渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.dispatchRelayFailure(channel.getId(), channel.getName(), modelConfigId, e);
+                if (System.currentTimeMillis() >= deadline) {
+                    throw wrapFailure(e, "单模型请求超过总耗时预算");
+                }
                 if (attempt == RelaySupport.MAX_RETRIES) {
                     throw wrapFailure(e, "所有渠道均不可用，最后错误: " + lastError);
                 }
@@ -179,17 +188,19 @@ public class OpenAiRelayService {
         long startTime = System.currentTimeMillis();
         ChannelResult<String> result;
         try {
-            result = forwardWithRetry(ctx, channel -> {
+            long mediaTimeoutMs = "image".equals(mediaType)
+                    ? support.imageTimeoutMs() : support.videoTimeoutMs(requestBody);
+            result = forwardWithRetry(ctx, mediaTimeoutMs, true, channel -> {
                 String upstreamBody = "image".equals(mediaType)
                         ? support.prepareImageRequestBody(channel, requestBody)
                         : isVideo ? upstreamVideoBody : requestBody;
-                return support.forwardRequest(channel, path, upstreamBody);
+                return support.forwardMediaRequest(channel, path, upstreamBody, mediaTimeoutMs);
             });
         } catch (RuntimeException e) {
             // 只有上游/渠道级别的失败（BusinessException 且分类为 SWITCH）才转入故障转移组；
             // 本地校验错误或非预期的运行时异常直接向上抛出，不掩盖真实错误
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
-                    && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
+                    && e instanceof BusinessException be && be.getCode() != 504 && FailureClassifier.isSwitchable(be)) {
                 var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
                         mediaType, "admin".equals(ctx.user().getRole()), ctx.userLevel());
                 if (fallbackGroup.isPresent()) {
@@ -285,13 +296,21 @@ public class OpenAiRelayService {
      */
     private <T> ChannelResult<T> forwardWithRetry(RelaySupport.RelayContext ctx,
                                                   java.util.function.Function<Channel, T> call) {
+        return forwardWithRetry(ctx, Long.MAX_VALUE - System.currentTimeMillis(), true, call);
+    }
+
+    private <T> ChannelResult<T> forwardWithRetry(RelaySupport.RelayContext ctx, long wallClockBudgetMs,
+                                                  boolean stopOnTimeout,
+                                                  java.util.function.Function<Channel, T> call) {
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         String lastError = null;
         BusinessException lastFailure = null;
         int attempt = 0;
+        long now = System.currentTimeMillis();
+        long deadline = wallClockBudgetMs >= Long.MAX_VALUE - now ? Long.MAX_VALUE : now + wallClockBudgetMs;
 
-        while (attempt < RelaySupport.MAX_RETRIES) {
+        while (attempt < RelaySupport.MAX_RETRIES && System.currentTimeMillis() < deadline) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -324,6 +343,9 @@ public class OpenAiRelayService {
                 // 内容审核、上下文超限、请求过大等不可切换错误与文本/模型组路径保持一致：
                 // 原样立即返回，既不尝试其它渠道，也不写模型冷却或渠道熔断。
                 if (!FailureClassifier.isSwitchable(e)) {
+                    throw e;
+                }
+                if (stopOnTimeout && e.getCode() == 504) {
                     throw e;
                 }
                 support.dispatchRelayFailure(channel.getId(), channel.getName(), modelConfigId, e);
@@ -719,11 +741,13 @@ public class OpenAiRelayService {
         long startTime = System.currentTimeMillis();
         ChannelResult<RelaySupport.BinaryResponse> result;
         try {
-            result = forwardWithRetry(ctx, channel -> support.forwardBinaryRequest(channel, "/v1/audio/speech", upstreamJson));
+            result = forwardWithRetry(ctx, support.audioTimeoutMs(), true,
+                    channel -> support.forwardMediaBinaryRequest(channel, "/v1/audio/speech", upstreamJson,
+                            support.audioTimeoutMs()));
         } catch (RuntimeException e) {
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null
                     && ctx.modelConfig().getFallbackGroupId() != null
-                    && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
+                    && e instanceof BusinessException be && be.getCode() != 504 && FailureClassifier.isSwitchable(be)) {
                 var fallback = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
                         "audio", "admin".equals(ctx.user().getRole()), ctx.userLevel());
                 if (fallback.isPresent()) {
@@ -846,14 +870,14 @@ public class OpenAiRelayService {
         long startTime = System.currentTimeMillis();
         ChannelResult<RelaySupport.BinaryResponse> result;
         try {
-            result = forwardWithRetry(ctx, channel -> {
+            result = forwardWithRetry(ctx, support.audioTimeoutMs(), true, channel -> {
                 FailureLogContext.setChannelModel(model);
-                return support.forwardMultipartRequest(channel, path, multipartBody);
+                return support.forwardMediaMultipartRequest(channel, path, multipartBody, support.audioTimeoutMs());
             });
         } catch (RuntimeException e) {
             if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null
                     && ctx.modelConfig().getFallbackGroupId() != null
-                    && e instanceof BusinessException be && FailureClassifier.isSwitchable(be)) {
+                    && e instanceof BusinessException be && be.getCode() != 504 && FailureClassifier.isSwitchable(be)) {
                 var fallback = modelGroupFailoverExecutor.resolveFallbackGroup(ctx.modelConfig().getFallbackGroupId(),
                         "audio", "admin".equals(ctx.user().getRole()), ctx.userLevel());
                 if (fallback.isPresent()) {
@@ -953,11 +977,12 @@ public class OpenAiRelayService {
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long startTime = System.currentTimeMillis();
+        long retryDeadline = startTime + support.singleModelTextBudgetMs();
         String lastError = null;
         BusinessException lastFailure = null;
         int attempt = 0;
 
-        while (attempt < RelaySupport.MAX_RETRIES) {
+        while (attempt < RelaySupport.MAX_RETRIES && System.currentTimeMillis() < retryDeadline) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -986,12 +1011,14 @@ public class OpenAiRelayService {
 
             HttpURLConnection conn;
             try {
+                long remainingMs = Math.max(1L, retryDeadline - System.currentTimeMillis());
                 if (support.isGeminiTypeChannel(channel)) {
                     String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(modifiedBody);
                     conn = support.createSseConnection(channel, "/v1/models/" +
-                            (model != null ? model : "default") + ":streamGenerateContent?alt=sse", geminiBody);
+                            (model != null ? model : "default") + ":streamGenerateContent?alt=sse", geminiBody,
+                            remainingMs);
                 } else {
-                    conn = support.createSseConnection(channel, path, modifiedBody);
+                    conn = support.createSseConnection(channel, path, modifiedBody, remainingMs);
                 }
             } catch (IOException e) {
                 lastError = e.getMessage();
@@ -1107,11 +1134,15 @@ public class OpenAiRelayService {
      */
     private String streamGeminiResponseAsOpenAi(HttpURLConnection conn, HttpServletResponse httpResponse) throws IOException {
         String lastUsageData = null;
+        long deadline = support.sseDeadline();
         var writer = httpResponse.getWriter();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) {
+            while (true) {
+                support.prepareSseRead(conn, deadline);
+                line = reader.readLine();
+                if (line == null) break;
                 if (line.startsWith("data: ")) {
                     String data = line.substring(6).trim();
                     try {

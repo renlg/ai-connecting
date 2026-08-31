@@ -43,11 +43,12 @@ public class GeminiRelayService {
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long startTime = System.currentTimeMillis();
+        long deadline = startTime + support.singleModelTextBudgetMs();
         String lastError = null;
         int attempt = 0;
 
         BusinessException lastFailure = null;
-        while (attempt < RelaySupport.MAX_RETRIES) {
+        while (attempt < RelaySupport.MAX_RETRIES && System.currentTimeMillis() < deadline) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -70,16 +71,17 @@ public class GeminiRelayService {
 
             attempt++;
             try {
+                long remainingMs = Math.max(1L, deadline - System.currentTimeMillis());
                 String response;
                 if (RelayServiceUtils.isGeminiTypeChannel(channel)) {
-                    response = support.forwardGeminiRequest(channel, requestBody);
+                    response = support.forwardGeminiRequest(channel, requestBody, remainingMs);
                 } else if (RelayServiceUtils.isClaudeTypeChannel(channel)) {
                     String claudeBody = ProtocolConverter.convertGeminiToClaudeBody(requestBody);
-                    String claudeResponse = support.forwardClaudeRequest(channel, claudeBody);
+                    String claudeResponse = support.forwardClaudeRequest(channel, claudeBody, remainingMs);
                     response = ProtocolConverter.convertClaudeToGeminiResponse(claudeResponse);
                 } else {
                     String openAiBody = ProtocolConverter.convertGeminiToOpenAiBody(requestBody);
-                    String openAiResponse = support.forwardRequest(channel, "/v1/chat/completions", openAiBody);
+                    String openAiResponse = support.forwardRequest(channel, "/v1/chat/completions", openAiBody, remainingMs);
                     response = ProtocolConverter.convertOpenAiToGeminiResponse(openAiResponse);
                 }
 
@@ -95,6 +97,7 @@ public class GeminiRelayService {
                 lastError = e.getMessage();
                 log.error("Gemini 渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.dispatchRelayFailure(channel.getId(), channel.getName(), modelConfigId, e);
+                if (System.currentTimeMillis() >= deadline) throw wrapFailure(e, "单模型请求超过总耗时预算");
                 if (attempt == RelaySupport.MAX_RETRIES) {
                     throw wrapFailure(e, "所有渠道均不可用，最后错误: " + lastError);
                 }
@@ -122,10 +125,11 @@ public class GeminiRelayService {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
+        long retryDeadline = System.currentTimeMillis() + support.singleModelTextBudgetMs();
         String lastError = null;
         int attempt = 0;
 
-        while (attempt < RelaySupport.MAX_RETRIES) {
+        while (attempt < RelaySupport.MAX_RETRIES && System.currentTimeMillis() < retryDeadline) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -149,12 +153,13 @@ public class GeminiRelayService {
             log.info("[Gemini流式] 尝试 {}/{}, channel={}", attempt, RelaySupport.MAX_RETRIES, channel.getId());
 
             try {
+                long remainingMs = Math.max(1L, retryDeadline - System.currentTimeMillis());
                 if (RelayServiceUtils.isGeminiTypeChannel(channel)) {
-                    forwardGeminiStreamSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
+                    forwardGeminiStreamSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse, remainingMs);
                 } else if (RelayServiceUtils.isClaudeTypeChannel(channel)) {
-                    forwardClaudeStreamAsGeminiSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
+                    forwardClaudeStreamAsGeminiSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse, remainingMs);
                 } else {
-                    forwardOpenAiStreamAsGeminiSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
+                    forwardOpenAiStreamAsGeminiSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse, remainingMs);
                 }
                 log.info("[Gemini流式] 处理完成, channel={}", channel.getId());
                 return;
@@ -188,7 +193,7 @@ public class GeminiRelayService {
     private void forwardGeminiStreamSingle(Channel channel, String requestBody,
                                             String model, Token token,
                                             HttpServletRequest httpRequest,
-                                            HttpServletResponse httpResponse) throws IOException {
+                                            HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
         if (support.isChannelRateLimited(channel)) {
             throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
         }
@@ -196,22 +201,10 @@ public class GeminiRelayService {
         SseUtils.setSseHeaders(httpResponse);
         long startTime = System.currentTimeMillis();
 
-        String url = channel.getBaseUrl().replaceAll("/+$", "")
-                + "/v1/models/" + model + ":streamGenerateContent?alt=sse";
-        java.net.URL urlObj = new java.net.URL(url);
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) urlObj.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(120000);
-            conn.setDoOutput(true);
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("Accept", "text/event-stream");
-            conn.setRequestProperty("Connection", "close");
-            conn.setRequestProperty("X-Goog-Api-Key", channel.getApiKey());
-            conn.getOutputStream().write(requestBody.getBytes(StandardCharsets.UTF_8));
-            conn.getOutputStream().flush();
+            conn = support.createSseConnection(channel,
+                    "/v1/models/" + model + ":streamGenerateContent?alt=sse", requestBody, attemptTimeoutMs);
 
             int code = conn.getResponseCode();
             log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
@@ -250,7 +243,7 @@ public class GeminiRelayService {
     private void forwardOpenAiStreamAsGeminiSingle(Channel channel, String requestBody,
                                                     String model, Token token,
                                                     HttpServletRequest httpRequest,
-                                                    HttpServletResponse httpResponse) throws IOException {
+                                                    HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
         if (support.isChannelRateLimited(channel)) {
             throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
         }
@@ -266,7 +259,7 @@ public class GeminiRelayService {
 
         HttpURLConnection conn = null;
         try {
-            conn = support.createSseConnection(channel, "/v1/chat/completions", openAiBody);
+            conn = support.createSseConnection(channel, "/v1/chat/completions", openAiBody, attemptTimeoutMs);
             int code = conn.getResponseCode();
             if (code != 200) {
                 String errorBody = conn.getErrorStream() != null
@@ -279,7 +272,11 @@ public class GeminiRelayService {
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
-                while ((line = reader.readLine()) != null) {
+                long deadline = support.sseDeadline();
+                while (true) {
+                    support.prepareSseRead(conn, deadline);
+                    line = reader.readLine();
+                    if (line == null) break;
                     if (line.startsWith("data: ")) {
                         String data = line.substring(6).trim();
                         if ("[DONE]".equals(data)) continue;
@@ -321,7 +318,7 @@ public class GeminiRelayService {
     private void forwardClaudeStreamAsGeminiSingle(Channel channel, String requestBody,
                                                     String model, Token token,
                                                     HttpServletRequest httpRequest,
-                                                    HttpServletResponse httpResponse) throws IOException {
+                                                    HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
         if (support.isChannelRateLimited(channel)) {
             throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
         }
@@ -335,7 +332,7 @@ public class GeminiRelayService {
 
         HttpURLConnection conn = null;
         try {
-            conn = support.createSseConnection(channel, "/v1/messages", claudeBody);
+            conn = support.createSseConnection(channel, "/v1/messages", claudeBody, attemptTimeoutMs);
             int code = conn.getResponseCode();
             if (code != 200) {
                 String errorBody = conn.getErrorStream() != null
@@ -348,7 +345,11 @@ public class GeminiRelayService {
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
-                while ((line = reader.readLine()) != null) {
+                long deadline = support.sseDeadline();
+                while (true) {
+                    support.prepareSseRead(conn, deadline);
+                    line = reader.readLine();
+                    if (line == null) break;
                     if (line.startsWith("data: ")) {
                         String data = line.substring(6).trim();
                         if ("[DONE]".equals(data)) continue;

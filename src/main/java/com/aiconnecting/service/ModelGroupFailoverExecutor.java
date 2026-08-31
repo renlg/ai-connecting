@@ -67,9 +67,6 @@ public class ModelGroupFailoverExecutor {
     @Autowired(required = false)
     private ChannelFailureRecorder channelFailureRecorder;
 
-    /** 总耗时预算（毫秒），介于业务约定的 120-150s 之间 */
-    private static final long WALL_CLOCK_BUDGET_MS = 130_000L;
-
     public Optional<ModelGroup> findEnabledGroup(String name) {
         return modelGroupService.findByName(name).filter(g -> Boolean.TRUE.equals(g.getEnabled()));
     }
@@ -126,7 +123,7 @@ public class ModelGroupFailoverExecutor {
 
     /**
      * 剩余总耗时预算（毫秒），作为本次尝试的读超时上限：固定 120s 读超时叠加多次尝试会让总耗时
-     * 远超 {@link #WALL_CLOCK_BUDGET_MS}，因此每次尝试的超时必须收窄到"不超过剩余预算"
+     * 远超配置的模型组总预算，因此每次尝试的超时必须收窄到"不超过剩余预算"
      */
     private long remainingBudgetMs(long deadline) {
         return Math.max(0L, deadline - System.currentTimeMillis());
@@ -279,7 +276,7 @@ public class ModelGroupFailoverExecutor {
                     "No available members in model group: " + groupName);
         }
         long startTime = System.currentTimeMillis();
-        long deadline = startTime + WALL_CLOCK_BUDGET_MS;
+        long deadline = startTime + support.modelGroupBudgetMs();
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
         BusinessException lastFailure = null;
         int attempts = 0;
@@ -551,7 +548,7 @@ public class ModelGroupFailoverExecutor {
             return;
         }
         long startTime = System.currentTimeMillis();
-        long deadline = startTime + WALL_CLOCK_BUDGET_MS;
+        long deadline = startTime + support.modelGroupBudgetMs();
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
         String lastError = null;
         String lastErrorBody = null;
@@ -821,6 +818,7 @@ public class ModelGroupFailoverExecutor {
         RelayProtocolAdapter.StreamState state = adapter().newStreamState(
                 memberModel, upstreamProtocol, clientProtocol);
         boolean bytesWritten = false;
+        long deadline = support.sseDeadline();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
             var writer = response.getWriter();
@@ -828,7 +826,10 @@ public class ModelGroupFailoverExecutor {
             boolean prefixWritten = prefix.isEmpty();
             boolean sawDataEvent = false;
             String line;
-            while ((line = reader.readLine()) != null) {
+            while (true) {
+                support.prepareSseRead(conn, deadline);
+                line = reader.readLine();
+                if (line == null) break;
                 if (upstreamProtocol == clientProtocol) {
                     writer.write(line);
                     writer.write("\n");
@@ -1062,7 +1063,7 @@ public class ModelGroupFailoverExecutor {
                     "No available members in model group: " + group.getName());
         }
         long startTime = System.currentTimeMillis();
-        long deadline = startTime + WALL_CLOCK_BUDGET_MS;
+        long deadline = startTime + support.audioTimeoutMs();
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
         BusinessException lastFailure = null;
         int attempts = 0;
@@ -1104,7 +1105,7 @@ public class ModelGroupFailoverExecutor {
                 long timeoutMs = remainingBudgetMs(deadline);
                 if (timeoutMs <= 0) break;
                 FailureLogContext.setChannelModel(memberModel);
-                RelaySupport.BinaryResponse response = support.forwardMultipartRequest(channel, path, mb.build(), timeoutMs);
+                RelaySupport.BinaryResponse response = support.forwardMediaMultipartRequest(channel, path, mb.build(), timeoutMs);
                 if (!rawPassThrough && !isValidTranscriptionJson(response.body())) {
                     throw new BusinessException(502, "上游返回无法解析的转写结果",
                             "Upstream returned an unparseable transcription result");
@@ -1121,6 +1122,7 @@ public class ModelGroupFailoverExecutor {
                 log.error("模型组 {} 成员 {} (渠道 {}) 转写请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 recordFailure(channel, modelConfigId, e);
+                if (e.getCode() == 504) break;
                 if (remainingBudgetMs(deadline) <= 0) break;
             }
         }
@@ -1279,7 +1281,9 @@ public class ModelGroupFailoverExecutor {
                                             String path, String requestBody, BigDecimal creditCost,
                                             Map<String, String> preparedVideoBodies) {
         long startTime = System.currentTimeMillis();
-        long deadline = startTime + WALL_CLOCK_BUDGET_MS;
+        long mediaBudgetMs = "image".equals(group.getType())
+                ? support.imageTimeoutMs() : support.videoTimeoutMs(requestBody);
+        long deadline = startTime + mediaBudgetMs;
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
         BusinessException lastFailure = null;
         int attempts = 0;
@@ -1315,7 +1319,7 @@ public class ModelGroupFailoverExecutor {
                 if ("image".equals(group.getType())) {
                     upstreamBody = support.prepareImageRequestBody(channel, upstreamBody);
                 }
-                String response = support.forwardRequest(channel, path, upstreamBody, timeoutMs);
+                String response = support.forwardMediaRequest(channel, path, upstreamBody, timeoutMs);
 
                 return new MediaAttemptResult(response, channel, memberModel, startTime, charge);
             } catch (BusinessException e) {
@@ -1324,6 +1328,7 @@ public class ModelGroupFailoverExecutor {
                 log.error("模型组 {} 成员 {} (渠道 {}) 媒体请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 recordFailure(channel, modelConfigId, e);
+                if (e.getCode() == 504) break;
                 if (remainingBudgetMs(deadline) <= 0) break;
             } catch (RuntimeException e) {
                 releaseAttemptCharge(ctx, charge);
@@ -1360,7 +1365,7 @@ public class ModelGroupFailoverExecutor {
                                                          List<ModelGroupRoutingService.Candidate> candidates,
                                                          String path, String baseBodyJson, BigDecimal creditCost) {
         long startTime = System.currentTimeMillis();
-        long deadline = startTime + WALL_CLOCK_BUDGET_MS;
+        long deadline = startTime + support.audioTimeoutMs();
         int maxAttempts = Math.min(group.getMaxAttempts() != null ? group.getMaxAttempts() : 5, 8);
         BusinessException lastFailure = null;
         int attempts = 0;
@@ -1391,7 +1396,7 @@ public class ModelGroupFailoverExecutor {
             RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
             try {
                 String upstreamBody = rewriteModelField(baseBodyJson, memberModel);
-                RelaySupport.BinaryResponse response = support.forwardBinaryRequest(channel, path, upstreamBody, timeoutMs);
+                RelaySupport.BinaryResponse response = support.forwardMediaBinaryRequest(channel, path, upstreamBody, timeoutMs);
 
                 return new MediaBinaryAttemptResult(response, channel, memberModel, startTime, charge);
             } catch (BusinessException e) {
@@ -1400,6 +1405,7 @@ public class ModelGroupFailoverExecutor {
                 log.error("模型组 {} 成员 {} (渠道 {}) 二进制媒体请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 recordFailure(channel, modelConfigId, e);
+                if (e.getCode() == 504) break;
                 if (remainingBudgetMs(deadline) <= 0) break;
             } catch (RuntimeException e) {
                 releaseAttemptCharge(ctx, charge);

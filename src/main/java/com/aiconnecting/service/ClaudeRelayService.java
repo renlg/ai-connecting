@@ -47,11 +47,12 @@ public class ClaudeRelayService {
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long startTime = System.currentTimeMillis();
+        long deadline = startTime + support.singleModelTextBudgetMs();
         String lastError = null;
         int attempt = 0;
 
         BusinessException lastFailure = null;
-        while (attempt < RelaySupport.MAX_RETRIES) {
+        while (attempt < RelaySupport.MAX_RETRIES && System.currentTimeMillis() < deadline) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -74,16 +75,17 @@ public class ClaudeRelayService {
 
             attempt++;
             try {
+                long remainingMs = Math.max(1L, deadline - System.currentTimeMillis());
                 String response;
                 if (support.isClaudeTypeChannel(channel)) {
-                    response = support.forwardClaudeRequest(channel, requestBody);
+                    response = support.forwardClaudeRequest(channel, requestBody, remainingMs);
                 } else if (support.isGeminiTypeChannel(channel)) {
                     String geminiBody = ProtocolConverter.convertClaudeToGeminiRequest(requestBody);
-                    response = support.forwardGeminiRequest(channel, geminiBody);
+                    response = support.forwardGeminiRequest(channel, geminiBody, remainingMs);
                     response = ProtocolConverter.convertGeminiToClaudeResponse(response);
                 } else {
                     String openAiBody = ProtocolConverter.convertClaudeToOpenAiBody(requestBody);
-                    String openAiResponse = support.forwardRequest(channel, "/v1/chat/completions", openAiBody);
+                    String openAiResponse = support.forwardRequest(channel, "/v1/chat/completions", openAiBody, remainingMs);
                     response = ProtocolConverter.convertOpenAiToClaudeResponse(openAiResponse);
                 }
 
@@ -99,6 +101,7 @@ public class ClaudeRelayService {
                 lastError = e.getMessage();
                 log.error("Claude 渠道 {} 请求失败 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.dispatchRelayFailure(channel.getId(), channel.getName(), modelConfigId, e);
+                if (System.currentTimeMillis() >= deadline) throw wrapFailure(e, "单模型请求超过总耗时预算");
                 if (attempt == RelaySupport.MAX_RETRIES) {
                     throw wrapFailure(e, "所有渠道均不可用，最后错误: " + lastError);
                 }
@@ -125,10 +128,11 @@ public class ClaudeRelayService {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
+        long retryDeadline = System.currentTimeMillis() + support.singleModelTextBudgetMs();
         String lastError = null;
         int attempt = 0;
 
-        while (attempt < RelaySupport.MAX_RETRIES) {
+        while (attempt < RelaySupport.MAX_RETRIES && System.currentTimeMillis() < retryDeadline) {
             Channel channel;
             try {
                 channel = support.channelRouter.selectChannel(ctx.channelModelId(), triedChannels, ctx.userLevel());
@@ -152,12 +156,13 @@ public class ClaudeRelayService {
             log.info("[Claude流式] 尝试 {}/{}, channel={}", attempt, RelaySupport.MAX_RETRIES, channel.getId());
 
             try {
+                long remainingMs = Math.max(1L, retryDeadline - System.currentTimeMillis());
                 if (support.isClaudeTypeChannel(channel)) {
-                    forwardClaudeStreamSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
+                    forwardClaudeStreamSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse, remainingMs);
                 } else if (support.isGeminiTypeChannel(channel)) {
-                    forwardGeminiStreamAsClaudeSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
+                    forwardGeminiStreamAsClaudeSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse, remainingMs);
                 } else {
-                    forwardOpenAiStreamAsClaudeSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse);
+                    forwardOpenAiStreamAsClaudeSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse, remainingMs);
                 }
                 log.info("[Claude流式] 处理完成, channel={}", channel.getId());
                 return;
@@ -191,7 +196,7 @@ public class ClaudeRelayService {
     private void forwardClaudeStreamSingle(Channel channel, String requestBody,
                                             String model, Token token,
                                             HttpServletRequest httpRequest,
-                                            HttpServletResponse httpResponse) throws IOException {
+                                            HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
         if (support.isChannelRateLimited(channel)) {
             throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
         }
@@ -201,7 +206,7 @@ public class ClaudeRelayService {
 
         HttpURLConnection conn = null;
         try {
-            conn = support.createSseConnection(channel, "/v1/messages", requestBody);
+            conn = support.createSseConnection(channel, "/v1/messages", requestBody, attemptTimeoutMs);
             int code = conn.getResponseCode();
             log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
             if (code != 200) {
@@ -243,7 +248,7 @@ public class ClaudeRelayService {
     private void forwardOpenAiStreamAsClaudeSingle(Channel channel, String requestBody,
                                                     String model, Token token,
                                                     HttpServletRequest httpRequest,
-                                                    HttpServletResponse httpResponse) throws IOException {
+                                                    HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
         if (support.isChannelRateLimited(channel)) {
             throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
         }
@@ -257,7 +262,7 @@ public class ClaudeRelayService {
 
         HttpURLConnection conn = null;
         try {
-            conn = support.createSseConnection(channel, "/v1/chat/completions", openAiBody);
+            conn = support.createSseConnection(channel, "/v1/chat/completions", openAiBody, attemptTimeoutMs);
             int code = conn.getResponseCode();
             log.info("HTTP请求返回, code: {}, channel: {}", code, channel.getId());
             if (code != 200) {
@@ -278,7 +283,11 @@ public class ClaudeRelayService {
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
-                while ((line = reader.readLine()) != null) {
+                long deadline = support.sseDeadline();
+                while (true) {
+                    support.prepareSseRead(conn, deadline);
+                    line = reader.readLine();
+                    if (line == null) break;
                     if (line.startsWith("data: ")) {
                         String data = line.substring(6).trim();
                         if ("[DONE]".equals(data)) continue;
@@ -364,7 +373,7 @@ public class ClaudeRelayService {
     private void forwardGeminiStreamAsClaudeSingle(Channel channel, String requestBody,
                                                     String model, Token token,
                                                     HttpServletRequest httpRequest,
-                                                    HttpServletResponse httpResponse) throws IOException {
+                                                    HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
         if (support.isChannelRateLimited(channel)) {
             throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
         }
@@ -373,21 +382,10 @@ public class ClaudeRelayService {
         long startTime = System.currentTimeMillis();
         int promptTokens = 0, completionTokens = 0;
 
-        String url = channel.getBaseUrl().replaceAll("/+$", "")
-                + "/v1/models/" + model + ":streamGenerateContent?alt=sse&key=" + channel.getApiKey();
-        java.net.URL urlObj = new java.net.URL(url);
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) urlObj.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(120000);
-            conn.setDoOutput(true);
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("Accept", "text/event-stream");
-            conn.setRequestProperty("Connection", "close");
-            conn.getOutputStream().write(geminiBody.getBytes(StandardCharsets.UTF_8));
-            conn.getOutputStream().flush();
+            conn = support.createSseConnection(channel,
+                    "/v1/models/" + model + ":streamGenerateContent?alt=sse", geminiBody, attemptTimeoutMs);
 
             int code = conn.getResponseCode();
             if (code != 200) {
@@ -407,7 +405,11 @@ public class ClaudeRelayService {
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
-                while ((line = reader.readLine()) != null) {
+                long deadline = support.sseDeadline();
+                while (true) {
+                    support.prepareSseRead(conn, deadline);
+                    line = reader.readLine();
+                    if (line == null) break;
                     if (line.startsWith("data: ")) {
                         String data = line.substring(6).trim();
                         try {
