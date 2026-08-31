@@ -2,6 +2,8 @@ package com.aiconnecting.service;
 
 import com.aiconnecting.common.BusinessException;
 import com.aiconnecting.common.OpenAiUrlUtils;
+import com.aiconnecting.common.SseUtils;
+import com.aiconnecting.common.UpstreamErrorUtils;
 import com.aiconnecting.config.RelayTimeoutProperties;
 import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.Token;
@@ -192,7 +194,13 @@ public class PassthroughRelayService {
                 UsageObserver observer = new UsageObserver(
                         upstreamResponse.header("Content-Type"), objectMapper);
                 try {
-                    copyUpstreamResponse(upstreamResponse, servletResponse, observer);
+                    if (upstreamResponse.code() == 429) {
+                        new RelayProtocolAdapter(objectMapper).writeError(
+                                protocol(request.getRequestURI()), servletResponse, upstreamResponse.code(),
+                                UpstreamErrorUtils.clientFacingMessage(upstreamResponse.code(), failureBody), true);
+                    } else {
+                        copyUpstreamResponse(upstreamResponse, servletResponse, observer);
+                    }
                     if (upstreamResponse.isSuccessful()) {
                     } else {
                         BusinessException upstreamFailure = BusinessException.upstream(
@@ -224,8 +232,10 @@ public class PassthroughRelayService {
                 }
                 if (!upstreamResponse.isSuccessful() && failureLogService != null) {
                     failureLogService.record(request, upstreamResponse.code(),
-                            failureBody == null || failureBody.isBlank()
-                                    ? "Upstream API error" : failureBody,
+                            upstreamResponse.code() == 429
+                                    ? SseUtils.GENERIC_UPSTREAM_ERROR_MESSAGE
+                                    : (failureBody == null || failureBody.isBlank()
+                                    ? "Upstream API error" : failureBody),
                             "Upstream API error: " + upstreamResponse.code() + " - " + failureBody);
                 }
                 return true;
