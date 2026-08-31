@@ -292,7 +292,7 @@ public class ModelGroupFailoverExecutor {
 
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), ctx.userLevel());
+                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
             } catch (BusinessException e) {
                 lastFailure = null;
                 continue;
@@ -567,7 +567,7 @@ public class ModelGroupFailoverExecutor {
 
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), ctx.userLevel());
+                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
             } catch (BusinessException e) {
                 lastError = e.getMessage();
                 lastErrorBody = null;
@@ -1078,7 +1078,7 @@ public class ModelGroupFailoverExecutor {
             Long modelConfigId = candidate.modelConfig().getId();
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), ctx.userLevel());
+                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
             } catch (BusinessException e) {
                 lastFailure = null;
                 continue;
@@ -1298,7 +1298,7 @@ public class ModelGroupFailoverExecutor {
             Long modelConfigId = candidate.modelConfig().getId();
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), ctx.userLevel());
+                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
             } catch (BusinessException e) {
                 lastFailure = null;
                 continue;
@@ -1380,7 +1380,7 @@ public class ModelGroupFailoverExecutor {
             Long modelConfigId = candidate.modelConfig().getId();
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), ctx.userLevel());
+                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
             } catch (BusinessException e) {
                 lastFailure = null;
                 continue;

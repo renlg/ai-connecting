@@ -1,6 +1,5 @@
 package com.aiconnecting.service;
 
-import com.aiconnecting.common.LevelUtils;
 import com.aiconnecting.entity.ModelConfig;
 import com.aiconnecting.entity.ModelGroup;
 import lombok.RequiredArgsConstructor;
@@ -46,7 +45,7 @@ public class ModelGroupRoutingService {
         List<ModelGroupService.MemberView> eligible = views.stream()
                 .filter(v -> v.modelConfig().getStatus() != null && v.modelConfig().getStatus() == 1)
                 .filter(v -> isAdmin || !Boolean.TRUE.equals(v.modelConfig().getAdminOnly()))
-                .filter(v -> isAdmin || LevelUtils.isAllowed(v.modelConfig().getSupportedLevels(), userLevel))
+                // 模型组请求不校验成员模型等级：组内可用性由渠道/上游决定，避免低等级用户全组 502
                 .toList();
         if (eligible.isEmpty()) {
             return List.of();
