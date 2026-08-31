@@ -107,6 +107,7 @@ app:
     scan-window-ms: ${RISK_AI_SCAN_WINDOW_MS:3600000}  # 扫描窗口(毫秒)，默认1小时
     max-records: ${RISK_AI_MAX_RECORDS:200}  # 单次最多分析条数
     fuse-years: ${RISK_AI_FUSE_YEARS:10}  # 熔断年限，默认10年
+    min-hits: ${RISK_AI_MIN_HITS:2}  # 同一渠道+模型至少命中记录数，默认2条
   model-group-pruning:
     enabled: ${MODEL_GROUP_PRUNING_ENABLED:true}  # 长期全渠道熔断模型自动剔除开关
     interval-ms: ${MODEL_GROUP_PRUNING_INTERVAL_MS:600000}  # 定时任务周期(毫秒)，默认10分钟

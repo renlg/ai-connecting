@@ -19,8 +19,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -56,11 +58,16 @@ public class RiskAiAnalyzerService {
     @Value("${app.risk-ai.fuse-years:10}")
     private int fuseYears;
 
+    @Value("${app.risk-ai.min-hits:2}")
+    private int minHits;
+
     private static final String LOCK_KEY = "job:riskAiAnalysis";
     private static final long LOCK_TTL_SECONDS = 300;
     private static final String CLEAN_LOCK_KEY = "job:channelFailureRecordsClean";
     private static final long CLEAN_LOCK_TTL_SECONDS = 120;
     private static final int RETENTION_DAYS = 3;
+    private static final Set<String> AI_ANALYZABLE_ERROR_CODES = Set.of(
+            "400", "401", "402", "403", "404", "429");
 
     private final OkHttpClient aiClient = new OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -86,9 +93,17 @@ public class RiskAiAnalyzerService {
         }
 
         List<Long> recordIds = records.stream().map(ChannelFailureRecord::getId).toList();
+        List<ChannelFailureRecord> analyzableRecords = records.stream()
+                .filter(this::isAiAnalyzable)
+                .toList();
+        if (analyzableRecords.isEmpty()) {
+            markAnalyzed(recordIds);
+            log.info("AI分析: 过滤后无4xx记录，跳过");
+            return;
+        }
 
-        List<String> lines = new ArrayList<>(records.size());
-        for (ChannelFailureRecord r : records) {
+        List<String> lines = new ArrayList<>(analyzableRecords.size());
+        for (ChannelFailureRecord r : analyzableRecords) {
             String msg = r.getErrorMessage() != null
                     ? r.getErrorMessage().replace("\n", " ").replace("\r", "")
                     : "";
@@ -97,9 +112,9 @@ public class RiskAiAnalyzerService {
                     + "|" + nullSafe(r.getErrorCode()) + "|" + msg);
         }
 
-        Set<ChannelModel> fuseTargets;
+        List<AiFuseTarget> aiTargets;
         try {
-            fuseTargets = callAi(lines);
+            aiTargets = callAi(lines);
         } catch (Exception e) {
             log.warn("AI分析调用失败，本轮跳过: {}", e.getMessage());
             markAnalyzed(recordIds);
@@ -108,26 +123,37 @@ public class RiskAiAnalyzerService {
 
         markAnalyzed(recordIds);
 
-        if (fuseTargets.isEmpty()) {
-            log.info("AI分析完成: 分析{}条记录，未识别出免费额度耗尽或模型不存在", records.size());
+        if (aiTargets.isEmpty()) {
+            log.info("AI分析完成: 分析{}条4xx记录，未识别出免费额度耗尽或模型不存在", analyzableRecords.size());
             return;
         }
 
+        Map<ChannelModel, Set<Long>> validatedTargets = validateAndGroupTargets(aiTargets, analyzableRecords);
         int fuseDurationSeconds = Math.toIntExact(fuseYears * 365L * 24 * 60 * 60);
-        for (ChannelModel cm : fuseTargets) {
+        int fusedCount = 0;
+        for (Map.Entry<ChannelModel, Set<Long>> entry : validatedTargets.entrySet()) {
+            ChannelModel cm = entry.getKey();
+            int hitCount = entry.getValue().size();
+            if (hitCount < minHits) {
+                log.info("AI分析: channelId={}, model={}, 命中数{}不足{}，暂不熔断",
+                        cm.channelId, cm.model, hitCount, minHits);
+                continue;
+            }
             try {
                 String reason = "AI识别免费额度耗尽/模型不存在(渠道=" + cm.channelId + ", 模型=" + cm.model + ")";
                 riskManagerService.createAutoQuotaCircuitBreaker(cm.channelId, cm.model,
                         fuseDurationSeconds, reason);
-                log.warn("AI自动熔断: channelId={}, model={}, 熔断{}年", cm.channelId, cm.model, fuseYears);
+                fusedCount++;
+                log.warn("AI自动熔断: channelId={}, model={}, 命中数={}, 熔断{}年",
+                        cm.channelId, cm.model, hitCount, fuseYears);
             } catch (Exception e) {
                 log.warn("AI自动熔断写入失败: channelId={}, model={}, error={}", cm.channelId, cm.model, e.getMessage());
             }
         }
-        log.info("AI分析完成: 分析{}条记录，熔断{}个渠道+模型", records.size(), fuseTargets.size());
+        log.info("AI分析完成: 分析{}条4xx记录，熔断{}个渠道+模型", analyzableRecords.size(), fusedCount);
     }
 
-    private Set<ChannelModel> callAi(List<String> lines) throws IOException {
+    private List<AiFuseTarget> callAi(List<String> lines) throws IOException {
         String token = resolveToken();
         if (token == null || token.isBlank()) {
             throw new IOException("AI分析token未配置(设置RISK_AI_TOKEN或创建name=risk-ai-analyzer的token)");
@@ -140,10 +166,13 @@ public class RiskAiAnalyzerService {
                 quota exceeded, You exceeded your current quota, free tier, no remaining free, insufficient_user_quota.
                 模型不存在特征（不区分大小写）：model_not_found, model not found, 模型不存在, unknown model, no such model.
                 除这两类明确特征外，其它情况一律不识别为熔断目标。
-                只返回JSON数组，格式：[{"channelId":数字,"model":"模型名"}]
+                只依据输入中实际符合上述特征的记录返回目标，并提供证据。recordIds必须是输入批次中属于该渠道+模型且实际命中上述特征的真实记录ID，matchedKeyword填写分类依据或匹配到的关键字。
+                只返回JSON数组，格式：[{"channelId":数字,"model":"模型名","recordIds":[1,2,3],"matchedKeyword":"quota"}]
                 如果没有识别到，返回空数组 []。不要返回其他内容。""";
 
-        String userPrompt = "以下是最近1小时内的" + lines.size() + "条渠道失败记录（格式：ID|渠道ID|模型|错误码|错误信息）：\n"
+        String userPrompt = "以下是最近1小时内的" + lines.size() + "条渠道失败记录（格式：ID|渠道ID|模型|错误码|错误信息）。"
+                + "只依据实际命中免费额度耗尽或模型不存在特征的记录返回目标；每个目标必须返回输入中的真实recordIds和matchedKeyword，"
+                + "格式为[{\"channelId\":数字,\"model\":\"模型名\",\"recordIds\":[1,2],\"matchedKeyword\":\"匹配关键字\"}]：\n"
                 + dataBlock;
 
         var messages = new ArrayList<Object>();
@@ -177,8 +206,8 @@ public class RiskAiAnalyzerService {
         }
     }
 
-    Set<ChannelModel> parseAiResponse(String responseBody) {
-        Set<ChannelModel> result = new LinkedHashSet<>();
+    List<AiFuseTarget> parseAiResponse(String responseBody) {
+        List<AiFuseTarget> result = new ArrayList<>();
         try {
             JsonNode root = mapper.readTree(responseBody);
             String content = root.path("choices").path(0).path("message").path("content").asText("");
@@ -191,7 +220,22 @@ public class RiskAiAnalyzerService {
                     long channelId = item.path("channelId").asLong(0);
                     String model = item.path("model").asText("").trim();
                     if (channelId > 0) {
-                        result.add(new ChannelModel(channelId, model.isEmpty() ? null : model));
+                        List<Long> evidenceRecordIds = new ArrayList<>();
+                        JsonNode recordIdsNode = item.get("recordIds");
+                        boolean recordIdsProvided = recordIdsNode != null;
+                        boolean recordIdsValidFormat = !recordIdsProvided || recordIdsNode.isArray();
+                        if (recordIdsNode != null && recordIdsNode.isArray()) {
+                            for (JsonNode recordIdNode : recordIdsNode) {
+                                if (recordIdNode.canConvertToLong() && recordIdNode.asLong() > 0) {
+                                    evidenceRecordIds.add(recordIdNode.asLong());
+                                } else {
+                                    recordIdsValidFormat = false;
+                                }
+                            }
+                        }
+                        String matchedKeyword = item.path("matchedKeyword").asText("").trim();
+                        result.add(new AiFuseTarget(channelId, model.isEmpty() ? null : model,
+                                evidenceRecordIds, recordIdsProvided, recordIdsValidFormat, matchedKeyword));
                     }
                 }
             }
@@ -199,6 +243,70 @@ public class RiskAiAnalyzerService {
             log.warn("AI响应解析失败: {}", e.getMessage());
         }
         return result;
+    }
+
+    private Map<ChannelModel, Set<Long>> validateAndGroupTargets(
+            List<AiFuseTarget> aiTargets, List<ChannelFailureRecord> analyzableRecords) {
+        Map<Long, ChannelFailureRecord> recordsById = new LinkedHashMap<>();
+        Set<ChannelModel> inputChannelModels = new LinkedHashSet<>();
+        for (ChannelFailureRecord record : analyzableRecords) {
+            recordsById.put(record.getId(), record);
+            inputChannelModels.add(new ChannelModel(record.getChannelId(), normalizeModel(record.getModelName())));
+        }
+
+        Map<ChannelModel, Set<Long>> validated = new LinkedHashMap<>();
+        for (AiFuseTarget target : aiTargets) {
+            ChannelModel channelModel = new ChannelModel(target.channelId, normalizeModel(target.model));
+            if (!target.recordIdsProvided) {
+                if (inputChannelModels.contains(channelModel)) {
+                    log.info("AI分析: channelId={}, model={} 返回旧格式且无recordIds，宽容接受但命中数按0计",
+                            target.channelId, target.model);
+                    validated.computeIfAbsent(channelModel, ignored -> new LinkedHashSet<>());
+                } else {
+                    log.warn("AI分析丢弃无证据目标: channelId={}, model={} 不在输入4xx记录中",
+                            target.channelId, target.model);
+                }
+                continue;
+            }
+            if (!target.recordIdsValidFormat) {
+                log.warn("AI分析丢弃证据格式无效目标: channelId={}, model={}",
+                        target.channelId, target.model);
+                continue;
+            }
+            if (target.recordIds.isEmpty()) {
+                log.warn("AI分析丢弃无证据目标: channelId={}, model={} 的recordIds为空",
+                        target.channelId, target.model);
+                continue;
+            }
+
+            Set<Long> distinctRecordIds = new LinkedHashSet<>(target.recordIds);
+            boolean valid = true;
+            for (Long recordId : distinctRecordIds) {
+                ChannelFailureRecord record = recordsById.get(recordId);
+                if (record == null || !isAiAnalyzable(record)
+                        || !channelModel.equals(new ChannelModel(record.getChannelId(), normalizeModel(record.getModelName())))) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (!valid) {
+                log.warn("AI分析丢弃证据无效目标: channelId={}, model={}, recordIds={}",
+                        target.channelId, target.model, target.recordIds);
+                continue;
+            }
+            validated.computeIfAbsent(channelModel, ignored -> new LinkedHashSet<>()).addAll(distinctRecordIds);
+        }
+        return validated;
+    }
+
+    private boolean isAiAnalyzable(ChannelFailureRecord record) {
+        String errorCode = record.getErrorCode();
+        return errorCode != null && AI_ANALYZABLE_ERROR_CODES.contains(errorCode.trim());
+    }
+
+    private static String normalizeModel(String model) {
+        if (model == null || model.isBlank()) return null;
+        return model.trim();
     }
 
     private String extractJson(String content) {
@@ -246,4 +354,7 @@ public class RiskAiAnalyzerService {
     }
 
     record ChannelModel(long channelId, String model) {}
+
+    record AiFuseTarget(long channelId, String model, List<Long> recordIds,
+                        boolean recordIdsProvided, boolean recordIdsValidFormat, String matchedKeyword) {}
 }
