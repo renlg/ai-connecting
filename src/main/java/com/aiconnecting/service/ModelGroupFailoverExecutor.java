@@ -297,6 +297,10 @@ public class ModelGroupFailoverExecutor {
                 lastFailure = null;
                 continue;
             }
+            if (channel == null) {
+                log.warn("模型组 {} 成员 {} 无可用渠道，跳过", groupName, candidate.modelConfig().getName());
+                continue;
+            }
             if (support.isChannelRateLimited(channel)) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 触发限流，跳过", groupName, candidate.modelConfig().getName(), channel.getId());
                 continue;
@@ -572,6 +576,10 @@ public class ModelGroupFailoverExecutor {
                 lastError = e.getMessage();
                 lastErrorBody = null;
                 lastErrorUpstream = false;
+                continue;
+            }
+            if (channel == null) {
+                log.warn("模型组 {} 成员 {} 无可用渠道，跳过", groupName, candidate.modelConfig().getName());
                 continue;
             }
             if (support.isChannelRateLimited(channel)) {
@@ -1083,6 +1091,10 @@ public class ModelGroupFailoverExecutor {
                 lastFailure = null;
                 continue;
             }
+            if (channel == null) {
+                log.warn("模型组 {} 成员 {} 无可用渠道，跳过", group.getName(), candidate.modelConfig().getName());
+                continue;
+            }
             if (support.isChannelRateLimited(channel)) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
                 continue;
@@ -1303,6 +1315,10 @@ public class ModelGroupFailoverExecutor {
                 lastFailure = null;
                 continue;
             }
+            if (channel == null) {
+                log.warn("模型组 {} 成员 {} 无可用渠道，跳过", group.getName(), candidate.modelConfig().getName());
+                continue;
+            }
             if (support.isChannelRateLimited(channel)) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
                 continue;
@@ -1383,6 +1399,10 @@ public class ModelGroupFailoverExecutor {
                 channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
             } catch (BusinessException e) {
                 lastFailure = null;
+                continue;
+            }
+            if (channel == null) {
+                log.warn("模型组 {} 成员 {} 无可用渠道，跳过", group.getName(), candidate.modelConfig().getName());
                 continue;
             }
             if (support.isChannelRateLimited(channel)) {

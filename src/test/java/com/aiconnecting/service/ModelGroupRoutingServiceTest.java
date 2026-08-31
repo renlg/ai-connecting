@@ -14,7 +14,7 @@ import static org.mockito.Mockito.when;
 class ModelGroupRoutingServiceTest {
 
     @Test
-    void resolveOrderedCandidates_excludesMembersUnsupportedForUserLevel() {
+    void resolveOrderedCandidates_retainsMembersUnsupportedForUserLevel() {
         ModelGroupService groupService = mock(ModelGroupService.class);
         ModelGroupRoutingService routingService = new ModelGroupRoutingService(groupService);
         ModelGroup group = ModelGroup.builder().id(10L).strategy("priority").build();
@@ -32,8 +32,9 @@ class ModelGroupRoutingServiceTest {
         List<ModelGroupRoutingService.Candidate> candidates =
                 routingService.resolveOrderedCandidates(group, false, 1);
 
+        // 模型组成员的等级过滤已移除，成员选择不再按 userLevel 剔除成员。
         assertThat(candidates).extracting(candidate -> candidate.modelConfig().getName())
-                .containsExactly("open-model", "level-one-model");
+                .containsExactly("level-two-model", "open-model", "level-one-model");
     }
 
     @Test
