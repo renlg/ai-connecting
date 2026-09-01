@@ -59,7 +59,7 @@ app:
   xai-image-proxy-base-url: ${XAI_IMAGE_PROXY_BASE_URL:http://207.57.184.239}
   relay-timeouts:
     connect-ms: ${RELAY_CONNECT_TIMEOUT_MS:30000}
-    read-ms: ${RELAY_READ_TIMEOUT_MS:120000}
+    read-ms: ${RELAY_READ_TIMEOUT_MS:240000}
     write-ms: ${RELAY_WRITE_TIMEOUT_MS:30000}
     single-model-text-budget-ms: ${RELAY_SINGLE_MODEL_TEXT_BUDGET_MS:180000}
     model-group-budget-ms: ${RELAY_MODEL_GROUP_BUDGET_MS:130000}
