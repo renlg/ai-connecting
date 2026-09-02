@@ -147,7 +147,10 @@ public class OpenAiRelayService {
                     response = support.forwardGeminiRequest(channel, geminiBody, remainingMs);
                     response = ProtocolConverter.convertGeminiToOpenAiResponse(response);
                 } else {
-                    response = support.forwardRequest(channel, path, requestBody, remainingMs);
+                    String upstreamBody = requestBodyTransformerRegistry != null
+                            ? requestBodyTransformerRegistry.transform(model, requestBody)
+                            : requestBody;
+                    response = support.forwardRequest(channel, path, upstreamBody, remainingMs);
                 }
                 long duration = System.currentTimeMillis() - startTime;
                 support.recordUsage(ctx.token(), channel, model, response, duration, httpRequest, path);
