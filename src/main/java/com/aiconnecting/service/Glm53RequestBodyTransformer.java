@@ -12,7 +12,7 @@ import java.util.Set;
 @Component
 public class Glm53RequestBodyTransformer implements RequestBodyTransformer {
 
-    private static final String MODEL = "glm-5.3";
+    private static final Set<String> MODELS = Set.of("glm-5.3", "glm-5.3-flash");
     private static final Set<String> THINKING_TOGGLE_FIELDS = Set.of(
             "thinking",
             "enable_thinking",
@@ -29,7 +29,7 @@ public class Glm53RequestBodyTransformer implements RequestBodyTransformer {
 
     @Override
     public boolean supports(String model) {
-        return MODEL.equals(model);
+        return MODELS.contains(model);
     }
 
     @Override
