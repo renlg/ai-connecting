@@ -22,7 +22,8 @@ public class Glm53RequestBodyTransformer implements RequestBodyTransformer {
             "enable_thinking",
             "thinking_enabled",
             "disable_thinking",
-            "thinking_disabled"
+            "thinking_disabled",
+            "reasoning_effort"
     );
 
     private final ObjectMapper objectMapper;
