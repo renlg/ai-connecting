@@ -343,6 +343,9 @@ public class ModelGroupFailoverExecutor {
 
                 RelayProtocol upstreamProtocol = adapter().channelProtocol(channel);
                 String upstreamBody = adapter().toUpstreamBody(request, memberModel, upstreamProtocol);
+                if (upstreamProtocol == RelayProtocol.OPENAI && requestBodyTransformerRegistry != null) {
+                    upstreamBody = requestBodyTransformerRegistry.transform(memberModel, upstreamBody);
+                }
                 String upstreamResponse = switch (upstreamProtocol) {
                     case OPENAI -> support.forwardRequest(channel,
                             request.protocol() == RelayProtocol.OPENAI ? request.path()
@@ -650,6 +653,9 @@ public class ModelGroupFailoverExecutor {
             RelayProtocol upstreamProtocol = adapter().channelProtocol(channel);
             String modifiedBody = adapter().toUpstreamBody(request, memberModel, upstreamProtocol);
             if (upstreamProtocol == RelayProtocol.OPENAI) {
+                if (requestBodyTransformerRegistry != null) {
+                    modifiedBody = requestBodyTransformerRegistry.transform(memberModel, modifiedBody);
+                }
                 modifiedBody = support.injectStreamOptions(modifiedBody, "/v1/chat/completions");
             }
 
