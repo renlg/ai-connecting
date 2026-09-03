@@ -3,6 +3,7 @@ import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, mes
 import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
 import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCreditHistoryDetail, testTokenChatStream, getTokenModels } from '../api'
 import dayjs from 'dayjs'
+import { useOutletContext } from 'react-router-dom'
 
 const { Text } = Typography
 
@@ -32,14 +33,16 @@ export default function Tokens() {
   const [testLoading, setTestLoading] = useState(false)
   const [modelOptions, setModelOptions] = useState([])
   const [streamContent, setStreamContent] = useState('')
-  const user = JSON.parse(localStorage.getItem('user') || '{}')
+  const [createdToken, setCreatedToken] = useState(null)
+  const { user } = useOutletContext()
   const isAdmin = user.role === 'admin'
 
   const load = (search) => {
     setLoading(true)
     getTokens(search).then(res => {
       if (res.code === 200) setTokens(res.data || [])
-    }).finally(() => setLoading(false))
+    }).catch(err => message.error(err?.message || 'Token 加载失败'))
+      .finally(() => setLoading(false))
   }
 
   useEffect(() => { load() }, [])
@@ -117,8 +120,12 @@ export default function Tokens() {
         await updateToken(editing.id, payload)
         message.success('更新成功')
       } else {
-        await createToken(payload)
+        const res = await createToken(payload)
         message.success('创建成功')
+        // 明文 Key 仅创建响应一次性回显，此后不再下发
+        if (res?.data?.plainTokenKey) {
+          setCreatedToken({ name: values.name, plainTokenKey: res.data.plainTokenKey })
+        }
       }
       setModalOpen(false)
       form.resetFields()
@@ -150,7 +157,8 @@ export default function Tokens() {
     setHistoryLoading(true)
     getTokenCreditHistory(token.id).then(res => {
       if (res.code === 200) setHistoryData(res.data || [])
-    }).finally(() => setHistoryLoading(false))
+    }).catch(err => message.error(err?.message || '使用记录加载失败'))
+      .finally(() => setHistoryLoading(false))
   }
 
   const openCreditHistoryDetail = (record) => {
@@ -159,7 +167,8 @@ export default function Tokens() {
     setDetailLoading(true)
     getTokenCreditHistoryDetail(historyToken.id, record.date).then(res => {
       if (res.code === 200) setDetailData(res.data || [])
-    }).finally(() => setDetailLoading(false))
+    }).catch(err => message.error(err?.message || '使用明细加载失败'))
+      .finally(() => setDetailLoading(false))
   }
 
   const copyToken = (key) => {
@@ -196,7 +205,7 @@ export default function Tokens() {
     try {
       await testTokenChatStream(
         {
-          tokenKey: testToken.tokenKey,
+          tokenId: String(testToken.id),
           protocol: testProtocol,
           model: testModel,
           message: testMessage || 'hi'
@@ -252,15 +261,6 @@ export default function Tokens() {
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '名称', dataIndex: 'name', width: 120 },
     ...(isAdmin ? [{ title: '所属账号', dataIndex: 'ownerName', width: 120 }] : []),
-    {
-      title: 'Token Key', dataIndex: 'tokenKey', width: 280,
-      render: v => (
-        <Space>
-          <Text code style={{ fontSize: 12 }}>{v?.substring(0, 20)}...</Text>
-          <Button size="small" icon={<CopyOutlined />} onClick={() => copyToken(v)} />
-        </Space>
-      )
-    },
     { title: '积分', dataIndex: 'credits', width: 100, render: v => v === -1 ? '无限' : (v != null ? Math.round(Number(v)) + ' 积分' : '0 积分') },
     ...(isAdmin ? [{ title: '限流(次/分)', dataIndex: 'rateLimit', width: 100, render: v => v === 0 ? '不限' : v + ' 次/分' }] : []),
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },

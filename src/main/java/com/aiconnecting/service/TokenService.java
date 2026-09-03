@@ -6,16 +6,23 @@ import com.aiconnecting.common.DuplicateSubmitGuard;
 import com.aiconnecting.dto.TokenRequest;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.repository.TokenRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.context.event.EventListener;
 
+import java.nio.charset.StandardCharsets;
 import java.math.BigDecimal;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class TokenService {
@@ -24,9 +31,9 @@ public class TokenService {
     private final CacheInvalidationService cacheInvalidationService;
     private final DuplicateSubmitGuard duplicateSubmitGuard;
 
-    /** Token 验证缓存，减少数据库查询，缓存 30 秒（缩短以减少禁用/过期Token延迟） */
+    /** Token 验证缓存（按明文 key 索引，仅存在于内存），减少数据库查询，缓存 30 秒（缩短以减少禁用/过期Token延迟） */
     private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
-    /** token ID -> token key 的本地反向索引，使 tokenId 广播可 O(1) 精确驱逐。 */
+    /** token ID -> 明文 token key 的本地反向索引，使 tokenId 广播可 O(1) 精确驱逐。 */
     private final ConcurrentHashMap<Long, String> tokenKeyById = new ConcurrentHashMap<>();
     private static final long TOKEN_CACHE_TTL_MS = 30 * 1000L;
     private static final int TOKEN_KEY_GENERATION_ATTEMPTS = 10;
@@ -34,6 +41,36 @@ public class TokenService {
     private record CachedToken(Token token, long cachedAt) {
         boolean isExpired() {
             return System.currentTimeMillis() - cachedAt > TOKEN_CACHE_TTL_MS;
+        }
+    }
+
+    /** 明文 tokenKey 的 sha256 hex 哈希；库中只保存该值，明文不再落库 */
+    public static String hashTokenKey(String plainKey) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(plainKey.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
+    }
+
+    /**
+     * 启动时把存量明文 tokenKey（sk- 前缀）改写为哈希，消除历史明文落库；
+     * 迁移失败不影响启动，未迁移行仍可经 validateTokenKey 的明文回退路径验证
+     */
+    @PostConstruct
+    public void migratePlaintextTokenKeys() {
+        try {
+            List<Token> legacy = tokenRepository.findByTokenKeyStartingWith("sk-");
+            for (Token token : legacy) {
+                token.setTokenKey(hashTokenKey(token.getTokenKey()));
+                tokenRepository.save(token);
+            }
+            if (!legacy.isEmpty()) {
+                log.info("已将 {} 个存量明文 tokenKey 迁移为哈希存储", legacy.size());
+            }
+        } catch (Exception e) {
+            log.warn("存量 tokenKey 哈希迁移失败（明文回退路径仍可用）: {}", e.getMessage());
         }
     }
 
@@ -73,7 +110,7 @@ public class TokenService {
 
             Token token = Token.builder()
                     .name(request.getName())
-                    .tokenKey(tokenKey)
+                    .tokenKey(hashTokenKey(tokenKey))
                     .userId(userId)
                     .quota(request.getQuota() != null ? request.getQuota() : -1L)
                     .usedQuota(0L)
@@ -87,6 +124,8 @@ public class TokenService {
             try {
                 Token saved = tokenRepository.save(token);
                 cacheInvalidationService.publish(CacheInvalidationService.TOKEN_ID_PREFIX + saved.getId());
+                // 明文仅在创建响应中一次性回显，此后任何接口不再下发
+                saved.setPlainTokenKey(tokenKey);
                 return saved;
             } catch (DataIntegrityViolationException e) {
                 lastCollision = e;
@@ -105,7 +144,7 @@ public class TokenService {
         if (request.getAllowedModels() != null) token.setAllowedModels(request.getAllowedModels());
         if (request.getRateLimit() != null) token.setRateLimit(request.getRateLimit());
         Token saved = tokenRepository.save(token);
-        evictTokenCache(saved.getId(), saved.getTokenKey());
+        evictTokenCache(saved.getId());
         return saved;
     }
 
@@ -113,27 +152,33 @@ public class TokenService {
         Token token = tokenRepository.findById(id)
                 .orElseThrow(() -> new BusinessException("Token 不存在", "Token not found"));
         tokenRepository.deleteById(id);
-        evictTokenCache(id, token.getTokenKey());
+        evictTokenCache(id);
     }
 
     public void updateStatus(Long id, Integer status) {
         Token token = getById(id);
         token.setStatus(status);
         Token saved = tokenRepository.save(token);
-        evictTokenCache(saved.getId(), saved.getTokenKey());
+        evictTokenCache(saved.getId());
     }
 
     /**
-     * 通过 token key 验证并获取 token 实体（带短时缓存）
+     * 通过明文 token key 验证并获取 token 实体（带短时缓存）。
+     * 库中存储的是 sha256 哈希，先按哈希查找；未命中再按原值查找以兼容迁移失败的存量明文行。
+     * 只接受 sk- 前缀的明文形态，库内哈希不能被直接当作凭据使用
      */
     public Token validateTokenKey(String tokenKey) {
+        if (tokenKey == null || !tokenKey.startsWith("sk-")) {
+            throw new BusinessException(401, "无效的 Token", "Invalid token");
+        }
         CachedToken cached = tokenCache.get(tokenKey);
         Token token;
         if (cached != null && !cached.isExpired()) {
             token = cached.token();
         } else {
             long generation = cacheInvalidationService.generation(CacheInvalidationService.TOKEN_ID_PREFIX);
-            token = tokenRepository.findByTokenKey(tokenKey)
+            token = tokenRepository.findByTokenKey(hashTokenKey(tokenKey))
+                    .or(() -> tokenRepository.findByTokenKey(tokenKey))
                     .orElseThrow(() -> new BusinessException(401, "无效的 Token", "Invalid token"));
             if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.TOKEN_ID_PREFIX, generation)) {
                 CachedToken fresh = new CachedToken(token, System.currentTimeMillis());
@@ -175,16 +220,19 @@ public class TokenService {
     }
 
     /**
-     * 清除指定 Token 的缓存
+     * 清除指定 Token 的缓存：缓存以明文 key 为键而库中只存哈希，
+     * 因此按 token ID 经反向索引精确驱逐，并以按 ID 扫描兜底（覆盖本实例未见过明文的条目）
      */
-    private void evictTokenCache(Long tokenId, String tokenKey) {
-        if (tokenKey != null) {
-            tokenCache.remove(tokenKey);
+    private void evictTokenCache(Long tokenId) {
+        if (tokenId == null) {
+            return;
         }
-        if (tokenId != null) {
-            tokenKeyById.remove(tokenId, tokenKey);
-            cacheInvalidationService.publish(CacheInvalidationService.TOKEN_ID_PREFIX + tokenId);
+        String plainKey = tokenKeyById.remove(tokenId);
+        if (plainKey != null) {
+            tokenCache.remove(plainKey);
         }
+        tokenCache.values().removeIf(cached -> tokenId.equals(cached.token().getId()));
+        cacheInvalidationService.publish(CacheInvalidationService.TOKEN_ID_PREFIX + tokenId);
     }
 
     @EventListener

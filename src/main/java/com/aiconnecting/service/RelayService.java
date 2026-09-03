@@ -1,5 +1,6 @@
 package com.aiconnecting.service;
 
+import com.aiconnecting.entity.Token;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -47,6 +48,37 @@ public class RelayService {
                                     HttpServletResponse httpResponse) throws IOException {
         relayOrchestrator.relayStream(tokenKey, RelayProtocol.OPENAI, path, requestBody,
                 model, httpRequest, httpResponse);
+    }
+
+    // ==================== 内部测试链路（按 Token 实体） ====================
+    // Token 明文不再落库（仅存哈希）后，后台测试等内部调用方无法再凭 key 走公开链路，
+    // 提供按已加载实体的等价入口：跳过 key 反查，校验/路由/计费逻辑完全一致
+
+    public String relayRequestForToken(Token token, String path, String requestBody,
+                                       String model, HttpServletRequest httpRequest,
+                                       HttpServletResponse httpResponse) {
+        return relayOrchestrator.relayForToken(token, RelayProtocol.OPENAI, path, requestBody,
+                model, httpRequest, httpResponse);
+    }
+
+    public void relayStreamRequestForToken(Token token, String path, String requestBody,
+                                           String model, HttpServletRequest httpRequest,
+                                           HttpServletResponse httpResponse) throws IOException {
+        relayOrchestrator.relayStreamForToken(token, RelayProtocol.OPENAI, path, requestBody,
+                model, httpRequest, httpResponse);
+    }
+
+    public String claudeRelayRequestForToken(Token token, String requestBody,
+                                             String model, HttpServletRequest httpRequest) {
+        return relayOrchestrator.relayForToken(token, RelayProtocol.CLAUDE, "/v1/messages",
+                requestBody, model, httpRequest, null);
+    }
+
+    public void claudeRelayStreamRequestForToken(Token token, String requestBody,
+                                                 String model, HttpServletRequest httpRequest,
+                                                 HttpServletResponse httpResponse) throws IOException {
+        relayOrchestrator.relayStreamForToken(token, RelayProtocol.CLAUDE, "/v1/messages",
+                requestBody, model, httpRequest, httpResponse);
     }
 
     public String relayMediaRequest(String tokenKey, String path, String requestBody,

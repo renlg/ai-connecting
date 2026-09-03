@@ -7,11 +7,11 @@ import {
   RobotOutlined, GiftOutlined, BugOutlined, ReadOutlined, MenuOutlined, DollarOutlined,
   SafetyOutlined, AlertOutlined, StopOutlined, ThunderboltOutlined
 } from '@ant-design/icons'
-import { redeemCoupon, getLatestAnnouncements } from '../api'
+import { redeemCoupon, getLatestAnnouncements, logout } from '../api'
 
 const { Header, Sider, Content } = Layout
 
-export default function AppLayout() {
+export default function AppLayout({ user }) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [redeemOpen, setRedeemOpen] = useState(false)
@@ -26,7 +26,6 @@ export default function AppLayout() {
   const screens = Grid.useBreakpoint()
   const isMobile = !screens.md
 
-  const user = JSON.parse(localStorage.getItem('user') || '{}')
   const isAdmin = user.role === 'admin'
 
   // 加载最新公告（每 30 秒刷新一次）
@@ -91,10 +90,12 @@ export default function AppLayout() {
       { key: 'redeem', icon: <GiftOutlined />, label: '积分兑换', onClick: () => setRedeemOpen(true) },
       { key: 'profile', icon: <UserOutlined />, label: '个人中心', onClick: () => navigate('/profile') },
       { type: 'divider' },
-      { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', onClick: () => {
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
-        navigate('/login')
+      { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', onClick: async () => {
+        try {
+          await logout()
+        } finally {
+          navigate('/login', { replace: true })
+        }
       }},
     ]
   }
@@ -223,7 +224,7 @@ export default function AppLayout() {
           </Space>
         </Header>
         <Content style={{ margin: isMobile ? '12px 8px' : '24px 16px', padding: isMobile ? 16 : 24, background: themeToken.colorBgContainer, borderRadius: themeToken.borderRadiusLG, minHeight: 280, ...(isMobile ? { minWidth: 0, overflow: 'hidden' } : {}) }}>
-          <Outlet />
+          <Outlet context={{ user }} />
         </Content>
         <div style={{
           textAlign: 'center',

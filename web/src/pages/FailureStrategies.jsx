@@ -51,19 +51,20 @@ export default function FailureStrategies() {
     setLoading(true)
     getFailureStrategies().then(res => {
       if (res.code === 200) setStrategies(res.data || [])
-    }).finally(() => setLoading(false))
+    }).catch(err => message.error(err?.message || '失败策略加载失败'))
+      .finally(() => setLoading(false))
   }
 
   const loadChannels = () => {
     getChannels().then(res => {
       if (res.code === 200) setChannels(res.data || [])
-    })
+    }).catch(err => message.error(err?.message || '渠道加载失败'))
   }
 
   const loadModels = () => {
     getEnabledModels().then(res => {
       if (res.code === 200) setModels(res.data || [])
-    })
+    }).catch(err => message.error(err?.message || '模型加载失败'))
   }
 
   const handleSave = async () => {

@@ -50,13 +50,16 @@ class PassthroughRelayServiceTest {
     void buildsRequestWithoutClientAuthorizationOrHopByHopHeadersAndPreservesPathQuery() {
         Channel channel = Channel.builder().baseUrl("https://upstream.example/").apiKey("secret").build();
         MockHttpServletRequest servlet = new MockHttpServletRequest("POST", "/v1/vendor/path");
-        servlet.setQueryString("x=1&raw=a%2Fb");
+        servlet.setQueryString("x=1&raw=a%2Fb&key=aic-token&api_key=aic-token&access_token=aic-token");
         servlet.setContentType("application/json");
         servlet.addHeader("Authorization", "Bearer client-secret");
         servlet.addHeader("X-Custom", "one");
         servlet.addHeader("X-Custom", "two");
         servlet.addHeader("Connection", "close");
         servlet.addHeader("Proxy-Authorization", "bad");
+        servlet.addHeader("Cookie", "aic_token=session-jwt");
+        servlet.addHeader("x-api-key", "aic-token");
+        servlet.addHeader("x-goog-api-key", "aic-token");
 
         Request request = service.buildPassthroughRequest(channel, servlet, "{\"model\":\"up\"}");
 
@@ -66,6 +69,10 @@ class PassthroughRelayServiceTest {
         assertEquals(2, request.headers("X-Custom").size());
         assertNull(request.header("Connection"));
         assertNull(request.header("Proxy-Authorization"));
+        assertNull(request.header("Cookie"));
+        assertNull(request.header("x-api-key"));
+        assertNull(request.header("x-goog-api-key"));
+        assertFalse(request.url().toString().contains("aic-token"));
     }
 
     @Test
@@ -191,7 +198,7 @@ class PassthroughRelayServiceTest {
                     .baseUrl("https://upstream.example").apiKey("channel-key")
                     .modelMapping("{\"platform-model\":\"vendor-model\"}").build();
             when(router.selectChannel("7", Set.of(), 1)).thenReturn(channel);
-            doReturn(false).when(support).isChannelRateLimited(channel);
+            doReturn(false).when(support).isChannelRateLimited(channel, "7");
             PassthroughRelayService relay = new PassthroughRelayService(support, channels, mapper, calls);
             MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/vendor");
             request.setQueryString("x=1");
@@ -211,7 +218,7 @@ class PassthroughRelayServiceTest {
             assertEquals(418, response.getStatus());
             assertEquals("yes", response.getHeader("X-Upstream"));
             assertArrayEquals(responseBytes, response.getContentAsByteArray());
-            verify(support).isChannelRateLimited(channel);
+            verify(support).isChannelRateLimited(channel, "7");
     }
 
     @Test
@@ -259,7 +266,7 @@ class PassthroughRelayServiceTest {
                 .baseUrl("https://upstream.example").apiKey("key")
                 .modelMapping("{\"platform-model\":\"upstream\"}").build();
         when(router.selectChannel("7", Set.of(), 1)).thenReturn(channel);
-        doReturn(true).when(support).isChannelRateLimited(channel);
+        doReturn(true).when(support).isChannelRateLimited(channel, "7");
         PassthroughRelayService relay = new PassthroughRelayService(support, channels, mapper, calls);
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/vendor");
         request.addHeader("Authorization", "Bearer client");

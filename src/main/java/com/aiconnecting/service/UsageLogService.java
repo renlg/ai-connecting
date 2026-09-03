@@ -151,9 +151,9 @@ public class UsageLogService {
         if (totalTokens > 0) {
             channelService.addUsedQuota(channelId, totalTokens);
         }
-        // 扣减用户积分
+        // 扣减用户积分：无下限扣减，保证余额扣减金额与日志记录的计费金额一致（原先钳零会导致账实不符）
         if (usageLog.getCreditCost() != null && usageLog.getCreditCost().compareTo(BigDecimal.ZERO) > 0 && userId != null) {
-            userRepository.deductCredits(userId, usageLog.getCreditCost());
+            userRepository.deductCreditsAllowNegative(userId, usageLog.getCreditCost());
             cacheInvalidationService.publish(CacheInvalidationService.USER_PREFIX + userId);
         }
         // 更新 token 已用额度

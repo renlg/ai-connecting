@@ -7,6 +7,7 @@ import com.aiconnecting.entity.Channel;
 import com.aiconnecting.entity.ModelGroup;
 import com.aiconnecting.entity.Token;
 import com.aiconnecting.entity.UsageLog;
+import com.aiconnecting.entity.User;
 import com.aiconnecting.entity.VideoTask;
 import com.aiconnecting.repository.VideoTaskRepository;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -29,6 +30,7 @@ import java.math.BigDecimal;
 import java.net.HttpURLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -240,6 +242,16 @@ public class ModelGroupFailoverExecutor {
         return relayRequestWithContext(ctx, group, request, httpRequest, httpResponse);
     }
 
+    /** 供后台测试等已持有 Token 实体的内部调用方复用：跳过明文 key 反查（库中仅存哈希），其余校验完全一致 */
+    public String relayRequestForToken(Token token, UnifiedRelayRequest request,
+                                       HttpServletRequest httpRequest, HttpServletResponse httpResponse) {
+        String groupName = request.model();
+        ModelGroup group = requireGroup(groupName, "text");
+        RelaySupport.RelayContext ctx = support.prepareGroupContextForToken(token, groupName);
+        checkGroupAdminOnly(group, "admin".equals(ctx.user().getRole()));
+        return relayRequestWithContext(ctx, group, request, httpRequest, httpResponse);
+    }
+
     /**
      * 供单模型故障转移组（fallback_group_id）复用：Token/账号/余额/权限已在原模型请求时对原模型名
      * 校验过，此处直接使用调用方已构建的 ctx，不再重复校验，也不要求组名本身在 Token 白名单中
@@ -268,6 +280,7 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
         checkGroupLevel(group, ctx.userLevel(), isAdmin);
+        checkGroupBalanceEstimate(ctx, group, requestBody);
         Boolean requestHasImage = containsImagePart(request.protocol(), request.content()) ? Boolean.TRUE : null;
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
                 group, isAdmin, ctx.userLevel(), requestHasImage);
@@ -283,16 +296,19 @@ public class ModelGroupFailoverExecutor {
         int spins = 0;
         int maxSpins = maxAttempts * 4;
         int idx = 0;
+        Set<Long> triedChannelIds = new HashSet<>();
+        Set<Long> failedMemberIds = new HashSet<>();
 
         while (attempts < maxAttempts && spins < maxSpins && System.currentTimeMillis() < deadline) {
             spins++;
             ModelGroupRoutingService.Candidate candidate = candidates.get(idx % candidates.size());
             idx++;
             Long modelConfigId = candidate.modelConfig().getId();
+            if (modelConfigId != null && failedMemberIds.contains(modelConfigId)) continue;
 
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
+                channel = support.channelRouter.selectChannel(candidate.channelModelId(), triedChannelIds, null);
             } catch (BusinessException e) {
                 lastFailure = null;
                 continue;
@@ -301,15 +317,17 @@ public class ModelGroupFailoverExecutor {
                 log.warn("模型组 {} 成员 {} 无可用渠道，跳过", groupName, candidate.modelConfig().getName());
                 continue;
             }
-            if (support.isChannelRateLimited(channel)) {
+            triedChannelIds.add(channel.getId());
+            if (support.isChannelRateLimited(channel, candidate.channelModelId())) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 触发限流，跳过", groupName, candidate.modelConfig().getName(), channel.getId());
                 continue;
             }
 
             String memberModel = candidate.modelConfig().getName();
             attempts++;
+            if (modelConfigId != null) failedMemberIds.add(modelConfigId);
             try {
-                long attemptTimeoutMs = remainingBudgetMs(deadline);
+                long attemptTimeoutMs = support.failoverAttemptTimeoutMs(deadline, attempts, maxAttempts);
                 if (attemptTimeoutMs <= 0) break;
                 if (isCustomChannel(channel)) {
                     if (httpResponse == null) {
@@ -334,7 +352,7 @@ public class ModelGroupFailoverExecutor {
                     }
                     requireSuccessfulPassthrough(upstreamResponse);
                     if (copyGroupPassthroughResponse(ctx, group, channel, modelConfigId, upstreamModel,
-                            upstreamResponse, startTime, httpRequest, httpResponse, path)) {
+                            upstreamResponse, startTime, httpRequest, httpResponse, path, requestBody)) {
                         return null;
                     }
                     lastFailure = new BusinessException(502, "渠道连接失败", "Upstream connection failed");
@@ -357,8 +375,8 @@ public class ModelGroupFailoverExecutor {
                 String response = adapter().fromUpstreamResponse(
                         upstreamResponse, upstreamProtocol, request.protocol());
                 long duration = System.currentTimeMillis() - startTime;
-                recordGroupTextUsage(ctx.token(), channel, group, memberModel, response,
-                        request.protocol(), duration, httpRequest, path);
+                recordGroupTextUsage(ctx.token(), channel, group, memberModel, response, request.protocol(),
+                        requestBody, duration, httpRequest, path);
 
                 return response;
             } catch (PassthroughConnectionException e) {
@@ -411,7 +429,8 @@ public class ModelGroupFailoverExecutor {
                                                  Channel channel, Long modelConfigId, String upstreamModel,
                                                  Response upstreamResponse, long startTime,
                                                  HttpServletRequest httpRequest,
-                                                 HttpServletResponse httpResponse, String path) {
+                                                 HttpServletResponse httpResponse, String path,
+                                                 String requestBody) {
         try (upstreamResponse) {
             PassthroughRelayService.UsageObserver observer = new PassthroughRelayService.UsageObserver(
                     upstreamResponse.header("Content-Type"), support.objectMapper);
@@ -429,6 +448,12 @@ public class ModelGroupFailoverExecutor {
             } finally {
                 if (completed || observer.bytesObserved()) {
                     PassthroughRelayService.Usage usage = observer.finish();
+                    if (!usage.found()) {
+                        // 上游未回 usage：按已传输字节与请求体长度估算，避免零计费
+                        log.warn("模型组透传响应未包含 usage，按字符量估算计费: group={}, channel={}, model={}",
+                                group.getName(), channel.getId(), upstreamModel);
+                        usage = PassthroughRelayService.estimatedUsage(observer.observedByteCount(), requestBody);
+                    }
                     try {
                         recordGroupPassthroughUsage(ctx.token(), channel, group, upstreamModel, usage,
                                 System.currentTimeMillis() - startTime, httpRequest, path);
@@ -472,12 +497,18 @@ public class ModelGroupFailoverExecutor {
     }
 
     private void recordGroupTextUsage(Token token, Channel channel, ModelGroup group, String actualModel,
-                                      String response, RelayProtocol protocol, long duration,
-                                      HttpServletRequest httpRequest, String path) {
+                                      String response, RelayProtocol protocol, String requestBody,
+                                      long duration, HttpServletRequest httpRequest, String path) {
         RelayServiceUtils.UsageInfo parsed = adapter().parseUsage(protocol, response);
         int promptTokens = parsed.promptTokens();
         int completionTokens = parsed.completionTokens();
-        int totalTokens = parsed.totalTokens();
+        if (promptTokens == 0 && completionTokens == 0) {
+            promptTokens = RelayServiceUtils.estimateTokensFromChars(requestBody != null ? requestBody.length() : 0);
+            completionTokens = RelayServiceUtils.estimateTokensFromChars(response != null ? response.length() : 0);
+            log.warn("模型组文本响应未包含可解析 usage，按字符量估算计费: group={}, model={}",
+                    group.getName(), actualModel);
+        }
+        int totalTokens = promptTokens + completionTokens;
         int cachedTokens = parsed.cachedTokens();
         int cacheCreationTokens = parsed.cacheCreationTokens();
         int cacheReadTokens = parsed.cacheReadTokens();
@@ -499,6 +530,31 @@ public class ModelGroupFailoverExecutor {
                 .requestPath(path)
                 .build();
         usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(), totalTokens, token.getUserId());
+    }
+
+    /**
+     * 模型组文本请求余额预检：按请求体长度与 max_tokens 估算本次请求的最低积分消耗，余额不足直接拒绝。
+     * 原先仅校验 credits>0，余额极低的用户并发多个在途请求可全部通过检查造成穿透；
+     * 预检自身失败（如组计费未配置）不阻断请求，按原有后付费逻辑继续
+     */
+    private void checkGroupBalanceEstimate(RelaySupport.RelayContext ctx, ModelGroup group, String requestBody) {
+        User user = ctx.user();
+        if (user == null || "admin".equals(user.getRole()) || user.getCredits() == null) {
+            return;
+        }
+        try {
+            int[] estimate = support.estimateTextRequestTokens(requestBody);
+            BigDecimal estimatedCost = billingService.calculateTextCreditCost(group, estimate[0], estimate[1], 0);
+            if (estimatedCost != null && estimatedCost.compareTo(BigDecimal.ZERO) > 0
+                    && user.getCredits().compareTo(estimatedCost) < 0) {
+                throw new BusinessException(402, "用户积分不足以覆盖本次请求的预估消耗，请先充值",
+                        "Insufficient credits to cover the estimated cost of this request, please recharge");
+            }
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.debug("模型组余额预检失败，跳过预检: group={}, error={}", group.getName(), e.getMessage());
+        }
     }
 
     private RelayProtocolAdapter adapter() {
@@ -527,6 +583,16 @@ public class ModelGroupFailoverExecutor {
         relayStreamRequestWithContext(ctx, group, request, httpRequest, httpResponse);
     }
 
+    /** 供后台测试等已持有 Token 实体的内部调用方复用：跳过明文 key 反查（库中仅存哈希），其余校验完全一致 */
+    public void relayStreamRequestForToken(Token token, UnifiedRelayRequest request,
+                                           HttpServletRequest httpRequest,
+                                           HttpServletResponse httpResponse) throws IOException {
+        String groupName = request.model();
+        ModelGroup group = requireGroup(groupName, "text");
+        RelaySupport.RelayContext ctx = support.prepareGroupContextForToken(token, groupName);
+        relayStreamRequestWithContext(ctx, group, request, httpRequest, httpResponse);
+    }
+
     void relayStreamRequestWithContext(RelaySupport.RelayContext ctx, ModelGroup group, String path,
                                        String requestBody, HttpServletRequest httpRequest,
                                        HttpServletResponse httpResponse) throws IOException {
@@ -545,6 +611,7 @@ public class ModelGroupFailoverExecutor {
         boolean isAdmin = "admin".equals(ctx.user().getRole());
         checkGroupAdminOnly(group, isAdmin);
         checkGroupLevel(group, ctx.userLevel(), isAdmin);
+        checkGroupBalanceEstimate(ctx, group, requestBody);
         Boolean requestHasImage = containsImagePart(request.protocol(), request.content()) ? Boolean.TRUE : null;
         List<ModelGroupRoutingService.Candidate> candidates = routingService.resolveOrderedCandidates(
                 group, isAdmin, ctx.userLevel(), requestHasImage);
@@ -565,16 +632,19 @@ public class ModelGroupFailoverExecutor {
         int spins = 0;
         int maxSpins = maxAttempts * 4;
         int idx = 0;
+        Set<Long> triedChannelIds = new HashSet<>();
+        Set<Long> failedMemberIds = new HashSet<>();
 
         while (attempts < maxAttempts && spins < maxSpins && System.currentTimeMillis() < deadline) {
             spins++;
             ModelGroupRoutingService.Candidate candidate = candidates.get(idx % candidates.size());
             idx++;
             Long modelConfigId = candidate.modelConfig().getId();
+            if (modelConfigId != null && failedMemberIds.contains(modelConfigId)) continue;
 
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
+                channel = support.channelRouter.selectChannel(candidate.channelModelId(), triedChannelIds, null);
             } catch (BusinessException e) {
                 lastError = e.getMessage();
                 lastErrorBody = null;
@@ -585,7 +655,8 @@ public class ModelGroupFailoverExecutor {
                 log.warn("模型组 {} 成员 {} 无可用渠道，跳过", groupName, candidate.modelConfig().getName());
                 continue;
             }
-            if (support.isChannelRateLimited(channel)) {
+            triedChannelIds.add(channel.getId());
+            if (support.isChannelRateLimited(channel, candidate.channelModelId())) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", groupName, candidate.modelConfig().getName(), channel.getId());
                 if (lastError == null) {
                     lastError = "该成员暂不可用";
@@ -597,8 +668,9 @@ public class ModelGroupFailoverExecutor {
 
             String memberModel = candidate.modelConfig().getName();
             attempts++;
+            if (modelConfigId != null) failedMemberIds.add(modelConfigId);
 
-            long attemptTimeoutMs = remainingBudgetMs(deadline);
+            long attemptTimeoutMs = support.failoverAttemptTimeoutMs(deadline, attempts, maxAttempts);
             if (attemptTimeoutMs <= 0) break;
 
             if (isCustomChannel(channel)) {
@@ -616,7 +688,7 @@ public class ModelGroupFailoverExecutor {
                             upstreamRequest, attemptTimeoutMs);
                     requireSuccessfulPassthrough(upstreamResponse);
                     if (copyGroupPassthroughResponse(ctx, group, channel, modelConfigId, upstreamModel,
-                            upstreamResponse, startTime, httpRequest, httpResponse, path)) {
+                            upstreamResponse, startTime, httpRequest, httpResponse, path, requestBody)) {
                         return;
                     }
                     lastError = "上游响应在首字节前中断";
@@ -717,7 +789,8 @@ public class ModelGroupFailoverExecutor {
 
                 long duration = System.currentTimeMillis() - startTime;
                 RelayServiceUtils.UsageInfo usage = streamResult.usage();
-                recordGroupStreamUsage(ctx.token(), channel, group, memberModel, usage, duration, httpRequest, path);
+                recordGroupStreamUsage(ctx.token(), channel, group, memberModel, usage,
+                        streamResult.charsWritten(), requestBody, duration, httpRequest, path);
 
                 return;
             } catch (RelaySupport.SseStreamingException e) {
@@ -729,6 +802,15 @@ public class ModelGroupFailoverExecutor {
                 recordFailure(channel, modelConfigId, new BusinessException(502, "渠道请求失败: " + e.getMessage(),
                         "Channel request failed: " + e.getMessage(), e));
                 if (e.partialResult().bytesWritten()) {
+                    // 已向客户端写出部分内容：按已解析的 partial usage（缺失时按字符量估算）落账，不再切换成员
+                    long duration = System.currentTimeMillis() - startTime;
+                    try {
+                        recordGroupStreamUsage(ctx.token(), channel, group, memberModel, e.partialResult().partialUsage(),
+                                e.partialResult().charsWritten(), requestBody, duration, httpRequest, path);
+                    } catch (Exception billingError) {
+                        log.error("模型组流式中断计费失败: group={}, channel={}, model={}",
+                                groupName, channel.getId(), memberModel, billingError);
+                    }
                     finishBrokenSse(request.protocol(), httpResponse, "模型组流式响应中断，请稍后重试",
                             "Model group streaming response was interrupted, please try again later", true);
                     return;
@@ -767,7 +849,7 @@ public class ModelGroupFailoverExecutor {
         }
     }
 
-    private record GroupStreamResult(RelayServiceUtils.UsageInfo usage, boolean bytesWritten) {}
+    private record GroupStreamResult(RelayServiceUtils.UsageInfo usage, boolean bytesWritten, long charsWritten) {}
 
     /** UnifiedRelayRequest.content 已由协议适配器按协议提取，这里只遍历该缓存树。 */
     private boolean containsImagePart(RelayProtocol protocol, JsonNode content) {
@@ -832,6 +914,7 @@ public class ModelGroupFailoverExecutor {
         RelayProtocolAdapter.StreamState state = adapter().newStreamState(
                 memberModel, upstreamProtocol, clientProtocol);
         boolean bytesWritten = false;
+        long charsWritten = 0;
         long deadline = support.sseDeadline();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
@@ -849,6 +932,7 @@ public class ModelGroupFailoverExecutor {
                     writer.write("\n");
                     writer.flush();
                     bytesWritten = true;
+                    charsWritten += line.length() + 1;
                     if (line.startsWith("data:")) {
                         adapter().convertStreamData(line.substring(5).stripLeading(), state);
                     }
@@ -860,7 +944,10 @@ public class ModelGroupFailoverExecutor {
                 String data = line.substring(5).stripLeading();
                 sawDataEvent = true;
                 if (!prefixWritten && !"[DONE]".equals(data)) {
-                    for (String event : prefix) writer.write("data: " + event + "\n\n");
+                    for (String event : prefix) {
+                        writer.write("data: " + event + "\n\n");
+                        charsWritten += event.length() + 8;
+                    }
                     writer.flush();
                     bytesWritten = true;
                     prefixWritten = true;
@@ -869,11 +956,15 @@ public class ModelGroupFailoverExecutor {
                     writer.write("data: " + converted + "\n\n");
                     writer.flush();
                     bytesWritten = true;
+                    charsWritten += converted.length() + 8;
                 }
             }
             if (sawDataEvent) {
                 if (!prefixWritten) {
-                    for (String event : prefix) writer.write("data: " + event + "\n\n");
+                    for (String event : prefix) {
+                        writer.write("data: " + event + "\n\n");
+                        charsWritten += event.length() + 8;
+                    }
                     writer.flush();
                     bytesWritten = true;
                 }
@@ -881,12 +972,13 @@ public class ModelGroupFailoverExecutor {
                     writer.write("data: " + event + "\n\n");
                     writer.flush();
                     bytesWritten = true;
+                    charsWritten += event.length() + 8;
                 }
             }
-            return new GroupStreamResult(adapter().streamUsage(state), bytesWritten);
+            return new GroupStreamResult(adapter().streamUsage(state), bytesWritten, charsWritten);
         } catch (IOException e) {
             throw new RelaySupport.SseStreamingException(e,
-                    new RelaySupport.SseStreamResult(null, bytesWritten));
+                    new RelaySupport.SseStreamResult(null, bytesWritten, charsWritten, adapter().streamUsage(state)));
         }
     }
 
@@ -909,22 +1001,30 @@ public class ModelGroupFailoverExecutor {
     }
 
     private void recordGroupStreamUsage(Token token, Channel channel, ModelGroup group, String actualModel,
-                                        RelayServiceUtils.UsageInfo usage, long duration,
-                                        HttpServletRequest httpRequest, String path) {
+                                        RelayServiceUtils.UsageInfo usage, long charsWritten, String requestBody,
+                                        long duration, HttpServletRequest httpRequest, String path) {
+        int promptTokens = usage.promptTokens();
+        int completionTokens = usage.completionTokens();
+        if (promptTokens == 0 && completionTokens == 0) {
+            promptTokens = RelayServiceUtils.estimateTokensFromChars(requestBody != null ? requestBody.length() : 0);
+            completionTokens = RelayServiceUtils.estimateTokensFromChars(charsWritten);
+            log.warn("模型组流式响应未包含可解析 usage，按字符量估算计费: group={}, model={}",
+                    group.getName(), actualModel);
+        }
         BigDecimal creditCost = billingService.calculateTextCreditCost(
-                group, usage.promptTokens(), usage.completionTokens(), usage.cachedTokens());
+                group, promptTokens, completionTokens, usage.cachedTokens());
         UsageLog usageLog = UsageLog.builder()
                 .tokenId(token.getId()).channelId(channel.getId())
                 .model(group.getName()).actualModel(actualModel)
-                .promptTokens(usage.promptTokens()).completionTokens(usage.completionTokens())
-                .totalTokens(usage.promptTokens() + usage.completionTokens())
+                .promptTokens(promptTokens).completionTokens(completionTokens)
+                .totalTokens(promptTokens + completionTokens)
                 .promptTokensCacheHit(usage.cachedTokens())
                 .cachedTokensCacheCreation(0)
                 .cachedTokensCacheRead(usage.cachedTokens())
                 .creditCost(creditCost).ip(support.getClientIp(httpRequest)).duration(duration)
                 .requestPath(path).build();
         usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(),
-                usage.promptTokens() + usage.completionTokens(), token.getUserId());
+                promptTokens + completionTokens, token.getUserId());
     }
 
     // ==================== 图片 ====================
@@ -1084,15 +1184,18 @@ public class ModelGroupFailoverExecutor {
         int spins = 0;
         int maxSpins = maxAttempts * 4;
         int idx = 0;
+        Set<Long> triedChannelIds = new HashSet<>();
+        Set<Long> failedMemberIds = new HashSet<>();
 
         while (attempts < maxAttempts && spins < maxSpins && System.currentTimeMillis() < deadline) {
             spins++;
             ModelGroupRoutingService.Candidate candidate = candidates.get(idx % candidates.size());
             idx++;
             Long modelConfigId = candidate.modelConfig().getId();
+            if (modelConfigId != null && failedMemberIds.contains(modelConfigId)) continue;
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
+                channel = support.channelRouter.selectChannel(candidate.channelModelId(), triedChannelIds, null);
             } catch (BusinessException e) {
                 lastFailure = null;
                 continue;
@@ -1101,12 +1204,14 @@ public class ModelGroupFailoverExecutor {
                 log.warn("模型组 {} 成员 {} 无可用渠道，跳过", group.getName(), candidate.modelConfig().getName());
                 continue;
             }
-            if (support.isChannelRateLimited(channel)) {
+            triedChannelIds.add(channel.getId());
+            if (support.isChannelRateLimited(channel, candidate.channelModelId())) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
                 continue;
             }
             String memberModel = candidate.modelConfig().getName();
             attempts++;
+            if (modelConfigId != null) failedMemberIds.add(modelConfigId);
             try {
                 okhttp3.MultipartBody.Builder mb = new okhttp3.MultipartBody.Builder().setType(okhttp3.MultipartBody.FORM);
                 okhttp3.MediaType fileType = okhttp3.MediaType.parse(contentType != null ? contentType : "application/octet-stream");
@@ -1120,7 +1225,7 @@ public class ModelGroupFailoverExecutor {
                         mb.addFormDataPart(field.getKey(), value);
                     }
                 }
-                long timeoutMs = remainingBudgetMs(deadline);
+                long timeoutMs = support.failoverAttemptTimeoutMs(deadline, attempts, maxAttempts);
                 if (timeoutMs <= 0) break;
                 FailureLogContext.setChannelModel(memberModel);
                 RelaySupport.BinaryResponse response = support.forwardMediaMultipartRequest(channel, path, mb.build(), timeoutMs);
@@ -1140,7 +1245,6 @@ public class ModelGroupFailoverExecutor {
                 log.error("模型组 {} 成员 {} (渠道 {}) 转写请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 recordFailure(channel, modelConfigId, e);
-                if (e.getCode() == 504) break;
                 if (remainingBudgetMs(deadline) <= 0) break;
             }
         }
@@ -1308,15 +1412,18 @@ public class ModelGroupFailoverExecutor {
         int spins = 0;
         int maxSpins = maxAttempts * 4;
         int idx = 0;
+        Set<Long> triedChannelIds = new HashSet<>();
+        Set<Long> failedMemberIds = new HashSet<>();
 
         while (attempts < maxAttempts && spins < maxSpins && System.currentTimeMillis() < deadline) {
             spins++;
             ModelGroupRoutingService.Candidate candidate = candidates.get(idx % candidates.size());
             idx++;
             Long modelConfigId = candidate.modelConfig().getId();
+            if (modelConfigId != null && failedMemberIds.contains(modelConfigId)) continue;
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
+                channel = support.channelRouter.selectChannel(candidate.channelModelId(), triedChannelIds, null);
             } catch (BusinessException e) {
                 lastFailure = null;
                 continue;
@@ -1325,13 +1432,15 @@ public class ModelGroupFailoverExecutor {
                 log.warn("模型组 {} 成员 {} 无可用渠道，跳过", group.getName(), candidate.modelConfig().getName());
                 continue;
             }
-            if (support.isChannelRateLimited(channel)) {
+            triedChannelIds.add(channel.getId());
+            if (support.isChannelRateLimited(channel, candidate.channelModelId())) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
                 continue;
             }
             String memberModel = candidate.modelConfig().getName();
             attempts++;
-            long timeoutMs = remainingBudgetMs(deadline);
+            if (modelConfigId != null) failedMemberIds.add(modelConfigId);
+            long timeoutMs = support.failoverAttemptTimeoutMs(deadline, attempts, maxAttempts);
             if (timeoutMs <= 0) break;
             RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
             try {
@@ -1350,7 +1459,6 @@ public class ModelGroupFailoverExecutor {
                 log.error("模型组 {} 成员 {} (渠道 {}) 媒体请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 recordFailure(channel, modelConfigId, e);
-                if (e.getCode() == 504) break;
                 if (remainingBudgetMs(deadline) <= 0) break;
             } catch (RuntimeException e) {
                 releaseAttemptCharge(ctx, charge);
@@ -1394,15 +1502,18 @@ public class ModelGroupFailoverExecutor {
         int spins = 0;
         int maxSpins = maxAttempts * 4;
         int idx = 0;
+        Set<Long> triedChannelIds = new HashSet<>();
+        Set<Long> failedMemberIds = new HashSet<>();
 
         while (attempts < maxAttempts && spins < maxSpins && System.currentTimeMillis() < deadline) {
             spins++;
             ModelGroupRoutingService.Candidate candidate = candidates.get(idx % candidates.size());
             idx++;
             Long modelConfigId = candidate.modelConfig().getId();
+            if (modelConfigId != null && failedMemberIds.contains(modelConfigId)) continue;
             Channel channel;
             try {
-                channel = support.channelRouter.selectChannel(candidate.channelModelId(), Set.of(), null);
+                channel = support.channelRouter.selectChannel(candidate.channelModelId(), triedChannelIds, null);
             } catch (BusinessException e) {
                 lastFailure = null;
                 continue;
@@ -1411,13 +1522,15 @@ public class ModelGroupFailoverExecutor {
                 log.warn("模型组 {} 成员 {} 无可用渠道，跳过", group.getName(), candidate.modelConfig().getName());
                 continue;
             }
-            if (support.isChannelRateLimited(channel)) {
+            triedChannelIds.add(channel.getId());
+            if (support.isChannelRateLimited(channel, candidate.channelModelId())) {
                 log.debug("模型组 {} 成员 {} (渠道 {}) 冷却/限流中，跳过", group.getName(), candidate.modelConfig().getName(), channel.getId());
                 continue;
             }
             String memberModel = candidate.modelConfig().getName();
             attempts++;
-            long timeoutMs = remainingBudgetMs(deadline);
+            if (modelConfigId != null) failedMemberIds.add(modelConfigId);
+            long timeoutMs = support.failoverAttemptTimeoutMs(deadline, attempts, maxAttempts);
             if (timeoutMs <= 0) break;
             RelaySupport.MediaCharge charge = support.chargeMediaCredits(ctx, creditCost);
             try {
@@ -1431,7 +1544,6 @@ public class ModelGroupFailoverExecutor {
                 log.error("模型组 {} 成员 {} (渠道 {}) 二进制媒体请求失败 (尝试 {}/{}): {}",
                         group.getName(), memberModel, channel.getId(), attempts, maxAttempts, e.getMessage());
                 recordFailure(channel, modelConfigId, e);
-                if (e.getCode() == 504) break;
                 if (remainingBudgetMs(deadline) <= 0) break;
             } catch (RuntimeException e) {
                 releaseAttemptCharge(ctx, charge);

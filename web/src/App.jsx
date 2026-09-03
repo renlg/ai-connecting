@@ -1,58 +1,56 @@
-import React from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import Login from './pages/Login'
+import React, { Suspense, lazy, useEffect, useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useOutletContext } from 'react-router-dom'
 import Layout from './components/Layout'
-import Dashboard from './pages/Dashboard'
-import Channels from './pages/Channels'
-import Tokens from './pages/Tokens'
-import Profile from './pages/Profile'
-import Users from './pages/Users'
-import Models from './pages/Models'
-import ModelGroups from './pages/ModelGroups'
-import Coupons from './pages/Coupons'
-import InviteCodes from './pages/InviteCodes'
-import Announcements from './pages/Announcements'
-import FailureLogs from './pages/FailureLogs'
-import ChannelFailureLogs from './pages/ChannelFailureLogs'
-import Cost from './pages/Cost'
-import UsageDocs from './pages/UsageDocs'
-import RateLimitStrategies from './pages/RateLimitStrategies'
-import FailureStrategies from './pages/FailureStrategies'
-import CircuitBreakers from './pages/CircuitBreakers'
-import NotFound from './pages/NotFound'
+import { getProfile } from './api'
 
-function PrivateRoute({ children }) {
-  const token = localStorage.getItem('token')
+const Login = lazy(() => import('./pages/Login'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Channels = lazy(() => import('./pages/Channels'))
+const Tokens = lazy(() => import('./pages/Tokens'))
+const Profile = lazy(() => import('./pages/Profile'))
+const Users = lazy(() => import('./pages/Users'))
+const Models = lazy(() => import('./pages/Models'))
+const ModelGroups = lazy(() => import('./pages/ModelGroups'))
+const Coupons = lazy(() => import('./pages/Coupons'))
+const InviteCodes = lazy(() => import('./pages/InviteCodes'))
+const Announcements = lazy(() => import('./pages/Announcements'))
+const FailureLogs = lazy(() => import('./pages/FailureLogs'))
+const ChannelFailureLogs = lazy(() => import('./pages/ChannelFailureLogs'))
+const Cost = lazy(() => import('./pages/Cost'))
+const UsageDocs = lazy(() => import('./pages/UsageDocs'))
+const RateLimitStrategies = lazy(() => import('./pages/RateLimitStrategies'))
+const FailureStrategies = lazy(() => import('./pages/FailureStrategies'))
+const CircuitBreakers = lazy(() => import('./pages/CircuitBreakers'))
+const NotFound = lazy(() => import('./pages/NotFound'))
 
-  if (!token) {
-    return <Navigate to="/login" replace />
-  }
+function AuthenticatedLayout() {
+  const [user, setUser] = useState()
+  const [loading, setLoading] = useState(true)
 
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    if (payload.exp && payload.exp * 1000 < Date.now()) {
-      localStorage.clear()
-      return <Navigate to="/login" replace />
-    }
-  } catch {
-    localStorage.clear()
-    return <Navigate to="/login" replace />
-  }
+  useEffect(() => {
+    getProfile()
+      .then(res => setUser(res.code === 200 ? res.data : null))
+      .catch(() => setUser(null))
+      .finally(() => setLoading(false))
+  }, [])
 
-  return children
+  if (loading) return <div style={{ padding: 48, textAlign: 'center' }}>正在加载...</div>
+  if (!user) return <Navigate to="/login" replace />
+  return <Layout user={user} />
 }
 
 function AdminRoute({ children }) {
-  const user = JSON.parse(localStorage.getItem('user') || '{}')
+  const { user } = useOutletContext()
   return user.role === 'admin' ? children : <Navigate to="/" replace />
 }
 
 export default function App() {
   return (
     <BrowserRouter>
+      <Suspense fallback={<div style={{ padding: 48, textAlign: 'center' }}>正在加载...</div>}>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
+        <Route path="/" element={<AuthenticatedLayout />}>
           <Route index element={<Dashboard />} />
           <Route path="channels" element={<Channels />} />
           <Route path="tokens" element={<Tokens />} />
@@ -75,6 +73,7 @@ export default function App() {
         </Route>
         <Route path="*" element={<NotFound />} />
       </Routes>
+      </Suspense>
     </BrowserRouter>
   )
 }

@@ -193,7 +193,8 @@ class OpenAiRelayServiceTest {
     private RelaySupport relaySupport(ChannelRouter router) {
         RelaySupport relaySupport = org.mockito.Mockito.spy(new RelaySupport(
                 null, router, null, null, null, null, null, null));
-        doReturn(false).when(relaySupport).isChannelRateLimited(any());
+        doReturn(false).when(relaySupport).isChannelRateLimited(
+                any(), org.mockito.ArgumentMatchers.anyString());
         return relaySupport;
     }
 

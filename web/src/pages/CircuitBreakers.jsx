@@ -53,7 +53,8 @@ export default function CircuitBreakers() {
         paginationRef.current = nextPagination
         setPagination(nextPagination)
       }
-    }).finally(() => setLoading(false))
+    }).catch(err => message.error(err?.message || '熔断记录加载失败'))
+      .finally(() => setLoading(false))
   }
 
   const handleSearch = () => {
@@ -76,13 +77,13 @@ export default function CircuitBreakers() {
   const loadChannels = () => {
     getChannels().then(res => {
       if (res.code === 200) setChannels(res.data || [])
-    })
+    }).catch(err => message.error(err?.message || '渠道加载失败'))
   }
 
   const loadModels = () => {
     getEnabledModels().then(res => {
       if (res.code === 200) setModels(res.data || [])
-    })
+    }).catch(err => message.error(err?.message || '模型加载失败'))
   }
 
   const handleRelease = async (id) => {

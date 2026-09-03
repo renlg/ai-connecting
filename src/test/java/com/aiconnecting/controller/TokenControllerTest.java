@@ -193,7 +193,8 @@ class TokenControllerTest {
     void create() throws Exception {
         setAuthentication(regularUser);
 
-        Token t = Token.builder().id(1L).name("new-token").tokenKey("sk-abc123").userId(2L).build();
+        Token t = Token.builder().id(1L).name("new-token").tokenKey("hashed-key").userId(2L).build();
+        t.setPlainTokenKey("sk-abc123");
         when(tokenService.create(eq(2L), any(TokenRequest.class))).thenReturn(t);
 
         String body = """
@@ -207,7 +208,8 @@ class TokenControllerTest {
                         .content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.name").value("new-token"))
-                .andExpect(jsonPath("$.data.tokenKey").value("sk-abc123"));
+                .andExpect(jsonPath("$.data.tokenKey").doesNotExist())
+                .andExpect(jsonPath("$.data.plainTokenKey").value("sk-abc123"));
     }
 
     // ==================== Update ====================
@@ -286,7 +288,7 @@ class TokenControllerTest {
     void testChat_openai_success() throws Exception {
         setAuthentication(regularUser);
         Token tokenEntity = Token.builder().id(1L).name("test").userId(2L).build();
-        when(tokenService.validateTokenKey("sk-test-key")).thenReturn(tokenEntity);
+        when(tokenService.getById(1L)).thenReturn(tokenEntity);
         // Mock relayService.resolveModelName
         when(relayService.resolveModelName("GPT-4o")).thenReturn("gpt-4o");
         // Mock relayService.relayRequest - return a valid OpenAI response JSON
@@ -296,12 +298,12 @@ class TokenControllerTest {
                     "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
                 }
                 """;
-        when(relayService.relayRequest(eq("sk-test-key"), eq("/v1/chat/completions"),
-                anyString(), eq("gpt-4o"), isNull())).thenReturn(openAiResponse);
+        when(relayService.relayRequestForToken(eq(tokenEntity), eq("/v1/chat/completions"),
+                anyString(), eq("gpt-4o"), isNull(), isNull())).thenReturn(openAiResponse);
 
         String body = """
                 {
-                    "tokenKey": "sk-test-key",
+                    "tokenId": "1",
                     "protocol": "openai",
                     "model": "GPT-4o",
                     "message": "hi"
@@ -324,7 +326,7 @@ class TokenControllerTest {
     void testChat_claude_success() throws Exception {
         setAuthentication(regularUser);
         Token tokenEntity = Token.builder().id(1L).name("test").userId(2L).build();
-        when(tokenService.validateTokenKey("sk-test-key")).thenReturn(tokenEntity);
+        when(tokenService.getById(1L)).thenReturn(tokenEntity);
         when(relayService.resolveModelName("Claude-3-Opus")).thenReturn("claude-3-opus-20240229");
         String claudeResponse = """
                 {
@@ -332,12 +334,12 @@ class TokenControllerTest {
                     "usage": {"input_tokens": 10, "output_tokens": 5}
                 }
                 """;
-        when(relayService.claudeRelayRequest(eq("sk-test-key"), anyString(),
+        when(relayService.claudeRelayRequestForToken(eq(tokenEntity), anyString(),
                 eq("claude-3-opus-20240229"), isNull())).thenReturn(claudeResponse);
 
         String body = """
                 {
-                    "tokenKey": "sk-test-key",
+                    "tokenId": "1",
                     "protocol": "claude",
                     "model": "Claude-3-Opus",
                     "message": "hello"
@@ -356,7 +358,7 @@ class TokenControllerTest {
     }
 
     @Test
-    void testChat_missingTokenKey() throws Exception {
+    void testChat_missingTokenId() throws Exception {
         String body = """
                 {
                     "protocol": "openai",
@@ -369,14 +371,14 @@ class TokenControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("缺少 Token Key"));
+                .andExpect(jsonPath("$.message").value("缺少 Token ID"));
     }
 
     @Test
-    void testChat_blankTokenKey() throws Exception {
+    void testChat_blankTokenId() throws Exception {
         String body = """
                 {
-                    "tokenKey": "  ",
+                    "tokenId": "  ",
                     "protocol": "openai",
                     "model": "gpt-4",
                     "message": "hi"
@@ -387,14 +389,14 @@ class TokenControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("缺少 Token Key"));
+                .andExpect(jsonPath("$.message").value("缺少 Token ID"));
     }
 
     @Test
     void testChat_missingModel() throws Exception {
         String body = """
                 {
-                    "tokenKey": "sk-test-key",
+                    "tokenId": "1",
                     "protocol": "openai",
                     "message": "hi"
                 }
@@ -411,15 +413,15 @@ class TokenControllerTest {
     void testChat_businessException() throws Exception {
         setAuthentication(regularUser);
         Token tokenEntity = Token.builder().id(1L).name("test").userId(2L).build();
-        when(tokenService.validateTokenKey("sk-invalid")).thenReturn(tokenEntity);
+        when(tokenService.getById(1L)).thenReturn(tokenEntity);
         when(relayService.resolveModelName("GPT-4o")).thenReturn("gpt-4o");
-        when(relayService.relayRequest(eq("sk-invalid"), anyString(),
-                anyString(), eq("gpt-4o"), isNull()))
+        when(relayService.relayRequestForToken(eq(tokenEntity), anyString(),
+                anyString(), eq("gpt-4o"), isNull(), isNull()))
                 .thenThrow(new BusinessException(401, "无效的 Token"));
 
         String body = """
                 {
-                    "tokenKey": "sk-invalid",
+                    "tokenId": "1",
                     "protocol": "openai",
                     "model": "GPT-4o",
                     "message": "hi"
@@ -438,15 +440,15 @@ class TokenControllerTest {
     void testChat_runtimeException() throws Exception {
         setAuthentication(regularUser);
         Token tokenEntity = Token.builder().id(1L).name("test").userId(2L).build();
-        when(tokenService.validateTokenKey("sk-test-key")).thenReturn(tokenEntity);
+        when(tokenService.getById(1L)).thenReturn(tokenEntity);
         when(relayService.resolveModelName("GPT-4o")).thenReturn("gpt-4o");
-        when(relayService.relayRequest(eq("sk-test-key"), anyString(),
-                anyString(), eq("gpt-4o"), isNull()))
+        when(relayService.relayRequestForToken(eq(tokenEntity), anyString(),
+                anyString(), eq("gpt-4o"), isNull(), isNull()))
                 .thenThrow(new RuntimeException("Connection timeout"));
 
         String body = """
                 {
-                    "tokenKey": "sk-test-key",
+                    "tokenId": "1",
                     "protocol": "openai",
                     "model": "GPT-4o",
                     "message": "hi"
@@ -465,7 +467,7 @@ class TokenControllerTest {
     void testChat_defaultMessage() throws Exception {
         setAuthentication(regularUser);
         Token tokenEntity = Token.builder().id(1L).name("test").userId(2L).build();
-        when(tokenService.validateTokenKey("sk-test-key")).thenReturn(tokenEntity);
+        when(tokenService.getById(1L)).thenReturn(tokenEntity);
         when(relayService.resolveModelName("gpt-4")).thenReturn("gpt-4");
         String openAiResponse = """
                 {
@@ -473,13 +475,13 @@ class TokenControllerTest {
                     "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
                 }
                 """;
-        when(relayService.relayRequest(eq("sk-test-key"), eq("/v1/chat/completions"),
-                anyString(), eq("gpt-4"), isNull())).thenReturn(openAiResponse);
+        when(relayService.relayRequestForToken(eq(tokenEntity), eq("/v1/chat/completions"),
+                anyString(), eq("gpt-4"), isNull(), isNull())).thenReturn(openAiResponse);
 
         // message is null -> should default to "hi"
         String body = """
                 {
-                    "tokenKey": "sk-test-key",
+                    "tokenId": "1",
                     "protocol": "openai",
                     "model": "gpt-4"
                 }

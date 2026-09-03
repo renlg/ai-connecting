@@ -186,25 +186,26 @@ public class TokenController {
     }
 
     /**
-     * 测试 Token 聊天功能 - 支持 OpenAI 和 Claude 协议
+     * 测试 Token 聊天功能 - 支持 OpenAI 和 Claude 协议。
+     * 只接收 tokenId：Token 明文不再落库/下发，后端按 id 加载实体后走等价中转链路
      */
     @PostMapping("/test-chat")
     public ApiResponse<Map<String, Object>> testChat(@AuthenticationPrincipal User user,
                                                      @RequestBody Map<String, String> request) {
-        String tokenKey = request.get("tokenKey");
+        String tokenId = request.get("tokenId");
         String protocol = request.get("protocol"); // "openai" or "claude"
         String model = request.get("model");
         String message = request.get("message");
 
-        if (tokenKey == null || tokenKey.isBlank()) {
-            throw new BusinessException("缺少 Token Key", "Missing token key");
+        if (tokenId == null || tokenId.isBlank()) {
+            throw new BusinessException("缺少 Token ID", "Missing token id");
         }
         if (model == null || model.isBlank()) {
             throw new BusinessException("请选择模型", "Please select a model");
         }
 
-        // 校验当前用户对该 Token 的所有权
-        Token tokenEntity = tokenService.validateTokenKey(tokenKey);
+        // 加载 Token 实体并校验当前用户对该 Token 的所有权
+        Token tokenEntity = tokenService.getById(parseTokenId(tokenId));
         checkTokenOwner(user, tokenEntity);
 
         // 解析 displayName 为实际模型名
@@ -221,7 +222,7 @@ public class TokenController {
                         "max_tokens", 100,
                         "messages", List.of(Map.of("role", "user", "content", message != null ? message : "hi"))
                 ));
-                String response = relayService.claudeRelayRequest(tokenKey, requestBody, resolvedModel, null);
+                String response = relayService.claudeRelayRequestForToken(tokenEntity, requestBody, resolvedModel, null);
                 long duration = System.currentTimeMillis() - startTime;
 
                 JsonNode root = objectMapper.readTree(response);
@@ -252,7 +253,7 @@ public class TokenController {
                         "messages", List.of(Map.of("role", "user", "content", message != null ? message : "hi")),
                         "max_tokens", 100
                 ));
-                String response = relayService.relayRequest(tokenKey, "/v1/chat/completions", requestBody, resolvedModel, null);
+                String response = relayService.relayRequestForToken(tokenEntity, "/v1/chat/completions", requestBody, resolvedModel, null, null);
                 long duration = System.currentTimeMillis() - startTime;
 
                 JsonNode root = objectMapper.readTree(response);
@@ -284,18 +285,19 @@ public class TokenController {
     }
 
     /**
-     * 测试 Token 聊天功能（流式）- 支持 OpenAI 和 Claude 协议
+     * 测试 Token 聊天功能（流式）- 支持 OpenAI 和 Claude 协议。
+     * 只接收 tokenId：Token 明文不再落库/下发，后端按 id 加载实体后走等价中转链路
      */
     @PostMapping(value = "/test-chat-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public void testChatStream(@AuthenticationPrincipal User user,
                                @RequestBody Map<String, String> request, HttpServletResponse response) throws Exception {
-        String tokenKey = request.get("tokenKey");
+        String tokenId = request.get("tokenId");
         String protocol = request.get("protocol"); // "openai" or "claude"
         String model = request.get("model");
         String message = request.get("message");
 
-        if (tokenKey == null || tokenKey.isBlank()) {
-            throw new BusinessException("缺少 Token Key", "Missing token key");
+        if (tokenId == null || tokenId.isBlank()) {
+            throw new BusinessException("缺少 Token ID", "Missing token id");
         }
         if (model == null || model.isBlank()) {
             throw new BusinessException("请选择模型", "Please select a model");
@@ -303,8 +305,8 @@ public class TokenController {
 
         SseUtils.setSseHeaders(response);
 
-        // 校验当前用户对该 Token 的所有权
-        Token tokenEntity = tokenService.validateTokenKey(tokenKey);
+        // 加载 Token 实体并校验当前用户对该 Token 的所有权
+        Token tokenEntity = tokenService.getById(parseTokenId(tokenId));
         checkTokenOwner(user, tokenEntity);
 
         // 解析 displayName 为实际模型名
@@ -319,9 +321,9 @@ public class TokenController {
                         "stream", true,
                         "messages", List.of(Map.of("role", "user", "content", message != null ? message : "hi"))
                 ));
-                
+
                 // 调用上游流式接口并转发
-                forwardClaudeStream(tokenKey, requestBody, resolvedModel, response);
+                forwardClaudeStream(tokenEntity, requestBody, resolvedModel, response);
             } else {
                 // OpenAI 协议流式测试
                 String requestBody = objectMapper.writeValueAsString(Map.of(
@@ -330,9 +332,9 @@ public class TokenController {
                         "max_tokens", 100,
                         "stream", true
                 ));
-                
+
                 // 调用上游流式接口并转发
-                forwardOpenAIStream(tokenKey, requestBody, resolvedModel, response);
+                forwardOpenAIStream(tokenEntity, requestBody, resolvedModel, response);
             }
         } catch (Exception e) {
             // 发送错误事件
@@ -343,14 +345,22 @@ public class TokenController {
         }
     }
 
-    private void forwardOpenAIStream(String tokenKey, String requestBody, String model, HttpServletResponse response) throws Exception {
-        // 走真实的中转接口，包含积分扣减
-        relayService.relayStreamRequest(tokenKey, "/v1/chat/completions", requestBody, model, null, response);
+    private Long parseTokenId(String tokenId) {
+        try {
+            return Long.parseLong(tokenId.trim());
+        } catch (NumberFormatException e) {
+            throw new BusinessException("Token ID 无效", "Invalid token id");
+        }
     }
 
-    private void forwardClaudeStream(String tokenKey, String requestBody, String model, HttpServletResponse response) throws Exception {
+    private void forwardOpenAIStream(Token tokenEntity, String requestBody, String model, HttpServletResponse response) throws Exception {
+        // 走真实的中转接口，包含积分扣减
+        relayService.relayStreamRequestForToken(tokenEntity, "/v1/chat/completions", requestBody, model, null, response);
+    }
+
+    private void forwardClaudeStream(Token tokenEntity, String requestBody, String model, HttpServletResponse response) throws Exception {
         // 走真实的 Claude 中转接口，包含积分扣减
-        relayService.claudeRelayStreamRequest(tokenKey, requestBody, model, null, response);
+        relayService.claudeRelayStreamRequestForToken(tokenEntity, requestBody, model, null, response);
     }
 
     /**

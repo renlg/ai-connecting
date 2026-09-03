@@ -63,6 +63,7 @@ app:
     write-ms: ${RELAY_WRITE_TIMEOUT_MS:30000}
     single-model-text-budget-ms: ${RELAY_SINGLE_MODEL_TEXT_BUDGET_MS:180000}
     model-group-budget-ms: ${RELAY_MODEL_GROUP_BUDGET_MS:130000}
+    failover-attempt-min-ms: ${RELAY_FAILOVER_ATTEMPT_MIN_MS:20000}
     passthrough-read-ms: ${RELAY_PASSTHROUGH_READ_TIMEOUT_MS:300000}
     passthrough-text-call-ms: ${RELAY_PASSTHROUGH_TEXT_CALL_TIMEOUT_MS:300000}
     passthrough-media-call-ms: ${RELAY_PASSTHROUGH_MEDIA_CALL_TIMEOUT_MS:600000}
@@ -86,8 +87,8 @@ app:
     expiration: 86400000  # 24 hours in ms
   oauth:
     taiwei:
-      # Internal client registry currently stores this secret in plaintext; restrict database access accordingly.
-      secret: ${OAUTH_TAIWEI_SECRET:taiwei-secret-2026}
+      # 必须通过环境变量设置，不提供默认值；入库仅存 sha256 哈希
+      secret: ${OAUTH_TAIWEI_SECRET}
       redirect-uri: ${OAUTH_TAIWEI_REDIRECT:http://127.0.0.1:8688/api/oauth/callback}
   admin:
     default-password: ${ADMIN_DEFAULT_PASSWORD}  # 必须通过环境变量设置

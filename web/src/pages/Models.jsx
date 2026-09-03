@@ -35,13 +35,14 @@ export default function Models() {
     if (filters?.type) params.type = filters.type
     getModels(params).then(res => {
       if (res.code === 200) setModels(res.data || [])
-    }).finally(() => setLoading(false))
+    }).catch(err => message.error(err?.message || '模型加载失败'))
+      .finally(() => setLoading(false))
   }
 
   const loadAllModels = () => {
     getModels().then(res => {
       if (res.code === 200) setAllModels(res.data || [])
-    })
+    }).catch(err => message.error(err?.message || '完整模型列表加载失败'))
   }
 
   const loadFallbackGroups = () => {

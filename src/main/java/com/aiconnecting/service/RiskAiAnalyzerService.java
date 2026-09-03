@@ -9,14 +9,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import okhttp3.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -24,7 +22,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
@@ -36,9 +33,8 @@ public class RiskAiAnalyzerService {
     private final RiskManagerService riskManagerService;
     private final RedisDistributedLock distributedLock;
     private final TransactionTemplate transactionTemplate;
-
-    @Value("${server.port:8080}")
-    private int serverPort;
+    private final TokenService tokenService;
+    private final RelayService relayService;
 
     @Value("${app.risk-ai.enabled:true}")
     private boolean enabled;
@@ -68,12 +64,6 @@ public class RiskAiAnalyzerService {
     private static final int RETENTION_DAYS = 3;
     private static final Set<String> AI_ANALYZABLE_ERROR_CODES = Set.of(
             "400", "401", "402", "403", "404", "429");
-
-    private final OkHttpClient aiClient = new OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .callTimeout(90, TimeUnit.SECONDS)
-            .build();
 
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -153,10 +143,10 @@ public class RiskAiAnalyzerService {
         log.info("AI分析完成: 分析{}条4xx记录，熔断{}个渠道+模型", analyzableRecords.size(), fusedCount);
     }
 
-    private List<AiFuseTarget> callAi(List<String> lines) throws IOException {
-        String token = resolveToken();
-        if (token == null || token.isBlank()) {
-            throw new IOException("AI分析token未配置(设置RISK_AI_TOKEN或创建name=risk-ai-analyzer的token)");
+    private List<AiFuseTarget> callAi(List<String> lines) {
+        Token token = resolveToken();
+        if (token == null) {
+            throw new IllegalStateException("AI分析token未配置(设置RISK_AI_TOKEN或创建name=risk-ai-analyzer的token)");
         }
 
         String dataBlock = String.join("\n", lines);
@@ -186,23 +176,13 @@ public class RiskAiAnalyzerService {
                 "max_tokens", 1024
         );
 
-        String url = "http://127.0.0.1:" + serverPort + "/v1/chat/completions";
-        RequestBody body = RequestBody.create(
-                mapper.writeValueAsString(requestBody),
-                MediaType.parse("application/json"));
-        Request request = new Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer " + token)
-                .addHeader("Content-Type", "application/json")
-                .post(body)
-                .build();
-
-        try (Response response = aiClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                throw new IOException("AI分析HTTP失败: " + response.code());
-            }
-            String responseBody = response.body() != null ? response.body().string() : "";
+        // Token 明文不再落库（仅存哈希），改为按实体走进程内等价中转链路，不再回环 HTTP 端点
+        try {
+            String responseBody = relayService.relayRequestForToken(token, "/v1/chat/completions",
+                    mapper.writeValueAsString(requestBody), modelGroup, null, null);
             return parseAiResponse(responseBody);
+        } catch (Exception e) {
+            throw new IllegalStateException("AI分析请求失败: " + e.getMessage(), e);
         }
     }
 
@@ -318,12 +298,20 @@ public class RiskAiAnalyzerService {
         return "[]";
     }
 
-    private String resolveToken() {
-        if (envToken != null && !envToken.isBlank()) return envToken;
+    /** 环境变量优先（明文经完整校验）；否则查库按名称取 Token 实体（库中仅存哈希，无法恢复明文） */
+    private Token resolveToken() {
+        if (envToken != null && !envToken.isBlank()) {
+            try {
+                return tokenService.validateTokenKey(envToken);
+            } catch (Exception e) {
+                log.warn("RISK_AI_TOKEN 校验失败: {}", e.getMessage());
+                return null;
+            }
+        }
         List<Token> tokens = tokenRepository.findByUserId(7L);
         for (Token t : tokens) {
             if ("risk-ai-analyzer".equals(t.getName()) && t.getStatus() != null && t.getStatus() == 1) {
-                return t.getTokenKey();
+                return t;
             }
         }
         return null;

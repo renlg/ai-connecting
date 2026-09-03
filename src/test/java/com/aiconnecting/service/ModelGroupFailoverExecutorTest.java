@@ -459,7 +459,7 @@ class ModelGroupFailoverExecutorTest {
         when(routing.resolveOrderedCandidates(eq(group), eq(false), eq(1), nullable(Boolean.class))).thenReturn(List.of(
                 new ModelGroupRoutingService.Candidate(member, "11")));
         when(router.selectChannel(eq("11"), anySet(), isNull())).thenReturn(channel);
-        doReturn(false).when(support).isChannelRateLimited(channel);
+        doReturn(false).when(support).isChannelRateLimited(channel, "11");
         when(billing.calculateTextCreditCost(any(), anyInt(), anyInt(), anyInt()))
                 .thenReturn(BigDecimal.ZERO);
 
@@ -496,7 +496,7 @@ class ModelGroupFailoverExecutorTest {
                 new ModelGroupRoutingService.Candidate(second, "12")));
         when(router.selectChannel(eq("11"), anySet(), isNull())).thenReturn(firstChannel);
         when(router.selectChannel(eq("12"), anySet(), isNull())).thenReturn(secondChannel);
-        doReturn(false).when(support).isChannelRateLimited(any(Channel.class));
+        doReturn(false).when(support).isChannelRateLimited(any(Channel.class), anyString());
 
         ModelGroupFailoverExecutor executor = new ModelGroupFailoverExecutor(
                 support, groupService, routing, mock(ModelGroupBillingService.class), usageLogs,

@@ -9,6 +9,10 @@ import java.util.List;
 
 public interface ChannelRepository extends JpaRepository<Channel, Long> {
 
+    boolean existsByName(String name);
+
+    boolean existsByNameAndIdNot(String name, Long id);
+
     List<Channel> findByStatusOrderByPriorityDesc(Integer status);
 
     @Query("SELECT c FROM Channel c WHERE c.status = 1 AND (',' || c.modelIds || ',') LIKE :modelIdPattern ORDER BY c.priority DESC")

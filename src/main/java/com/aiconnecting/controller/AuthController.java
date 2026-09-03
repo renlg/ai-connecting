@@ -30,6 +30,9 @@ public class AuthController {
     @Value("${app.security.trusted-proxies:127.0.0.1,0:0:0:0:0:0:0:1,::1}")
     private String trustedProxies;
 
+    @Value("${app.jwt.expiration}")
+    private long jwtExpirationMs;
+
     @PostMapping("/login")
     public ApiResponse<LoginResponse> login(@Valid @RequestBody LoginRequest request,
                                             HttpServletRequest httpRequest,
@@ -39,10 +42,22 @@ public class AuthController {
                 .httpOnly(true)
                 .sameSite("Lax")
                 .path("/")
-                .maxAge(Duration.ofDays(7))
+                .maxAge(Duration.ofMillis(jwtExpirationMs))
                 .build();
         httpResponse.addHeader(HttpHeaders.SET_COOKIE, tokenCookie.toString());
         return ApiResponse.success(loginResponse);
+    }
+
+    @PostMapping("/logout")
+    public ApiResponse<Void> logout(HttpServletResponse httpResponse) {
+        ResponseCookie tokenCookie = ResponseCookie.from("aic_token", "")
+                .httpOnly(true)
+                .sameSite("Lax")
+                .path("/")
+                .maxAge(Duration.ZERO)
+                .build();
+        httpResponse.addHeader(HttpHeaders.SET_COOKIE, tokenCookie.toString());
+        return ApiResponse.success();
     }
 
     /**

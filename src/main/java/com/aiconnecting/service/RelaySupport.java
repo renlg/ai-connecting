@@ -84,6 +84,9 @@ public class RelaySupport {
     private ChannelFailureRecorder channelFailureRecorder;
 
     @Autowired(required = false)
+    private RefundCompensationService refundCompensationService;
+
+    @Autowired(required = false)
     private RelayTimeoutProperties timeoutProperties = new RelayTimeoutProperties();
 
     private OkHttpClient httpClient;
@@ -168,6 +171,24 @@ public class RelaySupport {
      */
     RelayContext validateAndPrepare(String tokenKey, String permissionModel, String routingModel, String endpointType) {
         Token token = tokenService.validateTokenKey(tokenKey);
+        return prepareContext(token, permissionModel, routingModel, endpointType);
+    }
+
+    /**
+     * 供后台测试等已通过其他途径持有 Token 实体的内部调用方复用：跳过明文 key 反查
+     * （库中仅存哈希，明文不可恢复），其余校验与 {@link #validateAndPrepare} 完全一致
+     */
+    RelayContext prepareContextForToken(Token token, String model) {
+        return prepareContext(token, model, model, "text");
+    }
+
+    private RelayContext prepareContext(Token token, String permissionModel, String routingModel, String endpointType) {
+        if (token.getStatus() == null || token.getStatus() != 1) {
+            throw new BusinessException(403, "Token 已被禁用", "Token disabled");
+        }
+        if (token.getExpiredAt() != null && token.getExpiredAt().isBefore(java.time.LocalDateTime.now())) {
+            throw new BusinessException(403, "Token 已过期", "Token expired");
+        }
         if (token.getQuota() != -1 && token.getUsedQuota() >= token.getQuota()) {
             throw new BusinessException(429, "Token 额度已用完", "Token quota exhausted");
         }
@@ -215,6 +236,17 @@ public class RelaySupport {
      */
     RelayContext prepareGroupContext(String tokenKey, String groupName) {
         Token token = tokenService.validateTokenKey(tokenKey);
+        return prepareGroupContextForToken(token, groupName);
+    }
+
+    /** 供已持有 Token 实体的内部调用方复用：跳过明文 key 反查，其余校验与 {@link #prepareGroupContext} 完全一致 */
+    RelayContext prepareGroupContextForToken(Token token, String groupName) {
+        if (token.getStatus() == null || token.getStatus() != 1) {
+            throw new BusinessException(403, "Token 已被禁用", "Token disabled");
+        }
+        if (token.getExpiredAt() != null && token.getExpiredAt().isBefore(java.time.LocalDateTime.now())) {
+            throw new BusinessException(403, "Token 已过期", "Token expired");
+        }
         if (token.getQuota() != -1 && token.getUsedQuota() >= token.getQuota()) {
             throw new BusinessException(429, "Token 额度已用完", "Token quota exhausted");
         }
@@ -231,6 +263,54 @@ public class RelaySupport {
             rateLimitService.checkTokenRateLimit(token.getId(), token.getRateLimit());
         }
         return new RelayContext(token, null, tokenUser.getLevel(), tokenUser, null);
+    }
+
+    /**
+     * 文本请求余额预检：按请求体长度与 max_tokens 估算本次请求的最低积分消耗，余额不足直接拒绝。
+     * 原先仅校验 credits>0，余额 0.01 的用户并发 N 个在途请求可全部通过检查造成穿透；
+     * 预检失败（如模型未配置）不阻断请求，按原有后付费逻辑继续
+     */
+    void checkTextBalanceEstimate(RelayContext ctx, String model, String requestBody) {
+        User user = ctx.user();
+        if (user == null || "admin".equals(user.getRole()) || user.getCredits() == null) {
+            return;
+        }
+        try {
+            int[] estimate = estimateTextRequestTokens(requestBody);
+            BigDecimal estimatedCost = usageLogService.calculateCreditCost(model, estimate[0], estimate[1], 0);
+            if (estimatedCost.compareTo(BigDecimal.ZERO) > 0 && user.getCredits().compareTo(estimatedCost) < 0) {
+                throw new BusinessException(402, "用户积分不足以覆盖本次请求的预估消耗，请先充值",
+                        "Insufficient credits to cover the estimated cost of this request, please recharge");
+            }
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.debug("文本余额预检失败，跳过预检: model={}, error={}", model, e.getMessage());
+        }
+    }
+
+    /**
+     * 估算文本请求 token 用量：输入按请求体长度折算，输出按 max_tokens（缺省保守取 1024）
+     *
+     * @return [输入 token 估算, 输出 token 估算]
+     */
+    int[] estimateTextRequestTokens(String requestBody) {
+        int promptEstimate = RelayServiceUtils.estimateTokensFromChars(requestBody != null ? requestBody.length() : 0);
+        int maxTokens = 0;
+        if (requestBody != null) {
+            try {
+                JsonNode node = objectMapper.readTree(requestBody);
+                if (node != null && node.isObject()) {
+                    maxTokens = node.path("max_tokens").asInt(0);
+                    if (maxTokens == 0) maxTokens = node.path("max_completion_tokens").asInt(0);
+                    if (maxTokens == 0) maxTokens = node.path("generationConfig").path("maxOutputTokens").asInt(0);
+                }
+            } catch (Exception ignored) {
+                // 非严格 JSON 或解析失败时按缺省估算
+            }
+        }
+        if (maxTokens <= 0) maxTokens = 1024;
+        return new int[]{promptEstimate, maxTokens};
     }
 
     private static final Set<String> MEDIA_ENDPOINT_TYPES = Set.of("image", "video", "audio");
@@ -592,6 +672,14 @@ public class RelaySupport {
 
     long singleModelTextBudgetMs() { return positive(timeoutProperties.getSingleModelTextBudgetMs()); }
     long modelGroupBudgetMs() { return positive(timeoutProperties.getModelGroupBudgetMs()); }
+    long failoverAttemptTimeoutMs(long deadline, int attemptsStarted, int maxAttempts) {
+        long remainingMs = Math.max(0L, deadline - System.currentTimeMillis());
+        if (remainingMs == 0L) return 0L;
+        int remainingAttempts = Math.max(1, maxAttempts - attemptsStarted + 1);
+        long fairShareMs = Math.max(1L, remainingMs / remainingAttempts);
+        long minimumMs = positive(timeoutProperties.getFailoverAttemptMinMs());
+        return Math.min(remainingMs, Math.max(minimumMs, fairShareMs));
+    }
     long imageTimeoutMs() { return positive(timeoutProperties.getImageMs()); }
     long videoCreateTimeoutMs() { return positive(timeoutProperties.getVideoCreateMs()); }
     long videoSynchronousTimeoutMs() { return positive(timeoutProperties.getVideoSynchronousMs()); }
@@ -877,10 +965,6 @@ public class RelaySupport {
     /** @param readTimeoutMs remaining model-group wall-clock budget, or null for the normal timeout */
     String forwardClaudeRequest(Channel channel, String requestBody, Long readTimeoutMs) {
         captureChannelModel(requestBody);
-        if (isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "请求过于频繁，请稍后重试", "Too many requests, please try again later");
-        }
-
         String url = channel.getBaseUrl().replaceAll("/+$", "") + "/v1/messages";
         RequestBody body = RequestBody.create(requestBody, MediaType.parse("application/json"));
         Request.Builder reqBuilder = new Request.Builder()
@@ -915,10 +999,6 @@ public class RelaySupport {
 
     /** @param readTimeoutMs 覆盖默认读超时（毫秒），语义同 {@link #forwardRequest(Channel, String, String, Long)} */
     String forwardGeminiRequest(Channel channel, String requestBody, Long readTimeoutMs) {
-        if (isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "请求过于频繁，请稍后重试", "Too many requests, please try again later");
-        }
-
         String model = "default";
         try {
             JsonNode node = objectMapper.readTree(requestBody);
@@ -1052,8 +1132,9 @@ public class RelaySupport {
         return null;
     }
 
-    /** SSE 透传结果：lastUsageData=最后一条包含 usage 的数据行；bytesWritten=是否确有任何数据写出过 */
-    record SseStreamResult(String lastUsageData, boolean bytesWritten) {}
+    /** SSE 透传结果：lastUsageData=最后一条包含 usage 的数据行；bytesWritten=是否确有任何数据写出过；charsWritten=已写给客户端的字符量；partialUsage=已解析的（可能是部分的）usage */
+    record SseStreamResult(String lastUsageData, boolean bytesWritten, long charsWritten,
+                           RelayServiceUtils.UsageInfo partialUsage) {}
 
     static final class SseStreamingException extends IOException {
         private final SseStreamResult partialResult;
@@ -1074,14 +1155,16 @@ public class RelaySupport {
     }
 
     /**
-     * 与 {@link #streamSseResponse} 逻辑完全一致，额外返回是否确有数据写出：
+     * 与 {@link #streamSseResponse} 逻辑完全一致，额外返回是否确有数据写出与已写字符量：
      * 上游返回 200 后立即 EOF（一行都没有）时，客户端连接虽已建立但从未收到任何内容，
-     * 调用方（模型组故障转移）据此判断此时仍可安全切换成员，而非当作已成功、零 usage 结束
+     * 调用方（模型组故障转移）据此判断此时仍可安全切换成员，而非当作已成功、零 usage 结束；
+     * 字符量与已解析 partial usage 供流中断时按已接收数据计费，避免零计费
      */
     RelaySupport.SseStreamResult streamSseResponseTracked(HttpURLConnection conn, HttpServletResponse httpResponse,
                                                            Predicate<String> usageFilter) throws IOException {
         String lastUsageData = null;
         boolean bytesWritten = false;
+        long charsWritten = 0;
         long deadline = sseDeadline();
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
@@ -1096,6 +1179,7 @@ public class RelaySupport {
                 } else {
                     writer.write(line);
                     writer.write("\n");
+                    charsWritten += line.length() + 1;
                 }
                 writer.flush();
                 bytesWritten = true;
@@ -1107,9 +1191,11 @@ public class RelaySupport {
                 }
             }
         } catch (IOException e) {
-            throw new SseStreamingException(e, new SseStreamResult(lastUsageData, bytesWritten));
+            throw new SseStreamingException(e, new SseStreamResult(lastUsageData, bytesWritten,
+                    charsWritten, RelayServiceUtils.parseStreamUsageAny(objectMapper, lastUsageData)));
         }
-        return new SseStreamResult(lastUsageData, bytesWritten);
+        return new SseStreamResult(lastUsageData, bytesWritten, charsWritten,
+                RelayServiceUtils.parseStreamUsageAny(objectMapper, lastUsageData));
     }
 
     String injectStreamOptions(String requestBody, String path) {
@@ -1318,7 +1404,7 @@ public class RelaySupport {
     /**
      * 上游请求失败时退回预扣的积分
      *
-     * @return true=已退回（或无需退回）；false=退款本身失败，已记录待人工补偿告警，
+     * @return true=已退回（或无需退回）；false=退款本身失败，已记录日志并落持久化补偿记录，
      *         调用方必须向客户端如实反映扣费状态，不得声称已退款
      */
     boolean refundMediaCharge(RelayContext ctx, MediaCharge charge) {
@@ -1338,6 +1424,9 @@ public class RelaySupport {
         } catch (Exception e) {
             log.error("MANUAL_COMPENSATION_REQUIRED 退回预扣积分失败，需人工补偿: userId={}, amount={}",
                     userId, charge.cost(), e);
+            if (refundCompensationService != null) {
+                refundCompensationService.record(userId, charge.cost(), "precharge_refund", e.getMessage());
+            }
             return false;
         }
     }
@@ -1405,17 +1494,24 @@ public class RelaySupport {
 
     void recordUsage(Token token, Channel channel, String model,
                      String response, long duration, HttpServletRequest httpRequest, String path) {
+        recordUsage(token, channel, model, response, null, duration, httpRequest, path);
+    }
+
+    void recordUsage(Token token, Channel channel, String model,
+                     String response, String requestBody, long duration, HttpServletRequest httpRequest, String path) {
         int promptTokens = 0;
         int completionTokens = 0;
         int totalTokens = 0;
         int cachedTokens = 0;
         int cacheCreationTokens = 0;
         int cacheReadTokens = 0;
+        boolean usagePresent = false;
 
         try {
             JsonNode jsonNode = objectMapper.readTree(response);
             JsonNode usage = jsonNode.get("usage");
             if (usage != null) {
+                usagePresent = true;
                 promptTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt() : 0;
                 completionTokens = usage.has("completion_tokens") ? usage.get("completion_tokens").asInt() : 0;
                 totalTokens = usage.has("total_tokens") ? usage.get("total_tokens").asInt() : 0;
@@ -1431,6 +1527,15 @@ public class RelaySupport {
             }
         } catch (Exception e) {
             log.warn("Failed to parse usage from response");
+        }
+
+        if (!usagePresent && requestBody != null) {
+            // 上游响应缺 usage：按字符估算兜底，避免请求被零计费
+            completionTokens = RelayServiceUtils.estimateTokensFromChars(response != null ? response.length() : 0);
+            promptTokens = RelayServiceUtils.estimateTokensFromChars(requestBody.length());
+            totalTokens = promptTokens + completionTokens;
+            log.warn("上游响应未包含 usage，按字符估算计费: model={}, prompt≈{}, completion≈{}",
+                    model, promptTokens, completionTokens);
         }
 
         BigDecimal creditCost = usageLogService.calculateCreditCost(model, promptTokens, completionTokens, cachedTokens);
@@ -1452,6 +1557,26 @@ public class RelaySupport {
                 .build();
 
         usageLogService.recordUsageAndQuotas(usageLog, token.getId(), channel.getId(), totalTokens, token.getUserId());
+    }
+
+    /**
+     * 流式用量落账：上游未返回 usage（prompt/completion 均为 0）时按已写出字符量估算输出、
+     * 按请求体长度估算输入，避免流式请求零计费；流中断时按已解析的 partial usage 调用
+     */
+    void recordStreamUsageWithFallback(Token token, Channel channel, String model,
+                                       int promptTokens, int completionTokens, int cachedTokens,
+                                       int cacheCreationTokens, int cacheReadTokens,
+                                       long charsWritten, String requestBody,
+                                       long duration, HttpServletRequest httpRequest, String path) {
+        if (promptTokens == 0 && completionTokens == 0) {
+            promptTokens = RelayServiceUtils.estimateTokensFromChars(requestBody != null ? requestBody.length() : 0);
+            completionTokens = RelayServiceUtils.estimateTokensFromChars(charsWritten);
+            cachedTokens = 0;
+            log.warn("上游流式响应未返回 usage，按字符估算计费: model={}, prompt≈{}, completion≈{}",
+                    model, promptTokens, completionTokens);
+        }
+        recordStreamUsage(token, channel, model, promptTokens, completionTokens,
+                cachedTokens, cacheCreationTokens, cacheReadTokens, duration, httpRequest, path);
     }
 
     void recordStreamUsage(Token token, Channel channel, String model,

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import { Card, Row, Col, Statistic, Spin, message, Modal, Table, Tag, Segmented, Empty, Tooltip as AntTooltip } from 'antd'
 import { KeyOutlined, SendOutlined, NumberOutlined, DollarOutlined } from '@ant-design/icons'
 import { ApiOutlined, CloudServerOutlined, UserOutlined, WalletOutlined } from '@ant-design/icons'
@@ -87,7 +88,7 @@ export default function Dashboard() {
   const [days, setDays] = useState(7)
   const dailyStatsCacheRef = useRef({})
   const dailyStatsRequestIdRef = useRef(0)
-  const user = JSON.parse(localStorage.getItem('user') || '{}')
+  const { user } = useOutletContext()
   const isAdmin = user.role === 'admin'
 
   useEffect(() => {

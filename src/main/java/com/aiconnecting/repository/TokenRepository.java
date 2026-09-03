@@ -12,6 +12,9 @@ public interface TokenRepository extends JpaRepository<Token, Long> {
     Optional<Token> findByTokenKey(String tokenKey);
     List<Token> findByUserId(Long userId);
 
+    /** 历史明文 tokenKey（sk- 前缀）行，供启动时迁移为哈希存储 */
+    List<Token> findByTokenKeyStartingWith(String prefix);
+
     @Query("SELECT t FROM Token t ORDER BY t.createdAt DESC")
     List<Token> findAllOrderByCreatedAtDesc();
 

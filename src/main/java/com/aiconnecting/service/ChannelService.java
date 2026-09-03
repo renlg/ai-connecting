@@ -44,6 +44,7 @@ import java.util.stream.Collectors;
 public class ChannelService {
 
     private final ChannelRepository channelRepository;
+    /** 保留构造参数兼容已有调用方；渠道名称唯一性由数据库查询判断，不再使用 30 秒提交防抖。 */
     private final DuplicateSubmitGuard duplicateSubmitGuard;
 
     @Autowired(required = false)
@@ -226,7 +227,7 @@ public class ChannelService {
         if (name == null || name.isBlank()) {
             throw new BusinessException("渠道名称不能为空", "Channel name cannot be empty");
         }
-        if (!duplicateSubmitGuard.tryAcquire("channel", name)) {
+        if (channelRepository.existsByName(name)) {
             throw new BusinessException("渠道名称已存在", "Channel name already exists");
         }
     }
@@ -256,8 +257,9 @@ public class ChannelService {
     public Channel update(Long id, ChannelRequest request) {
         validateSupportedLevels(request.getSupportedLevels());
         Channel channel = getById(id);
-        if (request.getName() != null) {
-            guardDuplicateName(request.getName());
+        if (request.getName() != null && !request.getName().equals(channel.getName())
+                && channelRepository.existsByNameAndIdNot(request.getName(), id)) {
+            throw new BusinessException("渠道名称已存在", "Channel name already exists");
         }
         String proposedType = request.getType() != null ? request.getType() : channel.getType();
         String proposedModelIds = request.getModelIds() != null ? request.getModelIds() : channel.getModelIds();
@@ -474,6 +476,7 @@ public class ChannelService {
      * 图片、视频保持上游 JSON 结构；音频二进制编码为 data URL，方便管理页直接播放。
      */
     public Map<String, Object> testMedia(Map<String, String> request) {
+        applyChannelConfigOverride(request);
         String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         String channelType = request.get("type");
@@ -561,6 +564,7 @@ public class ChannelService {
 
     /** 使用同一渠道配置轮询视频任务；Agnes 必须通过 video_id 查询 /agnesapi。 */
     public Map<String, Object> testVideoStatus(Map<String, String> request) {
+        applyChannelConfigOverride(request);
         String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         String channelType = request.get("type");
@@ -613,6 +617,7 @@ public class ChannelService {
      * 回退到旧的 GET /v1/videos/{id}/content 端点。
      */
     public TestMediaContent testVideoContent(Map<String, String> request) {
+        applyChannelConfigOverride(request);
         String baseUrl = requireTestValue(request, "baseUrl", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         String apiKey = requireTestValue(request, "apiKey", "请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");
         String channelType = request.get("type");
@@ -1011,6 +1016,34 @@ public class ChannelService {
         return value;
     }
 
+    /**
+     * 渠道测试请求支持按 channelId 自取库内配置：明文 apiKey 不再下发给前端后，
+     * 测试已保存渠道时前端只传 channelId，由后端自取 baseUrl/apiKey/type；
+     * 表单中显式填写的值优先于库内值（便于测试未保存的新配置）。
+     */
+    private void applyChannelConfigOverride(Map<String, String> request) {
+        String channelId = request.get("channelId");
+        if (channelId == null || channelId.isBlank()) return;
+        request.remove("channelId");
+        Long id;
+        try {
+            id = Long.parseLong(channelId.trim());
+        } catch (NumberFormatException e) {
+            throw new BusinessException("渠道 ID 无效", "Invalid channel id");
+        }
+        Channel channel = getById(id);
+        putIfNotBlank(request, "baseUrl", channel.getBaseUrl());
+        putIfNotBlank(request, "apiKey", channel.getApiKey());
+        putIfNotBlank(request, "type", channel.getType());
+    }
+
+    private void putIfNotBlank(Map<String, String> request, String key, String value) {
+        String existing = request.get(key);
+        if ((existing == null || existing.isBlank()) && value != null && !value.isBlank()) {
+            request.put(key, value);
+        }
+    }
+
     private String abbreviateTestError(String body) {
         return abbreviateTestError(body, 1000);
     }
@@ -1088,6 +1121,7 @@ public class ChannelService {
      * 测试渠道聊天功能（流式）- 发送一条消息并流式返回响应
      */
     public void testChatStream(Map<String, String> request, HttpServletResponse response) throws Exception {
+        applyChannelConfigOverride(request);
         SseUtils.setSseHeaders(response);
 
         String baseUrl = request.get("baseUrl");
@@ -1222,9 +1256,12 @@ public class ChannelService {
         }
     }
 
-    /**
-     * 从上游渠道获取支持的模型列表
-     */
+    /** fetch-models 端点入参：支持 channelId 自取库内 baseUrl/apiKey/type，表单值优先。 */
+    public List<String> fetchUpstreamModels(Map<String, String> request) {
+        applyChannelConfigOverride(request);
+        return fetchUpstreamModels(request.get("baseUrl"), request.get("apiKey"), request.get("type"));
+    }
+
     public List<String> fetchUpstreamModels(String baseUrl, String apiKey, String type) {
         if (baseUrl == null || baseUrl.isBlank() || apiKey == null || apiKey.isBlank()) {
             throw new BusinessException("请先填写 Base URL 和 API Key", "Please provide the Base URL and API key first");

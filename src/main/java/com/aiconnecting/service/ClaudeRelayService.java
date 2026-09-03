@@ -44,6 +44,19 @@ public class ClaudeRelayService {
     public String claudeRelayRequest(String tokenKey, String requestBody,
                                      String model, HttpServletRequest httpRequest) {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
+        return doClaudeRelayRequest(ctx, requestBody, model, httpRequest);
+    }
+
+    /** 供后台测试等已持有 Token 实体的内部调用方复用：跳过明文 key 反查（库中仅存哈希），其余校验完全一致 */
+    public String claudeRelayRequestForToken(Token token, String requestBody,
+                                             String model, HttpServletRequest httpRequest) {
+        RelaySupport.RelayContext ctx = support.prepareContextForToken(token, model);
+        return doClaudeRelayRequest(ctx, requestBody, model, httpRequest);
+    }
+
+    private String doClaudeRelayRequest(RelaySupport.RelayContext ctx, String requestBody,
+                                        String model, HttpServletRequest httpRequest) {
+        support.checkTextBalanceEstimate(ctx, model, requestBody);
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long startTime = System.currentTimeMillis();
@@ -67,7 +80,7 @@ public class ClaudeRelayService {
             }
             triedChannels.add(channel.getId());
 
-            if (support.isChannelRateLimited(channel)) {
+            if (support.isChannelRateLimited(channel, ctx.channelModelId())) {
                 lastError = "上游渠道请求频率超限";
                 log.warn("跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
@@ -75,7 +88,7 @@ public class ClaudeRelayService {
 
             attempt++;
             try {
-                long remainingMs = Math.max(1L, deadline - System.currentTimeMillis());
+                long remainingMs = support.failoverAttemptTimeoutMs(deadline, attempt, RelaySupport.MAX_RETRIES);
                 String response;
                 if (support.isClaudeTypeChannel(channel)) {
                     response = support.forwardClaudeRequest(channel, requestBody, remainingMs);
@@ -91,10 +104,10 @@ public class ClaudeRelayService {
 
                 long duration = System.currentTimeMillis() - startTime;
                 RelayServiceUtils.UsageInfo usage = RelayServiceUtils.parseClaudeUsage(support.objectMapper, response);
-                support.recordStreamUsage(ctx.token(), channel, model,
+                support.recordStreamUsageWithFallback(ctx.token(), channel, model,
                         usage.promptTokens(), usage.completionTokens(),
                         usage.cachedTokens(), usage.cacheCreationTokens(), usage.cacheReadTokens(),
-                        duration, httpRequest, "/v1/messages");
+                        response != null ? response.length() : 0, requestBody, duration, httpRequest, "/v1/messages");
                 return response;
             } catch (BusinessException e) {
                 lastFailure = e;
@@ -126,6 +139,21 @@ public class ClaudeRelayService {
                                           HttpServletResponse httpResponse) throws IOException {
         log.info("[Claude流式] 开始处理, model={}", model);
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
+        doClaudeRelayStreamRequest(ctx, requestBody, model, httpRequest, httpResponse);
+    }
+
+    /** 供后台测试等已持有 Token 实体的内部调用方复用：跳过明文 key 反查（库中仅存哈希），其余校验完全一致 */
+    public void claudeRelayStreamRequestForToken(Token token, String requestBody,
+                                                 String model, HttpServletRequest httpRequest,
+                                                 HttpServletResponse httpResponse) throws IOException {
+        RelaySupport.RelayContext ctx = support.prepareContextForToken(token, model);
+        doClaudeRelayStreamRequest(ctx, requestBody, model, httpRequest, httpResponse);
+    }
+
+    private void doClaudeRelayStreamRequest(RelaySupport.RelayContext ctx, String requestBody,
+                                            String model, HttpServletRequest httpRequest,
+                                            HttpServletResponse httpResponse) throws IOException {
+        support.checkTextBalanceEstimate(ctx, model, requestBody);
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long retryDeadline = System.currentTimeMillis() + support.singleModelTextBudgetMs();
@@ -146,7 +174,7 @@ public class ClaudeRelayService {
             }
             triedChannels.add(channel.getId());
 
-            if (support.isChannelRateLimited(channel)) {
+            if (support.isChannelRateLimited(channel, ctx.channelModelId())) {
                 lastError = "上游渠道请求频率超限";
                 log.warn("[Claude流式] 跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
@@ -156,7 +184,8 @@ public class ClaudeRelayService {
             log.info("[Claude流式] 尝试 {}/{}, channel={}", attempt, RelaySupport.MAX_RETRIES, channel.getId());
 
             try {
-                long remainingMs = Math.max(1L, retryDeadline - System.currentTimeMillis());
+                long remainingMs = support.failoverAttemptTimeoutMs(
+                        retryDeadline, attempt, RelaySupport.MAX_RETRIES);
                 if (support.isClaudeTypeChannel(channel)) {
                     forwardClaudeStreamSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse, remainingMs);
                 } else if (support.isGeminiTypeChannel(channel)) {
@@ -197,10 +226,6 @@ public class ClaudeRelayService {
                                             String model, Token token,
                                             HttpServletRequest httpRequest,
                                             HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
-        if (support.isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
-        }
-
         SseUtils.setSseHeaders(httpResponse);
         long startTime = System.currentTimeMillis();
 
@@ -225,18 +250,30 @@ public class ClaudeRelayService {
                 }
                 return;
             }
-            String lastUsageData = support.streamSseResponse(conn, httpResponse,
-                    data -> data.contains("\"input_tokens\"") || data.contains("\"output_tokens\""));
+            RelaySupport.SseStreamResult streamResult;
+            try {
+                streamResult = support.streamSseResponseTracked(conn, httpResponse,
+                        data -> data.contains("\"input_tokens\"") || data.contains("\"output_tokens\""));
+            } catch (RelaySupport.SseStreamingException e) {
+                // 流中断但已有数据写给客户端：按已解析 partial usage（缺失时按字符估算）计费后再抛出
+                long duration = System.currentTimeMillis() - startTime;
+                RelayServiceUtils.UsageInfo partialUsage = e.partialResult().partialUsage();
+                support.recordStreamUsageWithFallback(token, channel, model,
+                        partialUsage.promptTokens(), partialUsage.completionTokens(),
+                        partialUsage.cachedTokens(), partialUsage.cacheCreationTokens(), partialUsage.cacheReadTokens(),
+                        e.partialResult().charsWritten(), requestBody, duration, httpRequest, "/v1/messages");
+                throw e;
+            }
             var writer = httpResponse.getWriter();
             writer.write("data: [DONE]\n\n");
             writer.flush();
 
             long duration = System.currentTimeMillis() - startTime;
-            RelayServiceUtils.UsageInfo usage = RelayServiceUtils.parseClaudeStreamUsage(support.objectMapper, lastUsageData);
-            support.recordStreamUsage(token, channel, model,
+            RelayServiceUtils.UsageInfo usage = RelayServiceUtils.parseClaudeStreamUsage(support.objectMapper, streamResult.lastUsageData());
+            support.recordStreamUsageWithFallback(token, channel, model,
                     usage.promptTokens(), usage.completionTokens(),
                     usage.cachedTokens(), usage.cacheCreationTokens(), usage.cacheReadTokens(),
-                    duration, httpRequest, "/v1/messages");
+                    streamResult.charsWritten(), requestBody, duration, httpRequest, "/v1/messages");
         } finally {
             if (conn != null) conn.disconnect();
         }
@@ -249,15 +286,12 @@ public class ClaudeRelayService {
                                                     String model, Token token,
                                                     HttpServletRequest httpRequest,
                                                     HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
-        if (support.isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
-        }
-
         String openAiBody = ProtocolConverter.convertClaudeToOpenAiBody(requestBody);
         openAiBody = support.injectStreamOptions(openAiBody, "/v1/chat/completions");
 
         long startTime = System.currentTimeMillis();
         int promptTokens = 0, completionTokens = 0, cachedTokens = 0;
+        long writtenChars = 0;
         List<Map<String, Object>> toolCalls = new ArrayList<>();
 
         HttpURLConnection conn = null;
@@ -284,33 +318,35 @@ public class ClaudeRelayService {
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 long deadline = support.sseDeadline();
-                while (true) {
-                    support.prepareSseRead(conn, deadline);
-                    line = reader.readLine();
-                    if (line == null) break;
-                    if (line.startsWith("data: ")) {
-                        String data = line.substring(6).trim();
-                        if ("[DONE]".equals(data)) continue;
-                        try {
-                            JsonNode json = support.objectMapper.readTree(data);
-                            if (json.has("usage")) {
-                                JsonNode usage = json.get("usage");
-                                promptTokens = usage.path("prompt_tokens").asInt(0);
-                                completionTokens = usage.path("completion_tokens").asInt(0);
-                                JsonNode promptDetails = usage.path("prompt_tokens_details");
-                                if (!promptDetails.isMissingNode()) {
-                                    cachedTokens = promptDetails.path("cached_tokens").asInt(0);
+                try {
+                    while (true) {
+                        support.prepareSseRead(conn, deadline);
+                        line = reader.readLine();
+                        if (line == null) break;
+                        if (line.startsWith("data: ")) {
+                            String data = line.substring(6).trim();
+                            if ("[DONE]".equals(data)) continue;
+                            try {
+                                JsonNode json = support.objectMapper.readTree(data);
+                                if (json.has("usage")) {
+                                    JsonNode usage = json.get("usage");
+                                    promptTokens = usage.path("prompt_tokens").asInt(0);
+                                    completionTokens = usage.path("completion_tokens").asInt(0);
+                                    JsonNode promptDetails = usage.path("prompt_tokens_details");
+                                    if (!promptDetails.isMissingNode()) {
+                                        cachedTokens = promptDetails.path("cached_tokens").asInt(0);
+                                    }
                                 }
-                            }
-                            JsonNode delta = json.path("choices").path(0).path("delta");
-                            String content = delta.path("content").asText("");
-                            String reasoningContent = delta.path("reasoning_content").asText("");
-                            String text = content.isEmpty() ? reasoningContent : content;
-                            if (!text.isEmpty()) {
-                                String claudeEvt = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + support.objectMapper.writeValueAsString(text) + "}}";
-                                writer.write("data: " + claudeEvt + "\n\n");
-                                writer.flush();
-                            }
+                                JsonNode delta = json.path("choices").path(0).path("delta");
+                                String content = delta.path("content").asText("");
+                                String reasoningContent = delta.path("reasoning_content").asText("");
+                                String text = content.isEmpty() ? reasoningContent : content;
+                                if (!text.isEmpty()) {
+                                    String claudeEvt = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + support.objectMapper.writeValueAsString(text) + "}}";
+                                    writer.write("data: " + claudeEvt + "\n\n");
+                                    writer.flush();
+                                    writtenChars += text.length();
+                                }
                             JsonNode tcArray = delta.get("tool_calls");
                             if (tcArray != null && tcArray.isArray()) {
                                 for (JsonNode tc : tcArray) {
@@ -334,6 +370,14 @@ public class ClaudeRelayService {
                             log.warn("转换 OpenAI SSE 为 Claude 格式失败: {}", data);
                         }
                     }
+                }
+                } catch (IOException streamFailure) {
+                    // 流中断但已有数据写给客户端：按已解析 partial usage（缺失时按字符估算）计费后再抛出
+                    support.recordStreamUsageWithFallback(token, channel, model,
+                            promptTokens, completionTokens, cachedTokens, 0, cachedTokens,
+                            writtenChars, requestBody, System.currentTimeMillis() - startTime,
+                            httpRequest, "/v1/messages");
+                    throw streamFailure;
                 }
             }
         } finally {
@@ -363,8 +407,8 @@ public class ClaudeRelayService {
         writer.flush();
 
         long duration = System.currentTimeMillis() - startTime;
-        support.recordStreamUsage(token, channel, model, promptTokens, completionTokens,
-                cachedTokens, 0, cachedTokens, duration, httpRequest, "/v1/messages");
+        support.recordStreamUsageWithFallback(token, channel, model, promptTokens, completionTokens,
+                cachedTokens, 0, cachedTokens, writtenChars, requestBody, duration, httpRequest, "/v1/messages");
     }
 
     /**
@@ -374,13 +418,10 @@ public class ClaudeRelayService {
                                                     String model, Token token,
                                                     HttpServletRequest httpRequest,
                                                     HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
-        if (support.isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
-        }
-
         String geminiBody = ProtocolConverter.convertClaudeToGeminiRequest(requestBody);
         long startTime = System.currentTimeMillis();
         int promptTokens = 0, completionTokens = 0;
+        long writtenChars = 0;
 
         HttpURLConnection conn = null;
         try {
@@ -406,46 +447,56 @@ public class ClaudeRelayService {
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 long deadline = support.sseDeadline();
-                while (true) {
-                    support.prepareSseRead(conn, deadline);
-                    line = reader.readLine();
-                    if (line == null) break;
-                    if (line.startsWith("data: ")) {
-                        String data = line.substring(6).trim();
-                        try {
-                            JsonNode json = support.objectMapper.readTree(data);
-                            JsonNode candidates = json.get("candidates");
-                            if (candidates != null && candidates.isArray() && candidates.size() > 0) {
-                                JsonNode candidate = candidates.get(0);
-                                JsonNode content = candidate.get("content");
-                                if (content != null && content.has("parts")) {
-                                    for (JsonNode part : content.get("parts")) {
-                                        if (part.has("text")) {
-                                            String text = part.get("text").asText("");
-                                            if (!text.isEmpty()) {
-                                                String claudeEvt = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + support.objectMapper.writeValueAsString(text) + "}}";
-                                                writer.write("data: " + claudeEvt + "\n\n");
-                                                writer.flush();
+                try {
+                    while (true) {
+                        support.prepareSseRead(conn, deadline);
+                        line = reader.readLine();
+                        if (line == null) break;
+                        if (line.startsWith("data: ")) {
+                            String data = line.substring(6).trim();
+                            try {
+                                JsonNode json = support.objectMapper.readTree(data);
+                                JsonNode candidates = json.get("candidates");
+                                if (candidates != null && candidates.isArray() && candidates.size() > 0) {
+                                    JsonNode candidate = candidates.get(0);
+                                    JsonNode content = candidate.get("content");
+                                    if (content != null && content.has("parts")) {
+                                        for (JsonNode part : content.get("parts")) {
+                                            if (part.has("text")) {
+                                                String text = part.get("text").asText("");
+                                                if (!text.isEmpty()) {
+                                                    String claudeEvt = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + support.objectMapper.writeValueAsString(text) + "}}";
+                                                    writer.write("data: " + claudeEvt + "\n\n");
+                                                    writer.flush();
+                                                    writtenChars += text.length();
+                                                }
                                             }
                                         }
                                     }
+                                    if (candidate.has("finishReason") && !candidate.get("finishReason").isNull()) {
+                                        String finishReason = candidate.get("finishReason").asText("STOP");
+                                        String stopReason = "STOP".equals(finishReason) ? "end_turn" : "max_tokens";
+                                        writer.write("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"" + stopReason + "\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}\n\n");
+                                        writer.flush();
+                                    }
                                 }
-                                if (candidate.has("finishReason") && !candidate.get("finishReason").isNull()) {
-                                    String finishReason = candidate.get("finishReason").asText("STOP");
-                                    String stopReason = "STOP".equals(finishReason) ? "end_turn" : "max_tokens";
-                                    writer.write("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"" + stopReason + "\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}\n\n");
-                                    writer.flush();
+                                JsonNode usageMeta = json.get("usageMetadata");
+                                if (usageMeta != null) {
+                                    promptTokens = usageMeta.has("promptTokenCount") ? usageMeta.get("promptTokenCount").asInt() : 0;
+                                    completionTokens = usageMeta.has("candidatesTokenCount") ? usageMeta.get("candidatesTokenCount").asInt() : 0;
                                 }
+                            } catch (Exception parseEx) {
+                                log.warn("转换 Gemini SSE 为 Claude 格式失败: {}", data);
                             }
-                            JsonNode usageMeta = json.get("usageMetadata");
-                            if (usageMeta != null) {
-                                promptTokens = usageMeta.has("promptTokenCount") ? usageMeta.get("promptTokenCount").asInt() : 0;
-                                completionTokens = usageMeta.has("candidatesTokenCount") ? usageMeta.get("candidatesTokenCount").asInt() : 0;
-                            }
-                        } catch (Exception parseEx) {
-                            log.warn("转换 Gemini SSE 为 Claude 格式失败: {}", data);
                         }
                     }
+                } catch (IOException streamFailure) {
+                    // 流中断但已有数据写给客户端：按已解析 partial usage（缺失时按字符估算）计费后再抛出
+                    support.recordStreamUsageWithFallback(token, channel, model,
+                            promptTokens, completionTokens, 0, 0, 0,
+                            writtenChars, requestBody, System.currentTimeMillis() - startTime,
+                            httpRequest, "/v1/messages");
+                    throw streamFailure;
                 }
             }
         } finally {
@@ -459,7 +510,7 @@ public class ClaudeRelayService {
         writer.flush();
 
         long duration = System.currentTimeMillis() - startTime;
-        support.recordStreamUsage(token, channel, model, promptTokens, completionTokens,
-                0, 0, 0, duration, httpRequest, "/v1/messages");
+        support.recordStreamUsageWithFallback(token, channel, model, promptTokens, completionTokens,
+                0, 0, 0, writtenChars, requestBody, duration, httpRequest, "/v1/messages");
     }
 }

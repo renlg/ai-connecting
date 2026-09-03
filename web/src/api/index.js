@@ -3,23 +3,14 @@ import axios from 'axios';
 const api = axios.create({
   baseURL: '',
   timeout: 30000,
-});
-
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
+  withCredentials: true,
 });
 
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+      if (window.location.pathname !== '/login') window.location.href = '/login';
     }
     return Promise.reject(error.response?.data || error);
   }
@@ -28,6 +19,7 @@ api.interceptors.response.use(
 // Auth
 export const login = (data) => api.post('/api/auth/login', data);
 export const register = (data) => api.post('/api/auth/register', data);
+export const logout = () => api.post('/api/auth/logout');
 
 // User
 export const getProfile = () => api.get('/api/user/profile');
@@ -48,12 +40,11 @@ export const downloadChannelTestVideo = (data) => api.post('/api/admin/channels/
 
 // 流式聊天测试的共享实现
 async function createChatStream(url, data, onChunk, onComplete, onError) {
-  const token = localStorage.getItem('token');
   const response = await fetch(url, {
     method: 'POST',
+    credentials: 'same-origin',
     headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
+      'Content-Type': 'application/json'
     },
     body: JSON.stringify(data)
   });

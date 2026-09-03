@@ -19,6 +19,7 @@ import com.aiconnecting.service.ChannelService;
 import com.aiconnecting.service.OperationLogService;
 import com.aiconnecting.service.FailureLogService;
 import com.aiconnecting.service.InviteCodeService;
+import com.aiconnecting.service.RefundCompensationService;
 import com.aiconnecting.repository.ChannelFailureRecordRepository;
 import com.aiconnecting.security.JwtAuthenticationFilter;
 import com.aiconnecting.security.JwtUtils;
@@ -73,6 +74,7 @@ class AdminControllerTest {
     @MockBean private FailureLogService failureLogService;
     @MockBean private ChannelFailureRecordRepository channelFailureRecordRepository;
     @MockBean private InviteCodeService inviteCodeService;
+    @MockBean private RefundCompensationService refundCompensationService;
     @MockBean private DuplicateSubmitGuard duplicateSubmitGuard;
 
     private User adminUser;

@@ -16,6 +16,7 @@ public class RelayTimeoutProperties {
     private long writeMs = 30_000L;
     private long singleModelTextBudgetMs = 180_000L;
     private long modelGroupBudgetMs = 130_000L;
+    private long failoverAttemptMinMs = 20_000L;
     private long passthroughReadMs = 300_000L;
     private long passthroughTextCallMs = 300_000L;
     private long passthroughMediaCallMs = 600_000L;

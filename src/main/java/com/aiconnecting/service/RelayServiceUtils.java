@@ -193,6 +193,50 @@ public final class RelayServiceUtils {
         }
     }
 
+    /**
+     * 统一解析流式 usage 数据行：兼容 OpenAI(usage.prompt_tokens)、Claude(usage.input_tokens)
+     * 与 Gemini(usageMetadata) 三种格式，供流中断时从最后一条含 usage 的数据行恢复已解析的 partial usage
+     */
+    public static UsageInfo parseStreamUsageAny(ObjectMapper mapper, String lastUsageData) {
+        if (lastUsageData == null) return UsageInfo.ZERO;
+        try {
+            JsonNode root = mapper.readTree(lastUsageData);
+            JsonNode usage = root.get("usage");
+            if (usage != null && usage.isObject()) {
+                int promptTokens = intOf(usage, "prompt_tokens", "input_tokens");
+                int completionTokens = intOf(usage, "completion_tokens", "output_tokens");
+                int cacheCreationTokens = usage.path("cache_creation_input_tokens").asInt(0);
+                int cacheReadTokens = usage.path("cache_read_input_tokens").asInt(0);
+                int cachedTokens = usage.path("prompt_tokens_details").path("cached_tokens").asInt(0);
+                if (cachedTokens == 0 && cacheReadTokens > 0) cachedTokens = cacheReadTokens;
+                return new UsageInfo(promptTokens, completionTokens, promptTokens + completionTokens,
+                        cachedTokens, cacheCreationTokens, cacheReadTokens);
+            }
+            JsonNode meta = root.get("usageMetadata");
+            if (meta != null && meta.isObject()) {
+                int promptTokens = meta.path("promptTokenCount").asInt(0);
+                int completionTokens = meta.path("candidatesTokenCount").asInt(0);
+                return new UsageInfo(promptTokens, completionTokens, promptTokens + completionTokens,
+                        0, 0, 0);
+            }
+            return UsageInfo.ZERO;
+        } catch (Exception e) {
+            return UsageInfo.ZERO;
+        }
+    }
+
+    private static int intOf(JsonNode node, String first, String second) {
+        return node.has(first) ? node.path(first).asInt() : node.path(second).asInt(0);
+    }
+
+    /**
+     * 上游未返回 usage 时的粗略估算兜底：约 4 字符折 1 token，宁可轻微高估也不允许零计费
+     */
+    public static int estimateTokensFromChars(long chars) {
+        if (chars <= 0) return 0;
+        return (int) Math.min(chars / 4, Integer.MAX_VALUE);
+    }
+
     // ==================== Gemini 流式 chunk 转换 ====================
 
     /**

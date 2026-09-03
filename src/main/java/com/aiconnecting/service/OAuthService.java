@@ -86,7 +86,7 @@ public class OAuthService {
         }
         OAuthClient client = clientRepository.findByClientId(clientId)
                 .orElseThrow(() -> unauthorized("Invalid client credentials"));
-        if (!Boolean.TRUE.equals(client.getEnabled()) || !client.getClientSecret().equals(clientSecret)) {
+        if (!Boolean.TRUE.equals(client.getEnabled()) || !client.matchesSecret(clientSecret)) {
             throw unauthorized("Invalid client credentials");
         }
 

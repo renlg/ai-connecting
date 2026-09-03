@@ -30,6 +30,7 @@ import com.aiconnecting.service.OperationLogService;
 import com.aiconnecting.service.StatsAggregationService;
 import com.aiconnecting.service.FailureLogService;
 import com.aiconnecting.service.InviteCodeService;
+import com.aiconnecting.service.RefundCompensationService;
 import com.aiconnecting.repository.AnnouncementRepository;
 import com.aiconnecting.repository.ChannelFailureRecordRepository;
 import lombok.RequiredArgsConstructor;
@@ -64,7 +65,16 @@ public class AdminController {
     private final StatsAggregationService statsAggregationService;
     private final FailureLogService failureLogService;
     private final ChannelFailureRecordRepository channelFailureRecordRepository;
+    private final RefundCompensationService refundCompensationService;
     private final DuplicateSubmitGuard duplicateSubmitGuard;
+
+    /**
+     * 退款失败补偿记录（预扣积分退款本身失败时落库，需人工补回积分）
+     */
+    @GetMapping("/refund-compensations")
+    public ApiResponse<List<com.aiconnecting.entity.RefundCompensation>> listRefundCompensations() {
+        return ApiResponse.success(refundCompensationService.listRecent());
+    }
 
     /**
      * 仪表盘统计 - admin 看全局，普通用户看自己的数据

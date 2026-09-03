@@ -16,7 +16,7 @@ export default function Profile() {
         setUser(res.data)
         profileForm.setFieldsValue({ nickname: res.data.nickname, email: res.data.email })
       }
-    })
+    }).catch(err => message.error(err?.message || '个人资料加载失败'))
   }
 
   useEffect(() => { load() }, [])

@@ -1,5 +1,6 @@
 package com.aiconnecting.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import java.math.BigDecimal;
@@ -24,7 +25,8 @@ public class Token {
     @Column(nullable = false, length = 100)
     private String name;
 
-    /** Token Key (sk-xxx) */
+    /** Token Key 哈希（sha256 hex，仅用于查找，明文不再落库；JSON 响应不下发该字段） */
+    @JsonIgnore
     @Column(unique = true, nullable = false, length = 100)
     private String tokenKey;
 
@@ -68,6 +70,10 @@ public class Token {
     /** 所属用户名 (非数据库字段，用于前端展示) */
     @Transient
     private String ownerName;
+
+    /** 明文 Token Key（非数据库字段，仅在创建响应中一次性回显，此后不再下发） */
+    @Transient
+    private String plainTokenKey;
 
     @PrePersist
     protected void onCreate() {

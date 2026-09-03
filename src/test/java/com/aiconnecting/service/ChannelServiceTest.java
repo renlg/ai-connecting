@@ -53,7 +53,7 @@ class ChannelServiceTest {
 
     @Test
     void createRejectsDuplicateNameWithFriendlyBusinessError() {
-        when(duplicateSubmitGuard.tryAcquire("channel", "test")).thenReturn(false);
+        when(repository.existsByName("test")).thenReturn(true);
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> service.create(request("openai", "7", null)));
@@ -64,13 +64,13 @@ class ChannelServiceTest {
     }
 
     @Test
-    void updateUsesSubmittedNameAsDedupIdentifier() {
+    void updateWithUnchangedNameDoesNotReportDuplicate() {
         Channel existing = Channel.builder().id(3L).name("test").type("openai").modelIds("7").build();
         when(repository.findById(3L)).thenReturn(java.util.Optional.of(existing));
 
         assertDoesNotThrow(() -> service.update(3L, request("openai", "7", null)));
 
-        verify(duplicateSubmitGuard).tryAcquire("channel", "test");
+        verify(repository, never()).existsByNameAndIdNot(anyString(), anyLong());
     }
 
     @Test

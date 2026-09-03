@@ -42,8 +42,52 @@ public class UserService {
     @Autowired(required = false)
     private RedisTemplate<String, Long> redisTemplate;
 
-    private static final int LOGIN_MAX_FAIL_ATTEMPTS = 5;
+    private static final int LOGIN_MAX_FAIL_ATTEMPTS_PER_IP = 5;
+    private static final int LOGIN_MAX_FAIL_ATTEMPTS_GLOBAL = 10;
     private static final long LOGIN_FAIL_LOCK_SECONDS = 3600;
+    private static final long LOGIN_FAIL_WINDOW_MS = LOGIN_FAIL_LOCK_SECONDS * 1000;
+    private static final int LOCAL_LOGIN_FAILURE_MAP_LIMIT = 10_000;
+
+    /**
+     * 无 Redis 时的登录失败计数兜底（单实例内存滑动窗口）：
+     * 默认部署（REDIS_ENABLED=false）下 admin 账号不能处于零防爆破状态
+     */
+    private final ConcurrentHashMap<String, LoginFailWindow> localLoginFailures = new ConcurrentHashMap<>();
+
+    /** 用户不存在时用于抹平 BCrypt 比对耗时的哑哈希，首次使用时随机生成 */
+    private volatile String dummyPasswordHash;
+
+    private static final class LoginFailWindow {
+        private final java.util.ArrayDeque<Long> timestamps = new java.util.ArrayDeque<>();
+
+        synchronized void record(long now) {
+            evict(now);
+            timestamps.addLast(now);
+        }
+
+        synchronized boolean exceeded(long now, int max) {
+            evict(now);
+            return timestamps.size() >= max;
+        }
+
+        synchronized void clear() {
+            timestamps.clear();
+        }
+
+        synchronized void clearExpired(long now) {
+            evict(now);
+        }
+
+        synchronized boolean isEmpty() {
+            return timestamps.isEmpty();
+        }
+
+        private void evict(long now) {
+            while (!timestamps.isEmpty() && now - timestamps.peekFirst() > LOGIN_FAIL_WINDOW_MS) {
+                timestamps.pollFirst();
+            }
+        }
+    }
 
     /** 用户缓存，转发请求验证时避免每次查库，缓存 30 秒 */
     private final ConcurrentHashMap<Long, CachedUser> userCache = new ConcurrentHashMap<>();
@@ -100,18 +144,17 @@ public class UserService {
     }
 
     public LoginResponse login(LoginRequest request, String clientIp) {
-        String loginFailKey = "login_fail:" + request.getUsername();
-
-        if (redisTemplate != null) {
-            Long failCount = redisTemplate.<String, Long>opsForHash().get(loginFailKey, clientIp);
-            if (failCount != null && failCount >= LOGIN_MAX_FAIL_ATTEMPTS) {
-                throw new BusinessException("该账号因登录失败次数过多已被锁定，请1小时后再试", "This account is locked due to too many failed login attempts; try again in one hour");
-            }
+        if (isLoginLocked(request.getUsername(), clientIp)) {
+            throw new BusinessException("该账号因登录失败次数过多已被锁定，请1小时后再试",
+                    "This account is locked due to too many failed login attempts; try again in one hour");
         }
 
         User user = userRepository.findByUsername(request.getUsername()).orElse(null);
-        if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            recordLoginFailure(loginFailKey, clientIp);
+        // 用户不存在也执行一次等耗时的 BCrypt 比对，避免通过响应时间枚举有效用户名
+        boolean passwordMatched = passwordEncoder.matches(request.getPassword(),
+                user != null ? user.getPassword() : dummyHashForTimingEqualization());
+        if (user == null || !passwordMatched) {
+            recordLoginFailure(request.getUsername(), clientIp);
             throw new BusinessException("用户名或密码错误", "Incorrect username or password");
         }
 
@@ -119,9 +162,7 @@ public class UserService {
             throw new BusinessException("账号已被禁用", "Account disabled");
         }
 
-        if (redisTemplate != null) {
-            redisTemplate.opsForHash().delete(loginFailKey, clientIp);
-        }
+        clearLoginFailRecords(request.getUsername());
 
         String token = jwtUtils.generateToken(user.getUsername(), user.getRole());
         return LoginResponse.builder()
@@ -133,24 +174,75 @@ public class UserService {
                 .build();
     }
 
-    private void recordLoginFailure(String loginFailKey, String clientIp) {
-        if (redisTemplate == null) {
+    /**
+     * (username, ip) 每窗口 5 次之上，再加账号维度全局阈值（10 次/小时）：
+     * 攻击者换 IP 也只能把尝试次数放大到全局阈值，无法逐 IP 各试 5 次
+     */
+    private boolean isLoginLocked(String username, String clientIp) {
+        long now = System.currentTimeMillis();
+        if (redisTemplate != null) {
+            Long ipFails = redisTemplate.<String, Long>opsForHash().get("login_fail:" + username, clientIp);
+            if (ipFails != null && ipFails >= LOGIN_MAX_FAIL_ATTEMPTS_PER_IP) {
+                return true;
+            }
+            Long totalFails = redisTemplate.opsForValue().get("login_fail_global:" + username);
+            return totalFails != null && totalFails >= LOGIN_MAX_FAIL_ATTEMPTS_GLOBAL;
+        }
+        return localWindow("ip:" + username + ":" + clientIp).exceeded(now, LOGIN_MAX_FAIL_ATTEMPTS_PER_IP)
+                || localWindow("global:" + username).exceeded(now, LOGIN_MAX_FAIL_ATTEMPTS_GLOBAL);
+    }
+
+    private String dummyHashForTimingEqualization() {
+        String hash = dummyPasswordHash;
+        if (hash == null) {
+            hash = passwordEncoder.encode("timing-equalization:" + java.util.UUID.randomUUID());
+            dummyPasswordHash = hash;
+        }
+        return hash;
+    }
+
+    private LoginFailWindow localWindow(String key) {
+        return localLoginFailures.computeIfAbsent(key, k -> new LoginFailWindow());
+    }
+
+    private void recordLoginFailure(String username, String clientIp) {
+        long now = System.currentTimeMillis();
+        if (redisTemplate != null) {
+            String ipKey = "login_fail:" + username;
+            Long failCount = redisTemplate.<String, Long>opsForHash().increment(ipKey, clientIp, 1);
+            if (failCount != null && failCount == 1) {
+                redisTemplate.expire(ipKey, LOGIN_FAIL_LOCK_SECONDS, TimeUnit.SECONDS);
+            }
+            String globalKey = "login_fail_global:" + username;
+            Long totalFails = redisTemplate.opsForValue().increment(globalKey);
+            if (totalFails != null && totalFails == 1) {
+                redisTemplate.expire(globalKey, LOGIN_FAIL_LOCK_SECONDS, TimeUnit.SECONDS);
+            }
             return;
         }
-        Long failCount = redisTemplate.<String, Long>opsForHash().increment(loginFailKey, clientIp, 1);
-        if (failCount != null && failCount == 1) {
-            redisTemplate.expire(loginFailKey, LOGIN_FAIL_LOCK_SECONDS, TimeUnit.SECONDS);
+        if (localLoginFailures.size() > LOCAL_LOGIN_FAILURE_MAP_LIMIT) {
+            // 用户名+IP 维度可被刷大量键，超限时清理过期窗口防止内存无界增长
+            localLoginFailures.entrySet().removeIf(entry -> {
+                LoginFailWindow window = entry.getValue();
+                window.clearExpired(now);
+                return window.isEmpty();
+            });
         }
+        localWindow("ip:" + username + ":" + clientIp).record(now);
+        localWindow("global:" + username).record(now);
     }
 
     /**
-     * 清除该账号在所有IP维度下的登录失败记录
+     * 清除该账号在所有IP维度下的登录失败记录（登录成功或密码变更时调用）
      */
     private void clearLoginFailRecords(String username) {
-        if (redisTemplate == null) {
+        if (redisTemplate != null) {
+            redisTemplate.delete("login_fail:" + username);
+            redisTemplate.delete("login_fail_global:" + username);
             return;
         }
-        redisTemplate.delete("login_fail:" + username);
+        localLoginFailures.keySet()
+                .removeIf(key -> key.equals("global:" + username) || key.startsWith("ip:" + username + ":"));
     }
 
     @Transactional

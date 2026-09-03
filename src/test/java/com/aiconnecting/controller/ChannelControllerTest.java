@@ -16,6 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -208,7 +209,8 @@ class ChannelControllerTest {
 
     @Test
     void fetchModels_success() throws Exception {
-        when(channelService.fetchUpstreamModels(eq("https://api.openai.com"), eq("sk-xxx"), eq("openai")))
+        when(channelService.fetchUpstreamModels(eq(Map.of(
+                "baseUrl", "https://api.openai.com", "apiKey", "sk-xxx", "type", "openai"))))
                 .thenReturn(List.of("gpt-4", "gpt-4o", "gpt-3.5-turbo"));
 
         String body = """
@@ -231,7 +233,8 @@ class ChannelControllerTest {
 
     @Test
     void fetchModels_emptyResult() throws Exception {
-        when(channelService.fetchUpstreamModels(eq("https://api.example.com"), eq("sk-yyy"), eq("openai")))
+        when(channelService.fetchUpstreamModels(eq(Map.of(
+                "baseUrl", "https://api.example.com", "apiKey", "sk-yyy", "type", "openai"))))
                 .thenReturn(List.of());
 
         String body = """
@@ -251,7 +254,7 @@ class ChannelControllerTest {
 
     @Test
     void fetchModels_missingBaseUrl() throws Exception {
-        when(channelService.fetchUpstreamModels(isNull(), eq("sk-xxx"), eq("openai")))
+        when(channelService.fetchUpstreamModels(eq(Map.of("apiKey", "sk-xxx", "type", "openai"))))
                 .thenThrow(new BusinessException("请先填写 Base URL 和 API Key"));
 
         String body = """
@@ -270,7 +273,7 @@ class ChannelControllerTest {
 
     @Test
     void fetchModels_missingApiKey() throws Exception {
-        when(channelService.fetchUpstreamModels(eq("https://api.openai.com"), isNull(), eq("openai")))
+        when(channelService.fetchUpstreamModels(eq(Map.of("baseUrl", "https://api.openai.com", "type", "openai"))))
                 .thenThrow(new BusinessException("请先填写 Base URL 和 API Key"));
 
         String body = """
@@ -289,7 +292,8 @@ class ChannelControllerTest {
 
     @Test
     void fetchModels_claudeType() throws Exception {
-        when(channelService.fetchUpstreamModels(eq("https://api.anthropic.com"), eq("sk-ant-xxx"), eq("claude")))
+        when(channelService.fetchUpstreamModels(eq(Map.of(
+                "baseUrl", "https://api.anthropic.com", "apiKey", "sk-ant-xxx", "type", "claude"))))
                 .thenReturn(List.of("claude-3-opus-20240229", "claude-3-sonnet-20240229"));
 
         String body = """

@@ -86,10 +86,28 @@ public class OpenAiRelayService {
                                String model, HttpServletRequest httpRequest,
                                HttpServletResponse httpResponse) {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
+        return doRelayRequest(ctx, path, requestBody, model, httpRequest, httpResponse);
+    }
+
+    /**
+     * 供后台测试等已持有 Token 实体的内部调用方复用：跳过明文 key 反查（库中仅存哈希），
+     * 其余校验（额度/状态/余额/权限/限流）与 {@link #relayRequest} 完全一致
+     */
+    public String relayRequestForToken(Token token, String path, String requestBody,
+                                       String model, HttpServletRequest httpRequest,
+                                       HttpServletResponse httpResponse) {
+        RelaySupport.RelayContext ctx = support.prepareContextForToken(token, model);
+        return doRelayRequest(ctx, path, requestBody, model, httpRequest, httpResponse);
+    }
+
+    private String doRelayRequest(RelaySupport.RelayContext ctx, String path, String requestBody,
+                                  String model, HttpServletRequest httpRequest,
+                                  HttpServletResponse httpResponse) {
+        support.checkTextBalanceEstimate(ctx, model, requestBody);
         try {
             return relayRequestSingleModel(ctx, path, requestBody, model, httpRequest);
         } catch (BusinessException e) {
-            if (e.getCode() != 504 && modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
+            if (modelGroupFailoverExecutor != null && ctx.modelConfig() != null && ctx.modelConfig().getFallbackGroupId() != null
                     && FailureClassifier.isSwitchable(e)) {
                 var fallbackGroup = modelGroupFailoverExecutor.resolveFallbackGroup(
                         ctx.modelConfig().getFallbackGroupId(), "text", "admin".equals(ctx.user().getRole()), ctx.userLevel());
@@ -128,7 +146,7 @@ public class OpenAiRelayService {
             }
             triedChannels.add(channel.getId());
 
-            if (support.isChannelRateLimited(channel)) {
+            if (support.isChannelRateLimited(channel, ctx.channelModelId())) {
                 lastError = "上游渠道请求频率超限";
                 log.warn("跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
@@ -136,7 +154,7 @@ public class OpenAiRelayService {
 
             attempt++;
             try {
-                long remainingMs = deadline - System.currentTimeMillis();
+                long remainingMs = support.failoverAttemptTimeoutMs(deadline, attempt, RelaySupport.MAX_RETRIES);
                 if (remainingMs <= 0) {
                     throw new BusinessException(504, "单模型请求超过总耗时预算",
                             "Single-model request exceeded its total time budget");
@@ -153,7 +171,7 @@ public class OpenAiRelayService {
                     response = support.forwardRequest(channel, path, upstreamBody, remainingMs);
                 }
                 long duration = System.currentTimeMillis() - startTime;
-                support.recordUsage(ctx.token(), channel, model, response, duration, httpRequest, path);
+                support.recordUsage(ctx.token(), channel, model, response, requestBody, duration, httpRequest, path);
                 return response;
             } catch (BusinessException e) {
                 lastFailure = e;
@@ -214,7 +232,8 @@ public class OpenAiRelayService {
                             : modelGroupFailoverExecutor.relayImageRequest(tokenKey, path, requestBody, fallbackGroup.get().getName(), httpRequest);
                 }
             }
-            throw e;
+            // 不进入故障转移组：上游请求已失败，先退回预扣积分再抛出，避免用户被扣积分却只收到错误响应
+            throw refundMediaChargeBeforeRethrow(ctx, charge, e);
         }
 
         String response = result.value();
@@ -328,7 +347,7 @@ public class OpenAiRelayService {
             }
             triedChannels.add(channel.getId());
 
-            if (support.isChannelRateLimited(channel)) {
+            if (support.isChannelRateLimited(channel, ctx.channelModelId())) {
                 lastError = "上游渠道请求频率超限";
                 log.warn("跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
@@ -760,7 +779,8 @@ public class OpenAiRelayService {
                     return;
                 }
             }
-            throw e;
+            // 不进入故障转移组：上游请求已失败，先退回预扣积分再抛出，避免用户被扣积分却只收到错误响应
+            throw refundMediaChargeBeforeRethrow(ctx, charge, e);
         }
         byte[] audio = result.value().body();
         long duration = System.currentTimeMillis() - startTime;
@@ -890,7 +910,8 @@ public class OpenAiRelayService {
                             seconds, quality, httpRequest);
                 }
             }
-            throw e;
+            // 不进入故障转移组：上游请求已失败，先退回预扣积分再抛出，避免用户被扣积分却只收到错误响应
+            throw refundMediaChargeBeforeRethrow(ctx, charge, e);
         }
 
         // json/verbose_json 必须解析为含 text 字段的 JSON 对象才算成功，否则退款报错，不对坏响应计费
@@ -977,6 +998,21 @@ public class OpenAiRelayService {
                                     String model, HttpServletRequest httpRequest,
                                     HttpServletResponse httpResponse) throws IOException {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
+        doRelayStreamRequest(ctx, path, requestBody, model, httpRequest, httpResponse);
+    }
+
+    /** 供后台测试等已持有 Token 实体的内部调用方复用：跳过明文 key 反查，其余校验与 {@link #relayStreamRequest} 完全一致 */
+    public void relayStreamRequestForToken(Token token, String path, String requestBody,
+                                           String model, HttpServletRequest httpRequest,
+                                           HttpServletResponse httpResponse) throws IOException {
+        RelaySupport.RelayContext ctx = support.prepareContextForToken(token, model);
+        doRelayStreamRequest(ctx, path, requestBody, model, httpRequest, httpResponse);
+    }
+
+    private void doRelayStreamRequest(RelaySupport.RelayContext ctx, String path, String requestBody,
+                                      String model, HttpServletRequest httpRequest,
+                                      HttpServletResponse httpResponse) throws IOException {
+        support.checkTextBalanceEstimate(ctx, model, requestBody);
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long startTime = System.currentTimeMillis();
@@ -1001,7 +1037,7 @@ public class OpenAiRelayService {
             }
             triedChannels.add(channel.getId());
 
-            if (support.isChannelRateLimited(channel)) {
+            if (support.isChannelRateLimited(channel, ctx.channelModelId())) {
                 lastError = "上游渠道请求频率超限";
                 log.warn("跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
@@ -1014,7 +1050,8 @@ public class OpenAiRelayService {
 
             HttpURLConnection conn;
             try {
-                long remainingMs = Math.max(1L, retryDeadline - System.currentTimeMillis());
+                long remainingMs = support.failoverAttemptTimeoutMs(
+                        retryDeadline, attempt, RelaySupport.MAX_RETRIES);
                 if (support.isGeminiTypeChannel(channel)) {
                     String geminiBody = ProtocolConverter.convertOpenAiToGeminiRequest(modifiedBody);
                     conn = support.createSseConnection(channel, "/v1/models/" +
@@ -1071,20 +1108,20 @@ public class OpenAiRelayService {
                     return;
                 }
 
-                String lastUsageData;
+                RelaySupport.SseStreamResult streamResult;
                 if (support.isGeminiTypeChannel(channel)) {
-                    lastUsageData = streamGeminiResponseAsOpenAi(conn, httpResponse);
+                    streamResult = streamGeminiResponseAsOpenAi(conn, httpResponse);
                 } else {
-                    lastUsageData = support.streamSseResponse(conn, httpResponse, null);
+                    streamResult = support.streamSseResponseTracked(conn, httpResponse, null);
                 }
                 conn.disconnect();
 
                 long duration = System.currentTimeMillis() - startTime;
-                RelayServiceUtils.UsageInfo usage = RelayServiceUtils.parseOpenAiStreamUsage(support.objectMapper, lastUsageData);
-                support.recordStreamUsage(ctx.token(), channel, model,
-                        usage.promptTokens(), usage.completionTokens(),
-                        usage.cachedTokens(), 0, usage.cachedTokens(),
-                        duration, httpRequest, path);
+                RelayServiceUtils.UsageInfo usage = streamResult.partialUsage();
+                support.recordStreamUsageWithFallback(ctx.token(), channel, model,
+                        usage.promptTokens(), usage.completionTokens(), usage.cachedTokens(),
+                        usage.cacheCreationTokens(), usage.cacheReadTokens(),
+                        streamResult.charsWritten(), requestBody, duration, httpRequest, path);
                 return;
             } catch (Exception e) {
                 conn.disconnect();
@@ -1094,6 +1131,16 @@ public class OpenAiRelayService {
                 recordChannelFailure(httpRequest, channel, modelConfigId, model, lastFailure);
                 log.error("渠道 {} 流式请求异常 (尝试 {}/{}): {}", channel.getId(), attempt, RelaySupport.MAX_RETRIES, e.getMessage());
                 support.dispatchRelayFailure(channel.getId(), channel.getName(), modelConfigId, lastFailure);
+                if (e instanceof RelaySupport.SseStreamingException sse && sse.partialResult().bytesWritten()) {
+                    // 流中断但已有数据写给客户端：按已解析 partial usage（缺失时按字符估算）计费后终止，不再重试
+                    long duration = System.currentTimeMillis() - startTime;
+                    RelayServiceUtils.UsageInfo partialUsage = sse.partialResult().partialUsage();
+                    support.recordStreamUsageWithFallback(ctx.token(), channel, model,
+                            partialUsage.promptTokens(), partialUsage.completionTokens(), partialUsage.cachedTokens(),
+                            partialUsage.cacheCreationTokens(), partialUsage.cacheReadTokens(),
+                            sse.partialResult().charsWritten(), requestBody, duration, httpRequest, path);
+                    return;
+                }
                 if (attempt < RelaySupport.MAX_RETRIES && !httpResponse.isCommitted()) continue;
                 if (tryFallbackStream(ctx, path, requestBody, httpRequest, httpResponse, lastFailure)) return;
                 if (!httpResponse.isCommitted()) {
@@ -1132,11 +1179,31 @@ public class OpenAiRelayService {
     }
 
     /**
-     * 读取 Gemini SSE 响应并转换为 OpenAI SSE 格式输出
-     * 返回最后包含 usage 的数据行
+     * 不进入故障转移组的失败路径：退回预扣积分后原样抛出；
+     * 退款失败时把扣费状态如实附加到错误消息（与结算失败路径的口径一致），由 refundMediaCharge 落补偿记录
      */
-    private String streamGeminiResponseAsOpenAi(HttpURLConnection conn, HttpServletResponse httpResponse) throws IOException {
+    private RuntimeException refundMediaChargeBeforeRethrow(RelaySupport.RelayContext ctx,
+                                                             RelaySupport.MediaCharge charge, RuntimeException e) {
+        if (support.refundMediaCharge(ctx, charge)) {
+            return e;
+        }
+        if (e instanceof BusinessException be) {
+            return new BusinessException(be.getCode(), be.getMessage() + "，退回预扣积分失败，已记录待人工补偿",
+                    be.getEnglishMessage() != null
+                            ? be.getEnglishMessage() + ", failed to refund prepaid credits; manual compensation is pending"
+                            : null);
+        }
+        return e;
+    }
+
+    /**
+     * 读取 Gemini SSE 响应并转换为 OpenAI SSE 格式输出，
+     * 返回带 partial usage 与已写字符量的流结果（流中断时以 SseStreamingException 抛出并携带部分结果）
+     */
+    private RelaySupport.SseStreamResult streamGeminiResponseAsOpenAi(HttpURLConnection conn, HttpServletResponse httpResponse) throws IOException {
         String lastUsageData = null;
+        boolean bytesWritten = false;
+        long charsWritten = 0;
         long deadline = support.sseDeadline();
         var writer = httpResponse.getWriter();
         try (BufferedReader reader = new BufferedReader(
@@ -1158,16 +1225,23 @@ public class OpenAiRelayService {
                         String openAiChunk = RelayServiceUtils.convertGeminiStreamChunkToOpenAiSse(support.objectMapper, json);
                         if (openAiChunk != null) {
                             writer.write("data: " + openAiChunk + "\n\n");
+                            charsWritten += openAiChunk.length() + 8;
                             writer.flush();
+                            bytesWritten = true;
                         }
                     } catch (Exception parseEx) {
                         log.warn("转换 Gemini SSE 为 OpenAI 格式失败: {}", data);
                     }
                 }
             }
+        } catch (IOException e) {
+            throw new RelaySupport.SseStreamingException(e, new RelaySupport.SseStreamResult(
+                    lastUsageData, bytesWritten, charsWritten,
+                    RelayServiceUtils.parseGeminiStreamUsage(support.objectMapper, lastUsageData)));
         }
         writer.write("data: [DONE]\n\n");
         writer.flush();
-        return lastUsageData;
+        return new RelaySupport.SseStreamResult(lastUsageData, bytesWritten, charsWritten,
+                RelayServiceUtils.parseGeminiStreamUsage(support.objectMapper, lastUsageData));
     }
 }

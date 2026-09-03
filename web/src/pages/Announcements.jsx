@@ -17,7 +17,8 @@ export default function Announcements() {
     setLoading(true)
     getAnnouncements().then(res => {
       if (res.code === 200) setAnnouncements(res.data || [])
-    }).finally(() => setLoading(false))
+    }).catch(err => message.error(err?.message || '公告加载失败'))
+      .finally(() => setLoading(false))
   }
 
   useEffect(() => { load() }, [])

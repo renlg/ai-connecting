@@ -17,7 +17,7 @@ public class OAuthClientInitializer implements ApplicationRunner {
 
     private final OAuthClientRepository clientRepository;
 
-    @Value("${app.oauth.taiwei.secret:taiwei-secret-2026}")
+    @Value("${app.oauth.taiwei.secret}")
     private String taiweiSecret;
 
     @Value("${app.oauth.taiwei.redirect-uri:http://127.0.0.1:8688/api/oauth/callback}")
@@ -29,8 +29,8 @@ public class OAuthClientInitializer implements ApplicationRunner {
 
         OAuthClient client = OAuthClient.builder()
                 .clientId("taiwei")
-                // Plaintext is intentional for this internal registry; never log this value.
-                .clientSecret(taiweiSecret)
+                // 入库只存哈希，明文 secret 仅存在于环境变量中
+                .clientSecret(OAuthClient.hashSecret(taiweiSecret))
                 .redirectUri(taiweiRedirectUri)
                 .name("Taiwei Gateway")
                 .enabled(true)

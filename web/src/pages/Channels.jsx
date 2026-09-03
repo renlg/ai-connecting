@@ -94,7 +94,8 @@ export default function Channels() {
     if (modelIds && modelIds.length > 0) params.modelIds = modelIds.join(',')
     getChannels(params).then(res => {
       if (res.code === 200) setChannels(res.data || [])
-    }).finally(() => setLoading(false))
+    }).catch(err => message.error(err?.message || '渠道加载失败'))
+      .finally(() => setLoading(false))
   }
 
   const revealApiKey = async (id) => {
@@ -139,7 +140,7 @@ export default function Channels() {
         setAllLocalModels(models)
         setModelOptions(buildBaseModelOptions(models))
       }
-    })
+    }).catch(err => message.error(err?.message || '模型加载失败'))
   }
 
   useEffect(() => { load(); loadModels() }, [])
@@ -151,21 +152,14 @@ export default function Channels() {
   const handleFetchModels = async () => {
     try {
       const values = form.getFieldsValue(['baseUrl', 'apiKey', 'type'])
-      if (!values.baseUrl) {
-        message.warning('请先填写 Base URL 和 API Key')
-        return
-      }
-      let apiKey = values.apiKey
-      if (!apiKey && editing?.id) {
-        // 编辑已有渠道时，若未重新输入 Key，则使用数据库中已保存的真实 Key 获取模型
-        apiKey = await revealApiKey(editing.id)
-      }
-      if (!apiKey) {
+      // 编辑已保存渠道且未重新输入 Key 时，只传 channelId 由后端自取凭据，明文 key 不再回传
+      const channelRef = !values.apiKey && editing?.id ? { channelId: String(editing.id) } : {}
+      if ((!values.baseUrl || !values.apiKey) && !channelRef.channelId) {
         message.warning('请先填写 Base URL 和 API Key')
         return
       }
       setFetchingModels(true)
-      const res = await fetchChannelModels({ ...values, apiKey })
+      const res = await fetchChannelModels({ ...values, ...channelRef })
       if (res.code === 200) {
         const upstreamModels = res.data || []
         setUpstreamModelSuggestions(upstreamModels)
@@ -222,16 +216,9 @@ export default function Channels() {
       return
     }
     const values = form.getFieldsValue(['baseUrl', 'apiKey', 'type'])
-    if (!values.baseUrl) {
-      message.warning('请先填写 Base URL')
-      return
-    }
-    let apiKey = values.apiKey
-    if (!apiKey && editing?.id) {
-      // 编辑已有渠道时，若未重新输入 Key，则使用数据库中已保存的真实 Key 进行测试
-      apiKey = await revealApiKey(editing.id)
-    }
-    if (!apiKey) {
+    // 编辑已保存渠道且未重新输入 Key 时，只传 channelId 由后端自取凭据，明文 key 不再回传
+    const channelRef = !values.apiKey && editing?.id ? { channelId: String(editing.id) } : {}
+    if ((!values.baseUrl || !values.apiKey) && !channelRef.channelId) {
       message.warning('请先填写 Base URL 和 API Key')
       return
     }
@@ -251,7 +238,7 @@ export default function Channels() {
       if (modelType !== 'text') {
         const request = {
           ...values,
-          apiKey,
+          ...channelRef,
           model: testModel,
           modelType,
           message: testMessage || 'hi'
@@ -283,7 +270,7 @@ export default function Channels() {
           for (let attempt = 0; !mediaUrl && attempt < VIDEO_POLL_LIMIT; attempt += 1) {
             await new Promise(resolve => setTimeout(resolve, VIDEO_POLL_INTERVAL_MS))
             if (testRunRef.current !== runId) return
-            const pollResponse = await pollChannelTestVideo({ ...values, apiKey, model: testModel, videoId: taskId })
+            const pollResponse = await pollChannelTestVideo({ ...values, ...channelRef, model: testModel, videoId: taskId })
             const pollResult = pollResponse?.data
             if (!pollResult?.success) throw new Error(pollResult?.error || `视频状态查询失败 (HTTP ${pollResult?.statusCode || 'error'})`)
             currentData = pollResult.data
@@ -301,7 +288,7 @@ export default function Channels() {
           if (!mediaUrl && testRunRef.current === runId) {
             // 兜底：对不返回 URL 的其它渠道，仍尝试旧的 /content 下载方式
             try {
-              const videoBlob = await downloadChannelTestVideo({ ...values, apiKey, model: testModel, videoId: taskId })
+              const videoBlob = await downloadChannelTestVideo({ ...values, ...channelRef, model: testModel, videoId: taskId })
               if (testRunRef.current !== runId) return
               mediaUrl = URL.createObjectURL(videoBlob)
               videoObjectUrlRef.current = mediaUrl
@@ -323,7 +310,7 @@ export default function Channels() {
       await testChannelChatStream(
         {
           ...values,
-          apiKey,
+          ...channelRef,
           model: testModel,
           message: testMessage || 'hi'
         },

@@ -20,7 +20,8 @@ export default function Users() {
     setLoading(true)
     getUsers(search).then(res => {
       if (res.code === 200) setUsers(res.data || [])
-    }).finally(() => setLoading(false))
+    }).catch(err => message.error(err?.message || '用户加载失败'))
+      .finally(() => setLoading(false))
   }
 
   useEffect(() => { load() }, [])

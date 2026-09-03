@@ -1,5 +1,4 @@
 import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Form, Input, Button, Card, message, Tabs, Typography } from 'antd'
 import { UserOutlined, LockOutlined, MailOutlined, KeyOutlined } from '@ant-design/icons'
 import { login, register } from '../api'
@@ -8,7 +7,6 @@ const { Title } = Typography
 
 export default function Login() {
   const [loading, setLoading] = useState(false)
-  const navigate = useNavigate()
 
   const oauthNext = () => {
     const next = new URLSearchParams(window.location.search).get('next')
@@ -21,14 +19,12 @@ export default function Login() {
     try {
       const res = await login(values)
       if (res.code === 200) {
-        localStorage.setItem('token', res.data.token)
-        localStorage.setItem('user', JSON.stringify(res.data))
         message.success('登录成功')
         const next = oauthNext()
         if (next) {
           window.location.href = next
         } else {
-          navigate('/')
+          window.location.href = '/'
         }
       } else {
         message.error(res.message || '登录失败')

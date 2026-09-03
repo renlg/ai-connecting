@@ -40,6 +40,19 @@ public class GeminiRelayService {
     public String geminiRelayRequest(String tokenKey, String requestBody,
                                      String model, HttpServletRequest httpRequest) {
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
+        return doGeminiRelayRequest(ctx, requestBody, model, httpRequest);
+    }
+
+    /** 供后台测试等已持有 Token 实体的内部调用方复用：跳过明文 key 反查（库中仅存哈希），其余校验完全一致 */
+    public String geminiRelayRequestForToken(Token token, String requestBody,
+                                             String model, HttpServletRequest httpRequest) {
+        RelaySupport.RelayContext ctx = support.prepareContextForToken(token, model);
+        return doGeminiRelayRequest(ctx, requestBody, model, httpRequest);
+    }
+
+    private String doGeminiRelayRequest(RelaySupport.RelayContext ctx, String requestBody,
+                                        String model, HttpServletRequest httpRequest) {
+        support.checkTextBalanceEstimate(ctx, model, requestBody);
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long startTime = System.currentTimeMillis();
@@ -63,7 +76,7 @@ public class GeminiRelayService {
             }
             triedChannels.add(channel.getId());
 
-            if (support.isChannelRateLimited(channel)) {
+            if (support.isChannelRateLimited(channel, ctx.channelModelId())) {
                 lastError = "上游渠道请求频率超限";
                 log.warn("跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
@@ -71,7 +84,7 @@ public class GeminiRelayService {
 
             attempt++;
             try {
-                long remainingMs = Math.max(1L, deadline - System.currentTimeMillis());
+                long remainingMs = support.failoverAttemptTimeoutMs(deadline, attempt, RelaySupport.MAX_RETRIES);
                 String response;
                 if (RelayServiceUtils.isGeminiTypeChannel(channel)) {
                     response = support.forwardGeminiRequest(channel, requestBody, remainingMs);
@@ -87,9 +100,9 @@ public class GeminiRelayService {
 
                 long duration = System.currentTimeMillis() - startTime;
                 RelayServiceUtils.UsageInfo usage = RelayServiceUtils.parseGeminiUsage(support.objectMapper, response);
-                support.recordStreamUsage(ctx.token(), channel, model,
+                support.recordStreamUsageWithFallback(ctx.token(), channel, model,
                         usage.promptTokens(), usage.completionTokens(),
-                        0, 0, 0, duration, httpRequest,
+                        0, 0, 0, response != null ? response.length() : 0, requestBody, duration, httpRequest,
                         "/v1/models/" + model + ":generateContent");
                 return response;
             } catch (BusinessException e) {
@@ -123,6 +136,21 @@ public class GeminiRelayService {
                                           HttpServletResponse httpResponse) throws IOException {
         log.info("[Gemini流式] 开始处理, model={}", model);
         RelaySupport.RelayContext ctx = support.validateAndPrepare(tokenKey, model);
+        doGeminiRelayStreamRequest(ctx, requestBody, model, httpRequest, httpResponse);
+    }
+
+    /** 供后台测试等已持有 Token 实体的内部调用方复用：跳过明文 key 反查（库中仅存哈希），其余校验完全一致 */
+    public void geminiRelayStreamRequestForToken(Token token, String requestBody,
+                                                 String model, HttpServletRequest httpRequest,
+                                                 HttpServletResponse httpResponse) throws IOException {
+        RelaySupport.RelayContext ctx = support.prepareContextForToken(token, model);
+        doGeminiRelayStreamRequest(ctx, requestBody, model, httpRequest, httpResponse);
+    }
+
+    private void doGeminiRelayStreamRequest(RelaySupport.RelayContext ctx, String requestBody,
+                                            String model, HttpServletRequest httpRequest,
+                                            HttpServletResponse httpResponse) throws IOException {
+        support.checkTextBalanceEstimate(ctx, model, requestBody);
         Set<Long> triedChannels = new HashSet<>();
         Long modelConfigId = ctx.modelConfig() != null ? ctx.modelConfig().getId() : null;
         long retryDeadline = System.currentTimeMillis() + support.singleModelTextBudgetMs();
@@ -143,7 +171,7 @@ public class GeminiRelayService {
             }
             triedChannels.add(channel.getId());
 
-            if (support.isChannelRateLimited(channel)) {
+            if (support.isChannelRateLimited(channel, ctx.channelModelId())) {
                 lastError = "上游渠道请求频率超限";
                 log.warn("[Gemini流式] 跳过限流渠道 {}: {}", channel.getId(), lastError);
                 continue;
@@ -153,7 +181,8 @@ public class GeminiRelayService {
             log.info("[Gemini流式] 尝试 {}/{}, channel={}", attempt, RelaySupport.MAX_RETRIES, channel.getId());
 
             try {
-                long remainingMs = Math.max(1L, retryDeadline - System.currentTimeMillis());
+                long remainingMs = support.failoverAttemptTimeoutMs(
+                        retryDeadline, attempt, RelaySupport.MAX_RETRIES);
                 if (RelayServiceUtils.isGeminiTypeChannel(channel)) {
                     forwardGeminiStreamSingle(channel, requestBody, model, ctx.token(), httpRequest, httpResponse, remainingMs);
                 } else if (RelayServiceUtils.isClaudeTypeChannel(channel)) {
@@ -194,10 +223,6 @@ public class GeminiRelayService {
                                             String model, Token token,
                                             HttpServletRequest httpRequest,
                                             HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
-        if (support.isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
-        }
-
         SseUtils.setSseHeaders(httpResponse);
         long startTime = System.currentTimeMillis();
 
@@ -224,13 +249,25 @@ public class GeminiRelayService {
                 return;
             }
 
-            String lastUsageData = support.streamSseResponse(conn, httpResponse, null);
+            RelaySupport.SseStreamResult streamResult;
+            try {
+                streamResult = support.streamSseResponseTracked(conn, httpResponse, null);
+            } catch (RelaySupport.SseStreamingException e) {
+                // 流中断但已有数据写给客户端：按已解析 partial usage（缺失时按字符估算）计费后再抛出
+                long duration = System.currentTimeMillis() - startTime;
+                RelayServiceUtils.UsageInfo partialUsage = e.partialResult().partialUsage();
+                support.recordStreamUsageWithFallback(token, channel, model,
+                        partialUsage.promptTokens(), partialUsage.completionTokens(),
+                        0, 0, 0, e.partialResult().charsWritten(), requestBody, duration, httpRequest,
+                        "/v1/models/" + model + ":streamGenerateContent");
+                throw e;
+            }
 
             long duration = System.currentTimeMillis() - startTime;
-            RelayServiceUtils.UsageInfo usage = RelayServiceUtils.parseGeminiStreamUsage(support.objectMapper, lastUsageData);
-            support.recordStreamUsage(token, channel, model,
+            RelayServiceUtils.UsageInfo usage = RelayServiceUtils.parseGeminiStreamUsage(support.objectMapper, streamResult.lastUsageData());
+            support.recordStreamUsageWithFallback(token, channel, model,
                     usage.promptTokens(), usage.completionTokens(),
-                    0, 0, 0, duration, httpRequest,
+                    0, 0, 0, streamResult.charsWritten(), requestBody, duration, httpRequest,
                     "/v1/models/" + model + ":streamGenerateContent");
         } finally {
             if (conn != null) conn.disconnect();
@@ -244,10 +281,6 @@ public class GeminiRelayService {
                                                     String model, Token token,
                                                     HttpServletRequest httpRequest,
                                                     HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
-        if (support.isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
-        }
-
         String openAiBody = ProtocolConverter.convertGeminiToOpenAiBody(requestBody);
         openAiBody = support.injectStreamOptions(openAiBody, "/v1/chat/completions");
 
@@ -256,6 +289,7 @@ public class GeminiRelayService {
 
         long startTime = System.currentTimeMillis();
         int promptTokens = 0, completionTokens = 0, cachedTokens = 0;
+        long writtenChars = 0;
 
         HttpURLConnection conn = null;
         try {
@@ -273,33 +307,43 @@ public class GeminiRelayService {
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 long deadline = support.sseDeadline();
-                while (true) {
-                    support.prepareSseRead(conn, deadline);
-                    line = reader.readLine();
-                    if (line == null) break;
-                    if (line.startsWith("data: ")) {
-                        String data = line.substring(6).trim();
-                        if ("[DONE]".equals(data)) continue;
-                        try {
-                            JsonNode json = support.objectMapper.readTree(data);
-                            if (json.has("usage")) {
-                                JsonNode usage = json.get("usage");
-                                promptTokens = usage.path("prompt_tokens").asInt(0);
-                                completionTokens = usage.path("completion_tokens").asInt(0);
-                                JsonNode promptDetails = usage.path("prompt_tokens_details");
-                                if (!promptDetails.isMissingNode()) {
-                                    cachedTokens = promptDetails.path("cached_tokens").asInt(0);
+                try {
+                    while (true) {
+                        support.prepareSseRead(conn, deadline);
+                        line = reader.readLine();
+                        if (line == null) break;
+                        if (line.startsWith("data: ")) {
+                            String data = line.substring(6).trim();
+                            if ("[DONE]".equals(data)) continue;
+                            try {
+                                JsonNode json = support.objectMapper.readTree(data);
+                                if (json.has("usage")) {
+                                    JsonNode usage = json.get("usage");
+                                    promptTokens = usage.path("prompt_tokens").asInt(0);
+                                    completionTokens = usage.path("completion_tokens").asInt(0);
+                                    JsonNode promptDetails = usage.path("prompt_tokens_details");
+                                    if (!promptDetails.isMissingNode()) {
+                                        cachedTokens = promptDetails.path("cached_tokens").asInt(0);
+                                    }
                                 }
+                                String geminiChunk = ProtocolConverter.convertOpenAiStreamChunkToGemini(data);
+                                if (geminiChunk != null) {
+                                    writer.write("data: " + geminiChunk + "\n\n");
+                                    writer.flush();
+                                    writtenChars += geminiChunk.length();
+                                }
+                            } catch (Exception parseEx) {
+                                log.warn("转换 OpenAI SSE 为 Gemini 格式失败: {}", data);
                             }
-                            String geminiChunk = ProtocolConverter.convertOpenAiStreamChunkToGemini(data);
-                            if (geminiChunk != null) {
-                                writer.write("data: " + geminiChunk + "\n\n");
-                                writer.flush();
-                            }
-                        } catch (Exception parseEx) {
-                            log.warn("转换 OpenAI SSE 为 Gemini 格式失败: {}", data);
                         }
                     }
+                } catch (IOException streamFailure) {
+                    // 流中断但已有数据写给客户端：按已解析 partial usage（缺失时按字符估算）计费后再抛出
+                    support.recordStreamUsageWithFallback(token, channel, model,
+                            promptTokens, completionTokens, cachedTokens, 0, cachedTokens,
+                            writtenChars, requestBody, System.currentTimeMillis() - startTime,
+                            httpRequest, "/v1/models/" + model + ":streamGenerateContent");
+                    throw streamFailure;
                 }
             }
         } finally {
@@ -307,8 +351,8 @@ public class GeminiRelayService {
         }
 
         long duration = System.currentTimeMillis() - startTime;
-        support.recordStreamUsage(token, channel, model, promptTokens, completionTokens,
-                cachedTokens, 0, cachedTokens, duration, httpRequest,
+        support.recordStreamUsageWithFallback(token, channel, model, promptTokens, completionTokens,
+                cachedTokens, 0, cachedTokens, writtenChars, requestBody, duration, httpRequest,
                 "/v1/models/" + model + ":streamGenerateContent");
     }
 
@@ -319,16 +363,13 @@ public class GeminiRelayService {
                                                     String model, Token token,
                                                     HttpServletRequest httpRequest,
                                                     HttpServletResponse httpResponse, long attemptTimeoutMs) throws IOException {
-        if (support.isChannelRateLimited(channel)) {
-            throw new BusinessException(429, "渠道请求频率超限，请稍后重试", "Channel request rate limit exceeded, please try again later");
-        }
-
         String claudeBody = ProtocolConverter.convertGeminiToClaudeBody(requestBody);
         SseUtils.setSseHeaders(httpResponse);
         var writer = httpResponse.getWriter();
 
         long startTime = System.currentTimeMillis();
         int promptTokens = 0, completionTokens = 0;
+        long writtenChars = 0;
 
         HttpURLConnection conn = null;
         try {
@@ -346,42 +387,53 @@ public class GeminiRelayService {
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 long deadline = support.sseDeadline();
-                while (true) {
-                    support.prepareSseRead(conn, deadline);
-                    line = reader.readLine();
-                    if (line == null) break;
-                    if (line.startsWith("data: ")) {
-                        String data = line.substring(6).trim();
-                        if ("[DONE]".equals(data)) continue;
-                        try {
-                            JsonNode json = support.objectMapper.readTree(data);
-                            String type = json.path("type").asText("");
-                            if ("message_start".equals(type)) {
-                                JsonNode msgUsage = json.path("message").path("usage");
-                                if (!msgUsage.isMissingNode()) {
-                                    promptTokens = msgUsage.path("input_tokens").asInt(0);
+                try {
+                    while (true) {
+                        support.prepareSseRead(conn, deadline);
+                        line = reader.readLine();
+                        if (line == null) break;
+                        if (line.startsWith("data: ")) {
+                            String data = line.substring(6).trim();
+                            if ("[DONE]".equals(data)) continue;
+                            try {
+                                JsonNode json = support.objectMapper.readTree(data);
+                                String type = json.path("type").asText("");
+                                if ("message_start".equals(type)) {
+                                    JsonNode msgUsage = json.path("message").path("usage");
+                                    if (!msgUsage.isMissingNode()) {
+                                        promptTokens = msgUsage.path("input_tokens").asInt(0);
+                                    }
+                                } else if ("content_block_delta".equals(type)) {
+                                    String geminiChunk = ProtocolConverter.convertClaudeStreamEventToGemini(data);
+                                    if (geminiChunk != null) {
+                                        writer.write("data: " + geminiChunk + "\n\n");
+                                        writer.flush();
+                                        writtenChars += geminiChunk.length();
+                                    }
+                                } else if ("message_delta".equals(type)) {
+                                    JsonNode usage = json.get("usage");
+                                    if (usage != null) {
+                                        completionTokens = usage.path("output_tokens").asInt(0);
+                                    }
+                                    String geminiChunk = ProtocolConverter.convertClaudeStreamEventToGemini(data);
+                                    if (geminiChunk != null) {
+                                        writer.write("data: " + geminiChunk + "\n\n");
+                                        writer.flush();
+                                        writtenChars += geminiChunk.length();
+                                    }
                                 }
-                            } else if ("content_block_delta".equals(type)) {
-                                String geminiChunk = ProtocolConverter.convertClaudeStreamEventToGemini(data);
-                                if (geminiChunk != null) {
-                                    writer.write("data: " + geminiChunk + "\n\n");
-                                    writer.flush();
-                                }
-                            } else if ("message_delta".equals(type)) {
-                                JsonNode usage = json.get("usage");
-                                if (usage != null) {
-                                    completionTokens = usage.path("output_tokens").asInt(0);
-                                }
-                                String geminiChunk = ProtocolConverter.convertClaudeStreamEventToGemini(data);
-                                if (geminiChunk != null) {
-                                    writer.write("data: " + geminiChunk + "\n\n");
-                                    writer.flush();
-                                }
+                            } catch (Exception parseEx) {
+                                log.warn("转换 Claude SSE 为 Gemini 格式失败: {}", data);
                             }
-                        } catch (Exception parseEx) {
-                            log.warn("转换 Claude SSE 为 Gemini 格式失败: {}", data);
                         }
                     }
+                } catch (IOException streamFailure) {
+                    // 流中断但已有数据写给客户端：按已解析 partial usage（缺失时按字符估算）计费后再抛出
+                    support.recordStreamUsageWithFallback(token, channel, model,
+                            promptTokens, completionTokens, 0, 0, 0,
+                            writtenChars, requestBody, System.currentTimeMillis() - startTime,
+                            httpRequest, "/v1/models/" + model + ":streamGenerateContent");
+                    throw streamFailure;
                 }
             }
         } finally {
@@ -389,8 +441,8 @@ public class GeminiRelayService {
         }
 
         long duration = System.currentTimeMillis() - startTime;
-        support.recordStreamUsage(token, channel, model, promptTokens, completionTokens,
-                0, 0, 0, duration, httpRequest,
+        support.recordStreamUsageWithFallback(token, channel, model, promptTokens, completionTokens,
+                0, 0, 0, writtenChars, requestBody, duration, httpRequest,
                 "/v1/models/" + model + ":streamGenerateContent");
     }
 

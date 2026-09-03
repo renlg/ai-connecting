@@ -46,6 +46,20 @@ public class PassthroughRelayService {
     private static final Set<String> HOP_BY_HOP = Set.of(
             "connection", "transfer-encoding", "keep-alive", "te", "trailer", "upgrade");
 
+    /**
+     * 客户端认证凭据头：与本站的会话/密钥绝不能跨信任边界发往管理员配置的第三方上游，
+     * 转发前一律剥离（上游认证只使用渠道自身的 apiKey）
+     */
+    private static final Set<String> CLIENT_CREDENTIAL_HEADERS = Set.of(
+            "cookie", "x-api-key", "x-goog-api-key", "api-key", "x-auth-token", "x-session-token");
+
+    /**
+     * 客户端习惯放在 query 中的认证参数（如 Gemini 客户端的 ?key=<中转token>），
+     * 拼接上游 URL 前剥离，避免把本站凭据泄漏给第三方上游
+     */
+    private static final Set<String> CLIENT_CREDENTIAL_QUERY_PARAMS = Set.of(
+            "key", "api_key", "apikey", "api-key", "access_token", "auth_token", "token", "secret");
+
     private final RelaySupport support;
     private final ChannelService channelService;
     private final ObjectMapper objectMapper;
@@ -137,6 +151,9 @@ public class PassthroughRelayService {
         String requestType = endpointType(request.getRequestURI());
         boolean mediaRequest = !"text".equals(requestType);
         boolean sseRequest = acceptsSse(request);
+        if (!mediaRequest) {
+            support.checkTextBalanceEstimate(context, canonicalModel, rawBody);
+        }
         long callBudgetMs = sseRequest ? timeoutProperties.getSseMaxDurationMs()
                 : mediaRequest ? timeoutProperties.getPassthroughMediaCallMs()
                 : timeoutProperties.getPassthroughTextCallMs();
@@ -155,7 +172,7 @@ public class PassthroughRelayService {
             if (!"custom".equalsIgnoreCase(channel.getType())) {
                 throw modelNotFound(canonicalModel);
             }
-            if (support.isChannelRateLimited(channel)) {
+            if (support.isChannelRateLimited(channel, context.channelModelId())) {
                 throw new BusinessException(429, "请求过于频繁，请稍后重试",
                         "Too many requests, please try again later");
             }
@@ -171,8 +188,10 @@ public class PassthroughRelayService {
 
             final Response upstreamResponse;
             try {
-                upstreamResponse = executePassthrough(upstreamRequest,
-                        Math.max(1L, deadline - System.currentTimeMillis()));
+                long attemptTimeoutMs = !sseRequest && !mediaRequest
+                        ? support.failoverAttemptTimeoutMs(deadline, attempt + 1, RelaySupport.MAX_RETRIES)
+                        : Math.max(1L, deadline - System.currentTimeMillis());
+                upstreamResponse = executePassthrough(upstreamRequest, attemptTimeoutMs);
             } catch (IOException e) {
                 lastConnectionFailure = e;
                 boolean timedOut = e instanceof InterruptedIOException;
@@ -217,8 +236,15 @@ public class PassthroughRelayService {
                 } finally {
                     Usage usage = observer.finish();
                     if (!usage.found()) {
-                        log.warn("透传响应未包含 usage，按零 token 记录: channel={}, model={}",
-                                channel.getId(), canonicalModel);
+                        if (upstreamResponse.isSuccessful() && !mediaRequest) {
+                            // 上游未回 usage：按已传输字节与请求体长度估算，避免零计费
+                            log.warn("透传响应未包含 usage，按已传输字节估算 token 计费: channel={}, model={}",
+                                    channel.getId(), canonicalModel);
+                            usage = estimatedUsage(observer.observedByteCount(), rawBody);
+                        } else {
+                            log.warn("透传响应未包含 usage，按零 token 记录: channel={}, model={}",
+                                    channel.getId(), canonicalModel);
+                        }
                     }
                     try {
                         support.recordPassthroughUsage(context.token(), channel, canonicalModel, upstreamModel,
@@ -322,8 +348,9 @@ public class PassthroughRelayService {
                                            String rewrittenBody, String overridePath) {
         String path = overridePath != null ? overridePath : originalRequest.getRequestURI();
         StringBuilder url = new StringBuilder(OpenAiUrlUtils.endpointUrl(channel.getBaseUrl(), path));
-        if (originalRequest.getQueryString() != null && !originalRequest.getQueryString().isEmpty()) {
-            url.append(url.indexOf("?") >= 0 ? '&' : '?').append(originalRequest.getQueryString());
+        String filteredQuery = stripCredentialQueryParams(originalRequest.getQueryString());
+        if (filteredQuery != null && !filteredQuery.isEmpty()) {
+            url.append(url.indexOf("?") >= 0 ? '&' : '?').append(filteredQuery);
         }
         Request.Builder builder = new Request.Builder().url(url.toString());
         Enumeration<String> names = originalRequest.getHeaderNames();
@@ -331,16 +358,39 @@ public class PassthroughRelayService {
             String name = names.nextElement();
             String lower = name.toLowerCase(Locale.ROOT);
             if ("authorization".equals(lower) || "host".equals(lower) || "content-length".equals(lower)
-                    || HOP_BY_HOP.contains(lower) || lower.startsWith("proxy-")) continue;
+                    || HOP_BY_HOP.contains(lower) || lower.startsWith("proxy-")
+                    || CLIENT_CREDENTIAL_HEADERS.contains(lower)) continue;
             Enumeration<String> values = originalRequest.getHeaders(name);
             while (values.hasMoreElements()) builder.addHeader(name, values.nextElement());
         }
-        builder.header("Authorization", "Bea" + "rer" + " " + channel.getApiKey());
+        builder.header("Authorization", "Bearer " + channel.getApiKey());
         String contentType = originalRequest.getContentType() != null
                 ? originalRequest.getContentType() : "application/json";
         RequestBody body = RequestBody.create(rewrittenBody.getBytes(StandardCharsets.UTF_8),
                 MediaType.parse(contentType));
         return builder.post(body).build();
+    }
+
+    /**
+     * 从原始 query string 中剥离凭据参数，其余参数名值原样保留（不做重新编码，保持逐字节转发语义）
+     */
+    static String stripCredentialQueryParams(String queryString) {
+        if (queryString == null || queryString.isEmpty()) {
+            return queryString;
+        }
+        StringBuilder kept = new StringBuilder();
+        for (String segment : queryString.split("&")) {
+            int eq = segment.indexOf('=');
+            String name = eq >= 0 ? segment.substring(0, eq) : segment;
+            if (CLIENT_CREDENTIAL_QUERY_PARAMS.contains(name.toLowerCase(Locale.ROOT))) {
+                continue;
+            }
+            if (kept.length() > 0) {
+                kept.append('&');
+            }
+            kept.append(segment);
+        }
+        return kept.toString();
     }
 
     private String mappedGeminiPath(String uri, String upstreamModel) {
@@ -433,6 +483,13 @@ public class PassthroughRelayService {
         static Usage empty() { return new Usage(false, 0, 0, 0, 0, 0, 0); }
     }
 
+    /** 无 usage 时的兜底估算：输出按已观测字节数、输入按请求体长度折算（约 4 字符/token），宁可轻微高估也不允许零计费 */
+    static Usage estimatedUsage(long observedBytes, String requestBody) {
+        int promptTokens = RelayServiceUtils.estimateTokensFromChars(requestBody != null ? requestBody.length() : 0);
+        int completionTokens = RelayServiceUtils.estimateTokensFromChars(observedBytes);
+        return new Usage(true, promptTokens, completionTokens, promptTokens + completionTokens, 0, 0, 0);
+    }
+
     /** Observes a copy of chunks while the original bytes continue directly to the servlet stream. */
     public static final class UsageObserver {
         private final boolean sse;
@@ -470,6 +527,10 @@ public class PassthroughRelayService {
 
         boolean bytesObserved() {
             return observedBytes > 0;
+        }
+
+        long observedByteCount() {
+            return observedBytes;
         }
 
         Usage finish() {

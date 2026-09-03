@@ -83,10 +83,7 @@ public class ChannelController {
      */
     @PostMapping("/fetch-models")
     public ApiResponse<List<String>> fetchModels(@RequestBody Map<String, String> request) {
-        String baseUrl = request.get("baseUrl");
-        String apiKey = request.get("apiKey");
-        String type = request.get("type");
-        return ApiResponse.success(channelService.fetchUpstreamModels(baseUrl, apiKey, type));
+        return ApiResponse.success(channelService.fetchUpstreamModels(request));
     }
 
     /**
