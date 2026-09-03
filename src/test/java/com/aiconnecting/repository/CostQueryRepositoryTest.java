@@ -93,21 +93,23 @@ class CostQueryRepositoryTest {
     }
 
     @Test
-    void sortsAggregatedRowsByChannelNameInsteadOfCost() {
+    void sortsAggregatedRowsByTokenUsageDescending() {
         long createdAt = LocalDate.of(2026, 8, 10).atStartOfDay(ZoneId.of("Asia/Shanghai"))
                 .toInstant().toEpochMilli();
         jdbc.update("INSERT INTO channels(id, name) VALUES (2, '渠道B')");
-        insertUsage(1, 2, "model-b", "model-b", 1, 1, 0, 0,
-                "1", "/v1/chat/completions", createdAt);
-        insertUsage(2, 1, "model-a", "model-a", 1, 1, 0, 0,
-                "100", "/v1/chat/completions", createdAt);
+        jdbc.update("INSERT INTO channels(id, name) VALUES (3, '渠道C')");
+        // prompt+completion 与渠道A相同，靠缓存 token 拉开合计，应排最前。
+        insertUsage(1, 2, "model-b", "model-b", 1, 1, 1, 2, "1", "/v1/chat/completions", createdAt);
+        insertUsage(2, 1, "model-a", "model-a", 1, 1, 0, 0, "100", "/v1/chat/completions", createdAt);
+        // 与渠道B token 合计相同，按渠道名稳定排序在后。
+        insertUsage(3, 3, "model-c", "model-c", 3, 2, 0, 0, "1", "/v1/chat/completions", createdAt);
 
         List<CostAggregateRow> rows = repository.findRows(
                 LocalDate.of(2026, 8, 10).atStartOfDay(),
                 LocalDate.of(2026, 8, 10).atTime(23, 59, 59, 999_000_000), null, null, null, null);
 
         assertThat(rows).extracting(CostAggregateRow::getChannelName)
-                .containsExactly("渠道A", "渠道B");
+                .containsExactly("渠道B", "渠道C", "渠道A");
     }
 
     private void insertUsage(long id, String model, String actualModel, int prompt, int completion,

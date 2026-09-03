@@ -24,6 +24,13 @@ import java.util.List;
 @RequiredArgsConstructor
 public class CostQueryRepository {
     private static final String DISPLAY_MODEL = "COALESCE(NULLIF(ul.actual_model, ''), ul.model)";
+
+    /** token 使用量口径：prompt + completion + 缓存创建 + 缓存读取 合计。 */
+    private static final String TOKEN_TOTAL = "(COALESCE(SUM(ul.prompt_tokens), 0) "
+            + "+ COALESCE(SUM(ul.completion_tokens), 0) "
+            + "+ COALESCE(SUM(ul.cached_tokens_cache_creation), 0) "
+            + "+ COALESCE(SUM(ul.cached_tokens_cache_read), 0))";
+
     private static final String FILTER_BASE = " FROM usage_logs ul "
             + "LEFT JOIN channels c ON c.id = ul.channel_id "
             + "WHERE ul.created_at BETWEEN :startTime AND :endTime ";
@@ -46,7 +53,7 @@ public class CostQueryRepository {
                 + "COALESCE(SUM(CASE WHEN ul.request_path LIKE '%videos%' THEN 1 ELSE 0 END), 0), "
                 + VIDEO_SECONDS + ", COALESCE(SUM(ul.credit_cost), 0) AS total_credit_cost "
                 + filter(channelId, modelName) + "GROUP BY ul.channel_id, " + DISPLAY_MODEL + " "
-                + "ORDER BY channel_name ASC";
+                + "ORDER BY " + TOKEN_TOTAL + " DESC, channel_name ASC, " + DISPLAY_MODEL + " ASC";
         if (page != null && size != null) {
             sql += " LIMIT :limit OFFSET :offset";
             params.addValue("limit", size).addValue("offset", (long) page * size);
