@@ -30,6 +30,10 @@ public class Token {
     @Column(unique = true, nullable = false, length = 100)
     private String tokenKey;
 
+    /** Token Key 脱敏展示值（仅保留首尾各 4 个字符，不包含完整凭据） */
+    @Column(name = "key_mask", length = 100)
+    private String keyMask;
+
     /** 所属用户 ID */
     @Column(nullable = false)
     private Long userId;
@@ -72,6 +76,7 @@ public class Token {
     private String ownerName;
 
     /** 明文 Token Key（非数据库字段，仅在创建响应中一次性回显，此后不再下发） */
+    @JsonIgnore
     @Transient
     private String plainTokenKey;
 

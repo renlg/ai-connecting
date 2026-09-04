@@ -112,7 +112,9 @@ class TokenControllerTest {
     void list_asAdmin() throws Exception {
         setAuthentication(adminUser);
 
-        Token t = Token.builder().id(1L).name("test-token").userId(2L).build();
+        Token t = Token.builder().id(1L).name("test-token").tokenKey("stored-hash")
+                .keyMask("sk-a****1234").userId(2L).build();
+        t.setPlainTokenKey("sk-should-not-leak");
         when(tokenService.listAll()).thenReturn(List.of(t));
         when(userService.getUserIdToNameMap(List.of(2L))).thenReturn(Map.of(2L, "user"));
 
@@ -121,21 +123,29 @@ class TokenControllerTest {
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data").isArray())
                 .andExpect(jsonPath("$.data[0].name").value("test-token"))
-                .andExpect(jsonPath("$.data[0].ownerName").value("user"));
+                .andExpect(jsonPath("$.data[0].ownerName").value("user"))
+                .andExpect(jsonPath("$.data[0].keyMask").value("sk-a****1234"))
+                .andExpect(jsonPath("$.data[0].tokenKey").doesNotExist())
+                .andExpect(jsonPath("$.data[0].plainTokenKey").doesNotExist());
     }
 
     @Test
     void list_asRegularUser() throws Exception {
         setAuthentication(regularUser);
 
-        Token t = Token.builder().id(1L).name("my-token").userId(2L).build();
+        Token t = Token.builder().id(1L).name("my-token").tokenKey("stored-hash")
+                .keyMask("sk-b****5678").userId(2L).build();
+        t.setPlainTokenKey("sk-should-not-leak");
         when(tokenService.listByUser(2L)).thenReturn(List.of(t));
         when(userService.getUserIdToNameMap(List.of(2L))).thenReturn(Map.of(2L, "user"));
 
         mockMvc.perform(get("/api/tokens"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].name").value("my-token"))
-                .andExpect(jsonPath("$.data[0].ownerName").value("user"));
+                .andExpect(jsonPath("$.data[0].ownerName").value("user"))
+                .andExpect(jsonPath("$.data[0].keyMask").value("sk-b****5678"))
+                .andExpect(jsonPath("$.data[0].tokenKey").doesNotExist())
+                .andExpect(jsonPath("$.data[0].plainTokenKey").doesNotExist());
     }
 
     @Test
@@ -169,12 +179,17 @@ class TokenControllerTest {
     @Test
     void getById() throws Exception {
         setAuthentication(regularUser);
-        Token t = Token.builder().id(1L).name("my-token").userId(2L).build();
+        Token t = Token.builder().id(1L).name("my-token").tokenKey("stored-hash")
+                .keyMask("sk-c****9012").userId(2L).build();
+        t.setPlainTokenKey("sk-should-not-leak");
         when(tokenService.getById(1L)).thenReturn(t);
 
         mockMvc.perform(get("/api/tokens/1"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.name").value("my-token"));
+                .andExpect(jsonPath("$.data.name").value("my-token"))
+                .andExpect(jsonPath("$.data.keyMask").value("sk-c****9012"))
+                .andExpect(jsonPath("$.data.tokenKey").doesNotExist())
+                .andExpect(jsonPath("$.data.plainTokenKey").doesNotExist());
     }
 
     @Test
@@ -193,7 +208,8 @@ class TokenControllerTest {
     void create() throws Exception {
         setAuthentication(regularUser);
 
-        Token t = Token.builder().id(1L).name("new-token").tokenKey("hashed-key").userId(2L).build();
+        Token t = Token.builder().id(1L).name("new-token").tokenKey("hashed-key")
+                .keyMask("sk-a****c123").userId(2L).build();
         t.setPlainTokenKey("sk-abc123");
         when(tokenService.create(eq(2L), any(TokenRequest.class))).thenReturn(t);
 
@@ -207,8 +223,10 @@ class TokenControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.id").value(1))
                 .andExpect(jsonPath("$.data.name").value("new-token"))
                 .andExpect(jsonPath("$.data.tokenKey").doesNotExist())
+                .andExpect(jsonPath("$.data.keyMask").doesNotExist())
                 .andExpect(jsonPath("$.data.plainTokenKey").value("sk-abc123"));
     }
 
@@ -220,14 +238,19 @@ class TokenControllerTest {
 
         Token existing = Token.builder().id(1L).name("old-token").userId(2L).build();
         when(tokenService.getById(1L)).thenReturn(existing);
-        Token t = Token.builder().id(1L).name("updated-token").build();
+        Token t = Token.builder().id(1L).name("updated-token").tokenKey("stored-hash")
+                .keyMask("sk-d****3456").build();
+        t.setPlainTokenKey("sk-should-not-leak");
         when(tokenService.update(eq(1L), any(TokenRequest.class))).thenReturn(t);
 
         mockMvc.perform(put("/api/tokens/1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"updated-token\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.name").value("updated-token"));
+                .andExpect(jsonPath("$.data.name").value("updated-token"))
+                .andExpect(jsonPath("$.data.keyMask").value("sk-d****3456"))
+                .andExpect(jsonPath("$.data.tokenKey").doesNotExist())
+                .andExpect(jsonPath("$.data.plainTokenKey").doesNotExist());
     }
 
     @Test

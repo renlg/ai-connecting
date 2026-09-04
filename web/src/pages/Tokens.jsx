@@ -1,11 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Typography, Tooltip } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, CopyOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Tag, message, Popconfirm, Switch, Tooltip } from 'antd'
+import { PlusOutlined, DeleteOutlined, EditOutlined, SearchOutlined, BarChartOutlined, ExperimentOutlined, SendOutlined } from '@ant-design/icons'
 import { getTokens, createToken, updateToken, deleteToken, updateTokenStatus, getTokenCreditHistory, getTokenCreditHistoryDetail, testTokenChatStream, getTokenModels } from '../api'
 import dayjs from 'dayjs'
 import { useOutletContext } from 'react-router-dom'
-
-const { Text } = Typography
 
 export default function Tokens() {
   const [tokens, setTokens] = useState([])
@@ -171,26 +169,6 @@ export default function Tokens() {
       .finally(() => setDetailLoading(false))
   }
 
-  const copyToken = (key) => {
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(key).then(() => message.success('已复制到剪贴板'))
-    } else {
-      const textArea = document.createElement('textarea')
-      textArea.value = key
-      textArea.style.position = 'fixed'
-      textArea.style.left = '-9999px'
-      document.body.appendChild(textArea)
-      textArea.select()
-      try {
-        document.execCommand('copy')
-        message.success('已复制到剪贴板')
-      } catch (err) {
-        message.error('复制失败，请手动复制')
-      }
-      document.body.removeChild(textArea)
-    }
-  }
-
   const handleTestChat = async () => {
     if (!testModel) {
       message.warning('请选择模型')
@@ -261,6 +239,10 @@ export default function Tokens() {
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '名称', dataIndex: 'name', width: 120 },
     ...(isAdmin ? [{ title: '所属账号', dataIndex: 'ownerName', width: 120 }] : []),
+    {
+      title: 'Key', dataIndex: 'keyMask', width: 180,
+      render: v => v || '历史 Key（不可再查看）'
+    },
     { title: '积分', dataIndex: 'credits', width: 100, render: v => v === -1 ? '无限' : (v != null ? Math.round(Number(v)) + ' 积分' : '0 积分') },
     ...(isAdmin ? [{ title: '限流(次/分)', dataIndex: 'rateLimit', width: 100, render: v => v === 0 ? '不限' : v + ' 次/分' }] : []),
     { title: '状态', dataIndex: 'status', width: 80, render: (v, r) => <Switch checked={v === 1} onChange={(c) => handleStatusChange(r.id, c)} /> },
@@ -383,6 +365,26 @@ export default function Tokens() {
             </Form.Item>
           )}
         </Form>
+      </Modal>
+      <Modal
+        title="Token 创建成功"
+        open={createdToken !== null}
+        onOk={() => setCreatedToken(null)}
+        onCancel={() => setCreatedToken(null)}
+        okText="我已保存"
+        cancelButtonProps={{ style: { display: 'none' } }}
+        width={560}
+      >
+        <div style={{ marginBottom: 12, color: '#d46b08' }}>
+          此 Key 仅显示这一次，关闭后将无法再次查看，请立即保存。
+        </div>
+        <Input.TextArea
+          value={createdToken?.plainTokenKey || ''}
+          readOnly
+          autoSize={{ minRows: 2, maxRows: 3 }}
+          onFocus={event => event.target.select()}
+          style={{ fontFamily: 'monospace' }}
+        />
       </Modal>
       <Modal
         title={`Token消耗记录 - ${historyToken?.name || ''}`}

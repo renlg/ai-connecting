@@ -79,10 +79,16 @@ public class TokenController {
     }
 
     @PostMapping
-    public ApiResponse<Token> create(@AuthenticationPrincipal User user,
-                                     @RequestBody TokenRequest request) {
+    public ApiResponse<CreateTokenResponse> create(@AuthenticationPrincipal User user,
+                                                   @RequestBody TokenRequest request) {
         validateAllowedModelGroups(user, request.getAllowedModels());
-        return ApiResponse.success(tokenService.create(user.getId(), request));
+        Token token = tokenService.create(user.getId(), request);
+        return ApiResponse.success(new CreateTokenResponse(
+                token.getId(), token.getName(), token.getPlainTokenKey()));
+    }
+
+    /** 创建接口专用响应：明文 Key 仅通过该响应返回一次。 */
+    public record CreateTokenResponse(Long id, String name, String plainTokenKey) {
     }
 
     @PutMapping("/{id}")

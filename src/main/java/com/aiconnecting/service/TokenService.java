@@ -54,6 +54,14 @@ public class TokenService {
         }
     }
 
+    /** 生成可安全展示的 Token Key 掩码：保留 sk- 前缀、Key 内容首 4 位及末 4 位。 */
+    static String maskTokenKey(String plainKey) {
+        if (plainKey == null || !plainKey.startsWith("sk-") || plainKey.length() <= 11) {
+            throw new IllegalArgumentException("Token Key 长度不足，无法生成掩码");
+        }
+        return plainKey.substring(0, 7) + "****" + plainKey.substring(plainKey.length() - 4);
+    }
+
     /**
      * 启动时把存量明文 tokenKey（sk- 前缀）改写为哈希，消除历史明文落库；
      * 迁移失败不影响启动，未迁移行仍可经 validateTokenKey 的明文回退路径验证
@@ -111,6 +119,7 @@ public class TokenService {
             Token token = Token.builder()
                     .name(request.getName())
                     .tokenKey(hashTokenKey(tokenKey))
+                    .keyMask(maskTokenKey(tokenKey))
                     .userId(userId)
                     .quota(request.getQuota() != null ? request.getQuota() : -1L)
                     .usedQuota(0L)
