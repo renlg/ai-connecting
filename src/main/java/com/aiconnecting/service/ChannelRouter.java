@@ -11,14 +11,12 @@ import org.springframework.context.event.EventListener;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * 渠道路由器 - 两阶段优先级分组 + 组内平滑加权轮询（SWRR，nginx upstream 算法）
- * 按模型缓存渠道列表：
- *  阶段一：按 priority 升序分组（数值越低优先级越高），仅在最高优先级且未耗尽的分组内选择
- *  阶段二：分组内使用 SWRR 选择渠道，effectiveWeight = priority + 1，在分组存活期间保持不变
- * 自动跳过熔断 OPEN 的渠道；当前分组全部不可用时（全部封禁/已尝试）降级到下一优先级分组（tier failover）
+ * 渠道路由器 - 平滑加权轮询（SWRR，nginx upstream 算法）
+ * 所有可用渠道共同参与选择，effectiveWeight = max(priority + 1, 1)。
+ * 自动跳过熔断 OPEN、已尝试和不匹配用户等级的渠道。
  *
  * 性能优化：
  * - 封禁状态批量获取（1 次 Redis 调用代替 N 次）
@@ -47,6 +45,7 @@ public class ChannelRouter {
      */
     private static class SwrrState {
         private final Map<Long, Integer> currentWeights = new HashMap<>();
+        private int tieBreaker = ThreadLocalRandom.current().nextInt();
 
         synchronized Map<Long, Integer> snapshot() {
             return new HashMap<>(currentWeights);
@@ -56,8 +55,11 @@ public class ChannelRouter {
             int total = 0;
             Channel best = null;
             int bestWeight = Integer.MIN_VALUE;
-            for (Channel c : channels) {
-                int effectiveWeight = (c.getPriority() != null ? c.getPriority() : 0) + 1;
+            int size = channels.size();
+            int start = Math.floorMod(tieBreaker++, size);
+            for (int i = 0; i < size; i++) {
+                Channel c = channels.get((start + i) % size);
+                int effectiveWeight = Math.max((c.getPriority() != null ? c.getPriority() : 0) + 1, 1);
                 int cw = currentWeights.merge(c.getId(), effectiveWeight, Integer::sum);
                 total += effectiveWeight;
                 if (cw > bestWeight) {
@@ -71,7 +73,7 @@ public class ChannelRouter {
     }
 
     /**
-     * 两阶段优先级分组 + 组内 SWRR 选择一个渠道（排除已封禁和已尝试的渠道，按用户等级过滤）
+     * 使用 SWRR 选择一个渠道（排除已封禁和已尝试的渠道，按用户等级过滤）
      *
      * @param channelModelId 模型ID（渠道中存储的格式）
      * @param excludeIds     需要排除的渠道 ID（已尝试过的）
@@ -111,41 +113,13 @@ public class ChannelRouter {
                     "This model is currently unavailable, please try again later or use another model");
         }
 
-        // 阶段一：按 priority 升序分组
-        TreeMap<Integer, List<Channel>> allTiers = channels.stream()
-                .collect(Collectors.groupingBy(this::tierOf, TreeMap::new, Collectors.toList()));
-        TreeMap<Integer, List<Channel>> availableTiers = available.stream()
-                .collect(Collectors.groupingBy(this::tierOf, TreeMap::new, Collectors.toList()));
-
-        Channel selected = null;
-        List<Channel> selectedTierChannels = null;
-        for (Integer tier : allTiers.keySet()) {
-            List<Channel> tierChannels = availableTiers.get(tier);
-            if (tierChannels == null || tierChannels.isEmpty()) {
-                Integer nextTier = allTiers.tailMap(tier, false).keySet().stream().findFirst().orElse(null);
-                log.warn("Tier {} exhausted for model {}, falling back to tier {}",
-                        tier, channelModelId, nextTier != null ? nextTier : "none");
-                continue;
-            }
-            // 阶段二：组内 SWRR 选择
-            selected = cached.swrrState().select(tierChannels);
-            selectedTierChannels = tierChannels;
-            break;
-        }
-
-        if (selected == null) {
-            throw new BusinessException(503, "该模型当前不可用，请稍后重试或更换模型", "This model is currently unavailable, please try again later or use another model");
-        }
+        Channel selected = cached.swrrState().select(available);
 
         log.debug("SWRR 选择渠道: modelId={}, channel={}, priority={}, available={}/{}",
                 channelModelId, selected.getId(),
                 selected.getPriority(),
                 available.size(), channels.size());
         return selected;
-    }
-
-    private int tierOf(Channel c) {
-        return c.getPriority() != null ? c.getPriority() : 0;
     }
 
     /**
@@ -228,20 +202,21 @@ public class ChannelRouter {
     }
 
     private CachedChannelList getCachedChannelList(String channelModelId) {
-        CachedChannelList cached = channelCache.get(channelModelId);
-        if (cached != null && !cached.isExpired()) {
-            return cached;
-        }
-        long generation = cacheInvalidationService.generation(CacheInvalidationService.CHANNEL_LIST);
-        List<Channel> channels = channelService.getActiveChannelsByModel(channelModelId);
-        CachedChannelList fresh = new CachedChannelList(channels, System.currentTimeMillis(), new SwrrState());
-        if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.CHANNEL_LIST, generation)) {
-            channelCache.put(channelModelId, fresh);
-            if (!cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.CHANNEL_LIST, generation)) {
-                channelCache.remove(channelModelId, fresh);
+        while (true) {
+            long generation = cacheInvalidationService.generation(CacheInvalidationService.CHANNEL_LIST);
+            CachedChannelList cached = channelCache.compute(channelModelId, (ignored, existing) -> {
+                if (existing != null && !existing.isExpired()) {
+                    return existing;
+                }
+                List<Channel> channels = channelService.getActiveChannelsByModel(channelModelId);
+                SwrrState state = existing != null ? existing.swrrState() : new SwrrState();
+                log.debug("刷新渠道缓存: modelId={}, channelCount={}", channelModelId, channels.size());
+                return new CachedChannelList(channels, System.currentTimeMillis(), state);
+            });
+            if (cacheInvalidationService.isCurrentGeneration(CacheInvalidationService.CHANNEL_LIST, generation)) {
+                return cached;
             }
+            channelCache.remove(channelModelId, cached);
         }
-        log.debug("刷新渠道缓存: modelId={}, channelCount={}", channelModelId, channels.size());
-        return fresh;
     }
 }
